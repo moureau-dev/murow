@@ -5,9 +5,11 @@ import { InputManager, BrowserInputSource } from "../../core/input";
  * GameLoop class that manages the main game loop with tick events and optional rendering.
  * It supports both client and server types, emitting appropriate events for both.
  */
-export class GameLoop<T extends DriverType = DriverType> {
-    private _driver: LoopDriver;
+export class GameLoop<T extends DriverType | Manual = DriverType> {
+    private _driver?: LoopDriver;
     private _input: InputManager;
+    private readonly _isClient: boolean;
+    private readonly _isManual: boolean;
 
     /**
      * FixedTicker instance that handles tick timing and updates.
@@ -16,7 +18,9 @@ export class GameLoop<T extends DriverType = DriverType> {
     /**
      * Event emitter system for the game loop, emitting various lifecycle events.
      */
-    events: Events;
+    events: T extends ClientLike
+    ? EventSystem<ClientEvents>
+    : EventSystem<ServerEvents>;
     /**
      * Current frames per second (FPS) measurement.
      */
@@ -27,6 +31,19 @@ export class GameLoop<T extends DriverType = DriverType> {
     status: 'running' | 'paused' | 'stopped' = 'stopped';
 
     constructor(public options: GameLoopOptions & { type: T }) {
+        const CLIENT_TYPES = new Set<DriverType | Manual>([
+          'client',
+          'manual-client'
+        ]);
+
+        const MANUAL_TYPES = new Set<DriverType | Manual>([
+          'manual-client',
+          'manual-server'
+        ]);
+
+        this._isClient = CLIENT_TYPES.has(this.options.type);
+        this._isManual = MANUAL_TYPES.has(this.options.type);
+
         const eventNames = [
             'pre-tick',
             'tick',
@@ -37,19 +54,20 @@ export class GameLoop<T extends DriverType = DriverType> {
             'toggle-pause',
         ];
 
-        if (this.options.type === 'client') {
+        if (this._isClient) {
             eventNames.push('render');
         }
 
-        this._input = new InputManager();
-
-        this.events = new EventSystem({
+        this.events = new EventSystem<EventsFor<T>>({
             events: eventNames,
-        }) as T extends 'client' ? EventSystem<ClientEvents> : EventSystem<ServerEvents>;
+        });
+
+        this._input = new InputManager();
 
         this.ticker = new FixedTicker({
             rate: this.options.tickRate,
             onTick: (dt, tick = 0) => {
+                /** Input snapshot (mutates). Always the same in the server-side */
                 const input = this._input.snapshot();
 
                 this.events.emit('pre-tick', { deltaTime: dt, tick, input });
@@ -62,28 +80,38 @@ export class GameLoop<T extends DriverType = DriverType> {
             },
         });
 
-        this._driver = createDriver(this.options.type as T, (dt: number) => {
-            this.ticker.tick(dt);
-            this.fps = 1 / dt;
+        if (!this._isManual) {
+            this._driver = createDriver(this.options.type as T, (dt: number) => {
+                this.step(dt);
+            });
+        }
+    }
 
-            if (this.options.type === 'client') {
-                const peek = this._input.peek();
+    step(deltaTime: number) {
+        this.ticker.tick(deltaTime);
+        this.fps = 1 / deltaTime;
 
-                this.options.onRender?.(dt, this.ticker.alpha, peek);
-                this.events.emit('render', {
-                    deltaTime: dt,
-                    alpha: this.ticker.alpha,
-                    input: peek,
-                });
-            }
-        });
+        if (this._isClient) {
+            const peek = this._input.peek();
+            const alpha = this.ticker.alpha;
+
+            this.options.onRender?.(deltaTime, alpha, peek);
+            this.events.emit('render', {
+                deltaTime,
+                alpha,
+                input: peek,
+            });
+        }
     }
 
     /**
      * Pauses the game ticker and emits a 'toggle-pause' event.
      */
     pause() {
-        this._driver.stop();
+        if (this._driver) {
+            this._driver.stop();
+        }
+
         this.status = 'paused';
         this.events.emit('toggle-pause', {
             paused: true,
@@ -96,7 +124,10 @@ export class GameLoop<T extends DriverType = DriverType> {
      * Resumes the game ticker and emits a 'toggle-pause' event.
      */
     resume() {
-        this._driver.start();
+        if (this._driver) {
+            this._driver.start();
+        }
+
         this.status = 'running';
         this.events.emit('toggle-pause', {
             paused: false,
@@ -109,11 +140,14 @@ export class GameLoop<T extends DriverType = DriverType> {
      * Starts the game ticker and emits a 'start' event.
      */
     start() {
-        this._driver.start();
+        if (this._driver) {
+            this._driver.start();
+        }
+
         this.status = 'running';
         this.events.emit('start', { startedAt: Date.now() });
 
-        if (this.options.type === 'client') {
+        if (this._isClient) {
             const source = new BrowserInputSource(document, document.body);
             this._input.listen(source);
         }
@@ -123,12 +157,15 @@ export class GameLoop<T extends DriverType = DriverType> {
      * Stops the game ticker and emits a 'stop' event.
      */
     stop() {
-        this._driver.stop();
+        if (this._driver) {
+            this._driver.stop();
+        }
+
         this.ticker.resetTickCount();
         this.status = 'stopped';
         this.events.emit('stop', { stoppedAt: Date.now() });
 
-        if (this.options.type === 'client') {
+        if (this._isClient) {
             this._input.unlisten();
         }
     }
@@ -136,7 +173,7 @@ export class GameLoop<T extends DriverType = DriverType> {
 
 interface GameLoopOptions {
     tickRate: number;
-    type: DriverType;
+    type: DriverType | Manual;
     onTick?: (dt: number, tick: number, input: ReturnType<InputManager['snapshot']>) => void;
     onRender?: (dt: number, alpha: number, input: ReturnType<InputManager['snapshot']>) => void;
 }
@@ -235,4 +272,7 @@ type ClientEvents = [
 
 type ServerEvents = BaseEvents;
 
-type Events = EventSystem<ClientEvents | ServerEvents>;
+type Manual = 'manual-client' | 'manual-server';
+type ClientLike = 'client' | 'manual-client';
+type EventsFor<T> =
+  T extends ClientLike ? ClientEvents : ServerEvents;
