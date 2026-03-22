@@ -1,4 +1,10 @@
-import { createDriver, DriverType, EventSystem, FixedTicker, LoopDriver } from "../../core";
+import {
+    createDriver,
+    DriverType,
+    EventSystem,
+    FixedTicker,
+    LoopDriver,
+} from "../../core";
 import { InputManager, BrowserInputSource } from "../../core/input";
 
 /**
@@ -18,9 +24,7 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
     /**
      * Event emitter system for the game loop, emitting various lifecycle events.
      */
-    events: T extends ClientLike
-    ? EventSystem<ClientEvents>
-    : EventSystem<ServerEvents>;
+    events: EventSystem<T extends ClientLike ? ClientEvents : ServerEvents>;
     /**
      * Current frames per second (FPS) measurement.
      */
@@ -28,34 +32,34 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
     /**
      * Current status of the game loop: 'running', 'paused', or 'stopped'.
      */
-    status: 'running' | 'paused' | 'stopped' = 'stopped';
+    status: "running" | "paused" | "stopped" = "stopped";
 
     constructor(public options: GameLoopOptions & { type: T }) {
         const CLIENT_TYPES = new Set<DriverType | Manual>([
-          'client',
-          'manual-client'
+            "client",
+            "manual-client",
         ]);
 
         const MANUAL_TYPES = new Set<DriverType | Manual>([
-          'manual-client',
-          'manual-server'
+            "manual-client",
+            "manual-server",
         ]);
 
         this._isClient = CLIENT_TYPES.has(this.options.type);
         this._isManual = MANUAL_TYPES.has(this.options.type);
 
         const eventNames = [
-            'pre-tick',
-            'tick',
-            'post-tick',
-            'skip',
-            'start',
-            'stop',
-            'toggle-pause',
+            "pre-tick",
+            "tick",
+            "post-tick",
+            "skip",
+            "start",
+            "stop",
+            "toggle-pause",
         ];
 
         if (this._isClient) {
-            eventNames.push('render');
+            eventNames.push("render");
         }
 
         this.events = new EventSystem<EventsFor<T>>({
@@ -70,20 +74,23 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
                 /** Input snapshot (mutates). Always the same in the server-side */
                 const input = this._input.snapshot();
 
-                this.events.emit('pre-tick', { deltaTime: dt, tick, input });
+                this.events.emit("pre-tick", { deltaTime: dt, tick, input });
                 this.options.onTick?.(dt, tick, input);
-                this.events.emit('tick', { deltaTime: dt, tick, input });
-                this.events.emit('post-tick', { deltaTime: dt, tick, input });
+                this.events.emit("tick", { deltaTime: dt, tick, input });
+                this.events.emit("post-tick", { deltaTime: dt, tick, input });
             },
             onTickSkipped: (skippedTicks) => {
-                this.events.emit('skip', { ticks: skippedTicks });
+                this.events.emit("skip", { ticks: skippedTicks });
             },
         });
 
         if (!this._isManual) {
-            this._driver = createDriver(this.options.type as T, (dt: number) => {
-                this.step(dt);
-            });
+            this._driver = createDriver(
+                this.options.type as T,
+                (dt: number) => {
+                    this.step(dt);
+                },
+            );
         }
     }
 
@@ -96,7 +103,7 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
             const alpha = this.ticker.alpha;
 
             this.options.onRender?.(deltaTime, alpha, peek);
-            this.events.emit('render', {
+            this.events.emit("render", {
                 deltaTime,
                 alpha,
                 input: peek,
@@ -112,8 +119,8 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
             this._driver.stop();
         }
 
-        this.status = 'paused';
-        this.events.emit('toggle-pause', {
+        this.status = "paused";
+        this.events.emit("toggle-pause", {
             paused: true,
             lastToggledAt: Date.now(),
             lastToggleTick: this.ticker.tickCount,
@@ -128,8 +135,8 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
             this._driver.start();
         }
 
-        this.status = 'running';
-        this.events.emit('toggle-pause', {
+        this.status = "running";
+        this.events.emit("toggle-pause", {
             paused: false,
             lastToggledAt: Date.now(),
             lastToggleTick: this.ticker.tickCount,
@@ -144,8 +151,8 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
             this._driver.start();
         }
 
-        this.status = 'running';
-        this.events.emit('start', { startedAt: Date.now() });
+        this.status = "running";
+        this.events.emit("start", { startedAt: Date.now() });
 
         if (this._isClient) {
             const source = new BrowserInputSource(document, document.body);
@@ -162,8 +169,8 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
         }
 
         this.ticker.resetTickCount();
-        this.status = 'stopped';
-        this.events.emit('stop', { stoppedAt: Date.now() });
+        this.status = "stopped";
+        this.events.emit("stop", { stoppedAt: Date.now() });
 
         if (this._isClient) {
             this._input.unlisten();
@@ -174,105 +181,136 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
 interface GameLoopOptions {
     tickRate: number;
     type: DriverType | Manual;
-    onTick?: (dt: number, tick: number, input: ReturnType<InputManager['snapshot']>) => void;
-    onRender?: (dt: number, alpha: number, input: ReturnType<InputManager['snapshot']>) => void;
+    onTick?: (
+        dt: number,
+        tick: number,
+        input: ReturnType<InputManager["snapshot"]>,
+    ) => void;
+    onRender?: (
+        dt: number,
+        alpha: number,
+        input: ReturnType<InputManager["peek"]>,
+    ) => void;
 }
 
 type BaseEvents = [
-    ['start', {
-        /**
-         * Timestamp when the loop was started.
-         */
-        startedAt: number;
-    }],
-    ['pre-tick', {
-        /**
-         * Current tick number.
-         */
-        tick: number;
-        /**
-         * Delta time since the last tick.
-         */
-        deltaTime: number;
-        /**
-         * Input snapshot at the start of the tick.
-         * 
-         * **Only available in client loops.**
-         */
-        input: ReturnType<InputManager['snapshot']>;
-    }],
-    ['tick', {
-        /**
-         * Current tick number.
-         */
-        tick: number;
-        /**
-         * Delta time since the last tick.
-         */
-        deltaTime: number;
-        /**
-         * Input snapshot at the start of the tick.
-         * 
-         * **Only available in client loops.**
-         */
-        input: ReturnType<InputManager['snapshot']>;
-    }],
-    ['post-tick', {
-        /**
-        * Current tick number.
-        */
-        tick: number;
-        /**
-         * Delta time since the last tick.
-         */
-        deltaTime: number;
-        /**
-         * Input snapshot at the start of the tick.
-         * 
-         * **Only available in client loops.**
-         */
-        input: ReturnType<InputManager['snapshot']>;
-    }],
-    ['skip', {
-        /**
-         * Number of ticks that were skipped.
-         */
-        ticks: number;
-    }],
-    ['stop', {
-        /**
-         * Timestamp when the loop was stopped.
-         */
-        stoppedAt: number;
-    }],
-    ['toggle-pause', {
-        /**
-         * Current paused state of the loop.
-         */
-        paused: boolean;
-        /**
-         * Timestamp when the pause state was last toggled.
-         */
-        lastToggledAt: number;
-        /**
-         * Tick number when the pause state was last toggled.
-         */
-        lastToggleTick: number;
-    }],
+    [
+        "start",
+        {
+            /**
+             * Timestamp when the loop was started.
+             */
+            startedAt: number;
+        },
+    ],
+    [
+        "pre-tick",
+        {
+            /**
+             * Current tick number.
+             */
+            tick: number;
+            /**
+             * Delta time since the last tick.
+             */
+            deltaTime: number;
+            /**
+             * Input snapshot at the start of the tick.
+             *
+             * **Only available in client loops.**
+             */
+            input: ReturnType<InputManager["snapshot"]>;
+        },
+    ],
+    [
+        "tick",
+        {
+            /**
+             * Current tick number.
+             */
+            tick: number;
+            /**
+             * Delta time since the last tick.
+             */
+            deltaTime: number;
+            /**
+             * Input snapshot at the start of the tick.
+             *
+             * **Only available in client loops.**
+             */
+            input: ReturnType<InputManager["snapshot"]>;
+        },
+    ],
+    [
+        "post-tick",
+        {
+            /**
+             * Current tick number.
+             */
+            tick: number;
+            /**
+             * Delta time since the last tick.
+             */
+            deltaTime: number;
+            /**
+             * Input snapshot at the start of the tick.
+             *
+             * **Only available in client loops.**
+             */
+            input: ReturnType<InputManager["snapshot"]>;
+        },
+    ],
+    [
+        "skip",
+        {
+            /**
+             * Number of ticks that were skipped.
+             */
+            ticks: number;
+        },
+    ],
+    [
+        "stop",
+        {
+            /**
+             * Timestamp when the loop was stopped.
+             */
+            stoppedAt: number;
+        },
+    ],
+    [
+        "toggle-pause",
+        {
+            /**
+             * Current paused state of the loop.
+             */
+            paused: boolean;
+            /**
+             * Timestamp when the pause state was last toggled.
+             */
+            lastToggledAt: number;
+            /**
+             * Tick number when the pause state was last toggled.
+             */
+            lastToggleTick: number;
+        },
+    ],
 ];
 
 type ClientEvents = [
     ...BaseEvents,
-    ['render', {
-        deltaTime: number,
-        alpha: number;
-        input: ReturnType<InputManager['snapshot']>;
-    }],
+    [
+        "render",
+        {
+            deltaTime: number;
+            alpha: number;
+            input: ReturnType<InputManager["peek"]>;
+        },
+    ],
 ];
 
 type ServerEvents = BaseEvents;
 
-type Manual = 'manual-client' | 'manual-server';
-type ClientLike = 'client' | 'manual-client';
-type EventsFor<T> =
-  T extends ClientLike ? ClientEvents : ServerEvents;
+type Manual = "manual-client" | "manual-server";
+type ClientLike = "client" | "manual-client";
+type EventsFor<T> = T extends ClientLike ? ClientEvents : ServerEvents;
