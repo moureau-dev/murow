@@ -188,6 +188,79 @@ export class BinaryPrimitives {
     toNil: () => 0,
   };
 
+  /** 16-bit floating point number (IEEE 754, big-endian) */
+  static readonly f16: Field<number> = {
+    size: 2,
+    write: (dv, o, v) => {
+      // Convert f32 to f16
+      const floatView = new Float32Array(1);
+      const intView = new Uint32Array(floatView.buffer);
+      floatView[0] = v;
+      const f32 = intView[0];
+
+      // Extract f32 components
+      const sign = (f32 >>> 31) & 0x1;
+      let exp = (f32 >>> 23) & 0xFF;
+      let frac = f32 & 0x7FFFFF;
+
+      // Convert to f16
+      let f16bits: number;
+
+      if (exp === 0xFF) {
+        // Infinity or NaN
+        f16bits = (sign << 15) | (0x1F << 10) | (frac ? 0x200 : 0);
+      } else if (exp === 0) {
+        // Zero or denormal -> becomes zero in f16
+        f16bits = sign << 15;
+      } else {
+        // Normalized number
+        const newExp = exp - 127 + 15; // Rebias exponent
+
+        if (newExp >= 0x1F) {
+          // Overflow to infinity
+          f16bits = (sign << 15) | (0x1F << 10);
+        } else if (newExp <= 0) {
+          // Underflow to zero
+          f16bits = sign << 15;
+        } else {
+          // Normal conversion
+          const newFrac = frac >>> 13; // Keep top 10 bits
+          f16bits = (sign << 15) | (newExp << 10) | newFrac;
+        }
+      }
+
+      dv.setUint16(o, f16bits, false);
+    },
+    read: (dv, o) => {
+      const f16bits = dv.getUint16(o, false);
+
+      // Extract f16 components
+      const sign = (f16bits >>> 15) & 0x1;
+      const exp = (f16bits >>> 10) & 0x1F;
+      const frac = f16bits & 0x3FF;
+
+      // Convert to f32
+      let f32bits: number;
+
+      if (exp === 0) {
+        // Zero or denormal -> becomes zero in f32
+        f32bits = sign << 31;
+      } else if (exp === 0x1F) {
+        // Infinity or NaN
+        f32bits = (sign << 31) | (0xFF << 23) | (frac ? (frac << 13) : 0);
+      } else {
+        // Normalized number
+        const newExp = exp - 15 + 127; // Rebias
+        f32bits = (sign << 31) | (newExp << 23) | (frac << 13);
+      }
+
+      const intView = new Uint32Array([f32bits]);
+      const floatView = new Float32Array(intView.buffer);
+      return floatView[0];
+    },
+    toNil: () => 0,
+  };
+
   /** 32-bit floating point number (IEEE 754, big-endian) */
   static readonly f32: Field<number> = {
     size: 4,
@@ -412,6 +485,8 @@ export class BinaryCodec extends BaseBinaryCodec {
   static readonly i16 = BinaryPrimitives.i16;
   /** Signed 32-bit integer field */
   static readonly i32 = BinaryPrimitives.i32;
+  /** 16-bit floating point field */
+  static readonly f16 = BinaryPrimitives.f16;
   /** 32-bit floating point field */
   static readonly f32 = BinaryPrimitives.f32;
   /** Boolean field */
