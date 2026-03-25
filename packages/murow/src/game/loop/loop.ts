@@ -5,7 +5,7 @@ import {
     FixedTicker,
     LoopDriver,
 } from "../../core";
-import { InputManager, BrowserInputSource } from "../../core/input";
+import { InputManager, BrowserInputSource, type InputSnapshot } from "../../core/input";
 
 /**
  * GameLoop class that manages the main game loop with tick events and optional rendering.
@@ -24,7 +24,7 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
     /**
      * Event emitter system for the game loop, emitting various lifecycle events.
      */
-    events: EventSystem<T extends ClientLike ? ClientEvents : ServerEvents>;
+    events: EventSystem<BaseEvents> & T extends ClientLike ? EventSystem<ClientEvents> : EventSystem<ServerEvents>;
     /**
      * Current frames per second (FPS) measurement.
      */
@@ -33,6 +33,11 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
      * Current status of the game loop: 'running', 'paused', or 'stopped'.
      */
     status: "running" | "paused" | "stopped" = "stopped";
+
+    // Pre-allocated event data objects — mutated before each emit, zero GC
+    private _tickData = { deltaTime: 0, tick: 0, input: null as InputSnapshot };
+    private _skipData = { ticks: 0 };
+    private _renderData = { deltaTime: 0, alpha: 0, input: null as InputSnapshot };
 
     constructor(public options: GameLoopOptions & { type: T }) {
         const CLIENT_TYPES = new Set<DriverType | Manual>([
@@ -66,27 +71,36 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
             events: eventNames,
         });
 
+        // yes, instanciated on server but it is innofensive
         this._input = new InputManager();
+
+        const baseEvents = this.events as EventSystem<BaseEvents>;
 
         this.ticker = new FixedTicker({
             rate: this.options.tickRate,
             onTick: (dt, tick = 0) => {
-                /** Input snapshot (mutates). Always the same in the server-side */
                 const input = this._input.snapshot();
 
-                this.events.emit("pre-tick", { deltaTime: dt, tick, input });
+                // Reuse the same object for all three tick events because I'm a freak
+                this._tickData.deltaTime = dt;
+                this._tickData.tick = tick;
+                this._tickData.input = input;
+
+
+                baseEvents.emit("pre-tick", this._tickData);
                 this.options.onTick?.(dt, tick, input);
-                this.events.emit("tick", { deltaTime: dt, tick, input });
-                this.events.emit("post-tick", { deltaTime: dt, tick, input });
+                baseEvents.emit("tick", this._tickData);
+                baseEvents.emit("post-tick", this._tickData);
             },
             onTickSkipped: (skippedTicks) => {
-                this.events.emit("skip", { ticks: skippedTicks });
+                this._skipData.ticks = skippedTicks;
+                baseEvents.emit("skip", this._skipData);
             },
         });
 
         if (!this._isManual) {
             this._driver = createDriver(
-                this.options.type as T,
+                this.options.type as DriverType,
                 (dt: number) => {
                     this.step(dt);
                 },
@@ -103,11 +117,11 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
             const alpha = this.ticker.alpha;
 
             this.options.onRender?.(deltaTime, alpha, peek);
-            this.events.emit("render", {
-                deltaTime,
-                alpha,
-                input: peek,
-            });
+
+            this._renderData.deltaTime = deltaTime;
+            this._renderData.alpha = alpha;
+            this._renderData.input = peek;
+            (this.events as EventSystem<ClientEvents>).emit("render", this._renderData);
         }
     }
 
@@ -120,7 +134,7 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
         }
 
         this.status = "paused";
-        this.events.emit("toggle-pause", {
+        (this.events as EventSystem<BaseEvents>).emit("toggle-pause", {
             paused: true,
             lastToggledAt: Date.now(),
             lastToggleTick: this.ticker.tickCount,
@@ -136,7 +150,7 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
         }
 
         this.status = "running";
-        this.events.emit("toggle-pause", {
+        (this.events as EventSystem<BaseEvents>).emit("toggle-pause", {
             paused: false,
             lastToggledAt: Date.now(),
             lastToggleTick: this.ticker.tickCount,
@@ -152,7 +166,7 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
         }
 
         this.status = "running";
-        this.events.emit("start", { startedAt: Date.now() });
+        (this.events as EventSystem<BaseEvents>).emit("start", { startedAt: Date.now() });
 
         if (this._isClient) {
             const source = new BrowserInputSource(document, document.body);
@@ -170,7 +184,7 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
 
         this.ticker.resetTickCount();
         this.status = "stopped";
-        this.events.emit("stop", { stoppedAt: Date.now() });
+        (this.events as EventSystem<BaseEvents>).emit("stop", { stoppedAt: Date.now() });
 
         if (this._isClient) {
             this._input.unlisten();
