@@ -2,7 +2,7 @@ import { Shared } from "../shared";
 import { Constants } from "./constants";
 import { PixiRenderer } from "./renderer";
 
-import type { InputSnapshot } from "../../../../src/core/input/types";
+import type { InputSnapshot } from "../../../../packages/murow/src/core/input/types";
 import { Utils } from "../shared/utils";
 
 export class Game extends Shared.Game {

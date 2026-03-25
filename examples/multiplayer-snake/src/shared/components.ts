@@ -1,4 +1,4 @@
-import { BinaryCodec, defineComponent } from "../../../../src";
+import { BinaryCodec, defineComponent } from "../../../../packages/murow/src";
 
 export namespace Components {
     export const Direction = defineComponent("dir", {

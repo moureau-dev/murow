@@ -1,4 +1,4 @@
-import { GameLoop, World, type DriverType } from "../../../../src";
+import { GameLoop, World, type DriverType } from "../../../../packages/murow/src";
 import { Components } from "./components";
 import { Constants } from "./constants";
 import { Enums } from "./enums";

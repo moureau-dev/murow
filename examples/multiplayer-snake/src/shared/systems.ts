@@ -1,4 +1,4 @@
-import { World } from "../../../../src";
+import { World } from "../../../../packages/murow/src";
 import { Components } from "./components";
 import { Enums } from "./enums";
 import { Grid } from "./grid";
