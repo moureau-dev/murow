@@ -45,10 +45,11 @@ export interface ModelHandle {
 
 export interface MeshInstanceHandle {
     readonly slot: number;
-    readonly modelId: number;
+    modelId: number;
     setPosition(x: number, y: number, z: number): void;
     setRotation(x: number, y: number, z: number): void;
     setScale(x: number, y: number, z: number): void;
+    setModelId(id: number): void;
 }
 
 export interface MeshInstanceOptions {
@@ -410,8 +411,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
         const dynamicData = this.dynamicData;
         const staticData = this.staticData;
+        const batcher = this.batcher;
+        const modelIds = this.instanceModelIds;
 
-        return {
+        const handle: MeshInstanceHandle = {
             slot,
             modelId: opts.model.id,
             setPosition(nx: number, ny: number, nz: number) {
@@ -429,7 +432,16 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 staticData[statBase + STAT_SY] = ny;
                 staticData[statBase + STAT_SZ] = nz;
             },
+            setModelId(newModelId: number) {
+                if (handle.modelId === newModelId) return;
+                batcher.remove(0, handle.modelId, slot);
+                batcher.add(0, newModelId, slot);
+                modelIds[slot] = newModelId;
+                handle.modelId = newModelId;
+            },
         };
+
+        return handle;
     }
 
     removeInstance(handle: MeshInstanceHandle): void {
