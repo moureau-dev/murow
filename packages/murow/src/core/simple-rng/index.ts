@@ -1,1 +1,1 @@
-export * from "./rng";
+export * from "./simple-rng";

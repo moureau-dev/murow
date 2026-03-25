@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { SimpleRNG } from './rng';
+import { SimpleRNG } from './simple-rng';
 
 describe('SimpleRNG', () => {
     describe('rand', () => {
