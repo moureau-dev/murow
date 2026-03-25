@@ -23,7 +23,7 @@ export { Camera2D } from './camera/camera-2d';
 export { Camera3D } from './camera/camera-3d';
 
 // Geometry
-export { GeometryBuilder, CustomGeometry, InstanceAccessor, getFieldFloats, createGeometryDataLayout } from './geometry/geometry-builder';
+export { GeometryBuilder, CustomGeometry, InstanceAccessor, InstanceContext, getFieldFloats, createGeometryDataLayout } from './geometry/geometry-builder';
 export type { GeometryOptions, InstanceLayoutConfig, CustomGeometryLayout, GeometryDataLayout } from './geometry/geometry-builder';
 export { resolveBuiltInGeometry } from './geometry/built-in';
 export type { BuiltInGeometry, GeometryData } from './geometry/built-in';

@@ -165,6 +165,14 @@ export class CustomGeometry {
     private _staticDirty = true;
     private _uniformDirty = true;
 
+    /** Dense list of active slot indices for iteration */
+    private activeSlots: Uint32Array;
+    private activeCount = 0;
+    private slotToActive: Int32Array; // maps slot → index in activeSlots (-1 if free)
+
+    /** Reusable context for updateAll */
+    private _ctx: InstanceContext;
+
     private dynamicBuffer: TgpuBuffer<any>;
     private staticBuffer: TgpuBuffer<any>;
     private uniformBuffer: TgpuBuffer<any>;
@@ -201,12 +209,22 @@ export class CustomGeometry {
         this.uniformBuffer = uniformBuffer;
         this.pipeline = pipeline;
         this.dataBindGroup = dataBindGroup;
+
+        this.activeSlots = new Uint32Array(maxInstances);
+        this.slotToActive = new Int32Array(maxInstances).fill(-1);
+        this._ctx = new InstanceContext();
     }
 
     addInstance(data: Record<string, number | number[]>): number {
         const slot = this.freeList.allocate();
         if (slot === -1) throw new Error(`Max instances (${this.maxInstances}) reached for "${this.name}"`);
         this.setInstanceData(slot, data);
+
+        // Track in dense active list
+        this.activeSlots[this.activeCount] = slot;
+        this.slotToActive[slot] = this.activeCount;
+        this.activeCount++;
+
         return slot;
     }
 
@@ -218,6 +236,19 @@ export class CustomGeometry {
         this.staticData.fill(0, statBase, statBase + this.staticFloatsPerInstance);
         this._dynamicDirty = true;
         this._staticDirty = true;
+
+        // Remove from dense active list (swap-remove)
+        const activeIdx = this.slotToActive[slot];
+        if (activeIdx !== -1) {
+            const lastIdx = this.activeCount - 1;
+            if (activeIdx !== lastIdx) {
+                const lastSlot = this.activeSlots[lastIdx];
+                this.activeSlots[activeIdx] = lastSlot;
+                this.slotToActive[lastSlot] = activeIdx;
+            }
+            this.slotToActive[slot] = -1;
+            this.activeCount--;
+        }
     }
 
     setInstanceData(slot: number, data: Record<string, number | number[]>): void {
@@ -264,6 +295,36 @@ export class CustomGeometry {
         return this.freeList.getAllocatedCount();
     }
 
+    /**
+     * Iterate all active instances with a reusable context object.
+     * The context provides direct get/set access to each instance's fields
+     * without allocating any objects. Marks buffers dirty once after the full loop.
+     *
+     * Usage:
+     * ```ts
+     * geometry.updateAll((ctx, slot) => {
+     *     ctx.set('position', [particles[slot].x, particles[slot].y]);
+     *     ctx.set('velocity', [particles[slot].vx, particles[slot].vy]);
+     * });
+     * ```
+     */
+    updateAll(callback: (ctx: InstanceContext, slot: number) => void): void {
+        this._ctx._bind(this.dynamicData, this.staticData,
+            this.dynamicFloatsPerInstance, this.staticFloatsPerInstance,
+            this.dynamicFieldNames, this.staticFieldNames, this.layoutConfig);
+
+        const count = this.activeCount;
+        const slots = this.activeSlots;
+        for (let i = 0; i < count; i++) {
+            const slot = slots[i];
+            this._ctx._setSlot(slot);
+            callback(this._ctx, slot);
+        }
+
+        this._dynamicDirty = true;
+        this._staticDirty = true;
+    }
+
     render(canvasView: GPUTextureView, clearColor?: [number, number, number, number]): void {
         const device = this.root.device;
         const count = this.freeList.getAllocatedCount();
@@ -299,6 +360,92 @@ export class CustomGeometry {
         this.dynamicBuffer.destroy();
         this.staticBuffer.destroy();
         this.uniformBuffer.destroy();
+    }
+}
+
+// --- InstanceContext (reusable, zero-alloc for updateAll) ---
+
+/**
+ * Reusable context object for updateAll() iteration.
+ * A single instance is created per CustomGeometry and re-bound to
+ * different slots on each iteration — zero allocations per loop.
+ */
+export class InstanceContext {
+    private dynamicData!: Float32Array;
+    private staticData!: Float32Array;
+    private dynamicStride = 0;
+    private staticStride = 0;
+    private dynamicFieldNames!: string[];
+    private staticFieldNames!: string[];
+    private layout!: InstanceLayoutConfig;
+    private dynBase = 0;
+    private statBase = 0;
+
+    /** @internal */
+    _bind(
+        dynamicData: Float32Array, staticData: Float32Array,
+        dynamicStride: number, staticStride: number,
+        dynamicFieldNames: string[], staticFieldNames: string[],
+        layout: InstanceLayoutConfig,
+    ): void {
+        this.dynamicData = dynamicData;
+        this.staticData = staticData;
+        this.dynamicStride = dynamicStride;
+        this.staticStride = staticStride;
+        this.dynamicFieldNames = dynamicFieldNames;
+        this.staticFieldNames = staticFieldNames;
+        this.layout = layout;
+    }
+
+    /** @internal */
+    _setSlot(slot: number): void {
+        this.dynBase = slot * this.dynamicStride;
+        this.statBase = slot * this.staticStride;
+    }
+
+    get(field: string): number | number[] {
+        const dynIdx = this.fieldOffset(field, this.dynamicFieldNames, this.layout.dynamic);
+        if (dynIdx !== null) {
+            const size = getFieldFloats(this.layout.dynamic[field]);
+            if (size === 1) return this.dynamicData[this.dynBase + dynIdx];
+            const result: number[] = [];
+            for (let i = 0; i < size; i++) result.push(this.dynamicData[this.dynBase + dynIdx + i]);
+            return result;
+        }
+        const statIdx = this.fieldOffset(field, this.staticFieldNames, this.layout.static);
+        if (statIdx !== null) {
+            const size = getFieldFloats(this.layout.static[field]);
+            if (size === 1) return this.staticData[this.statBase + statIdx];
+            const result: number[] = [];
+            for (let i = 0; i < size; i++) result.push(this.staticData[this.statBase + statIdx + i]);
+            return result;
+        }
+        throw new Error(`Field "${field}" not found`);
+    }
+
+    set(field: string, value: number | number[]): void {
+        const dynIdx = this.fieldOffset(field, this.dynamicFieldNames, this.layout.dynamic);
+        if (dynIdx !== null) {
+            if (typeof value === 'number') this.dynamicData[this.dynBase + dynIdx] = value;
+            else for (let i = 0; i < value.length; i++) this.dynamicData[this.dynBase + dynIdx + i] = value[i];
+            return;
+        }
+        const statIdx = this.fieldOffset(field, this.staticFieldNames, this.layout.static);
+        if (statIdx !== null) {
+            if (typeof value === 'number') this.staticData[this.statBase + statIdx] = value;
+            else for (let i = 0; i < value.length; i++) this.staticData[this.statBase + statIdx + i] = value[i];
+            return;
+        }
+        throw new Error(`Field "${field}" not found`);
+    }
+
+    private fieldOffset(field: string, names: string[], layoutFields: Record<string, any>): number | null {
+        let offset = 0;
+        for (const name of names) {
+            if (name === field) return offset;
+            offset += getFieldFloats(layoutFields[name]);
+        }
+        return null;
     }
 }
 

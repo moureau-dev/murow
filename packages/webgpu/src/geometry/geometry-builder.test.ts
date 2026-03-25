@@ -1,6 +1,6 @@
 import { test, expect, describe } from 'bun:test';
 import * as d from 'typegpu/data';
-import { getFieldFloats, InstanceAccessor } from './geometry-builder';
+import { getFieldFloats, InstanceAccessor, InstanceContext } from './geometry-builder';
 
 describe('getFieldFloats', () => {
     test('d.f32 returns 1', () => {
@@ -246,6 +246,153 @@ describe('InstanceAccessor', () => {
             accessor.set('position', [1, 2]);
             accessor.set('position', [3, 4]);
             expect(accessor.get('position')).toEqual([3, 4]);
+        });
+    });
+});
+
+describe('InstanceContext', () => {
+    const layout = {
+        dynamic: { position: d.vec2f, velocity: d.vec2f },
+        static: { color: d.vec4f, size: d.f32 },
+    };
+    const dynamicFieldNames = ['position', 'velocity'];
+    const staticFieldNames = ['color', 'size'];
+    const dynamicStride = 4; // vec2f + vec2f
+    const staticStride = 5;  // vec4f + f32
+
+    function createContext(maxSlots = 4) {
+        const dynamicData = new Float32Array(dynamicStride * maxSlots);
+        const staticData = new Float32Array(staticStride * maxSlots);
+        const ctx = new InstanceContext();
+        ctx._bind(dynamicData, staticData, dynamicStride, staticStride,
+            dynamicFieldNames, staticFieldNames, layout);
+        return { ctx, dynamicData, staticData };
+    }
+
+    describe('get/set', () => {
+        test('set and get scalar field', () => {
+            const { ctx } = createContext();
+            ctx._setSlot(0);
+            ctx.set('size', 42);
+            expect(ctx.get('size')).toBe(42);
+        });
+
+        test('set and get vector field', () => {
+            const { ctx } = createContext();
+            ctx._setSlot(0);
+            ctx.set('position', [10, 20]);
+            expect(ctx.get('position')).toEqual([10, 20]);
+        });
+
+        test('set and get static vector field', () => {
+            const { ctx } = createContext();
+            ctx._setSlot(0);
+            ctx.set('color', [1, 0.5, 0.25, 0.75]);
+            const color = ctx.get('color') as number[];
+            expect(color[0]).toBeCloseTo(1);
+            expect(color[1]).toBeCloseTo(0.5);
+            expect(color[2]).toBeCloseTo(0.25);
+            expect(color[3]).toBeCloseTo(0.75);
+        });
+
+        test('throws for unknown field', () => {
+            const { ctx } = createContext();
+            ctx._setSlot(0);
+            expect(() => ctx.get('nope')).toThrow('not found');
+            expect(() => ctx.set('nope', 1)).toThrow('not found');
+        });
+    });
+
+    describe('slot rebinding', () => {
+        test('writes to correct slot after _setSlot', () => {
+            const { ctx, dynamicData } = createContext();
+
+            ctx._setSlot(0);
+            ctx.set('position', [1, 2]);
+
+            ctx._setSlot(2);
+            ctx.set('position', [99, 88]);
+
+            // Slot 0: offset 0
+            expect(dynamicData[0]).toBe(1);
+            expect(dynamicData[1]).toBe(2);
+            // Slot 2: offset 8
+            expect(dynamicData[8]).toBe(99);
+            expect(dynamicData[9]).toBe(88);
+        });
+
+        test('reads from correct slot after _setSlot', () => {
+            const { ctx, dynamicData } = createContext();
+
+            // Write directly to buffer
+            dynamicData[0] = 10; dynamicData[1] = 20; // slot 0 position
+            dynamicData[8] = 30; dynamicData[9] = 40; // slot 2 position
+
+            ctx._setSlot(0);
+            expect(ctx.get('position')).toEqual([10, 20]);
+
+            ctx._setSlot(2);
+            expect(ctx.get('position')).toEqual([30, 40]);
+        });
+    });
+
+    describe('zero allocation pattern', () => {
+        test('same context instance is reused across slots', () => {
+            const { ctx } = createContext();
+            const ref1 = ctx;
+            ctx._setSlot(0);
+            ctx._setSlot(1);
+            ctx._setSlot(2);
+            expect(ctx).toBe(ref1); // same object, no new allocations
+        });
+
+        test('simulates updateAll loop', () => {
+            const { ctx, dynamicData, staticData } = createContext();
+            const activeSlots = [0, 2, 3]; // sparse — slot 1 is free
+
+            // Simulate: set position from external source, set color once
+            const sourceX = [100, 0, 200, 300];
+            const sourceY = [110, 0, 210, 310];
+
+            for (const slot of activeSlots) {
+                ctx._setSlot(slot);
+                ctx.set('position', [sourceX[slot], sourceY[slot]]);
+                ctx.set('color', [1, 1, 1, 1]);
+            }
+
+            // Verify slot 0
+            expect(dynamicData[0]).toBe(100);
+            expect(dynamicData[1]).toBe(110);
+            // Verify slot 1 untouched
+            expect(dynamicData[4]).toBe(0);
+            expect(dynamicData[5]).toBe(0);
+            // Verify slot 2
+            expect(dynamicData[8]).toBe(200);
+            expect(dynamicData[9]).toBe(210);
+            // Verify slot 3
+            expect(dynamicData[12]).toBe(300);
+            expect(dynamicData[13]).toBe(310);
+
+            // Verify static data for slot 0
+            expect(staticData[0]).toBe(1); // color r
+            expect(staticData[1]).toBe(1); // color g
+            // Verify slot 1 static untouched
+            expect(staticData[5]).toBe(0);
+        });
+    });
+
+    describe('multiple dynamic fields', () => {
+        test('position and velocity write to correct offsets', () => {
+            const { ctx, dynamicData } = createContext();
+            ctx._setSlot(1);
+            ctx.set('position', [5, 6]);
+            ctx.set('velocity', [7, 8]);
+
+            // Slot 1 base = 4, position at +0, velocity at +2
+            expect(dynamicData[4]).toBe(5);
+            expect(dynamicData[5]).toBe(6);
+            expect(dynamicData[6]).toBe(7);
+            expect(dynamicData[7]).toBe(8);
         });
     });
 });
