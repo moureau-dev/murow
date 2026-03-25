@@ -39,6 +39,29 @@ export class Camera3D implements Camera3DState {
     }
 
     /**
+     * Smoothly move the camera toward a target point.
+     * Call each tick. The camera and its look-at target lerp toward the given position.
+     * @param targetX  World X to follow
+     * @param targetY  World Y to follow
+     * @param targetZ  World Z to follow
+     * @param smoothing  0-1. 1 = snap instantly, 0.1 = lazy follow. Default 1.
+     */
+    follow(targetX: number, targetY: number, targetZ: number, smoothing: number = 1): void {
+        const dx = targetX - this.target[0];
+        const dy = targetY - this.target[1];
+        const dz = targetZ - this.target[2];
+        const mx = dx * smoothing;
+        const my = dy * smoothing;
+        const mz = dz * smoothing;
+        this.target[0] += mx;
+        this.target[1] += my;
+        this.target[2] += mz;
+        this.position[0] += mx;
+        this.position[1] += my;
+        this.position[2] += mz;
+    }
+
+    /**
      * Interpolate between previous and current state. Call before rendering.
      */
     interpolate(alpha: number): void {

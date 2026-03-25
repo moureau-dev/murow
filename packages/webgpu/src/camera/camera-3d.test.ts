@@ -78,15 +78,17 @@ describe('Camera3D', () => {
             const cam = new Camera3D();
             cam.position = [10, 20, 30];
             cam.target = [0, 0, 0];
+            cam.storePrevious();
+            cam.interpolate(1);
             const v1 = cam.getViewMatrix();
-            // Copy the translation column since the buffer is reused
             const t1 = [v1[12], v1[13], v1[14]];
 
+            cam.storePrevious();
             cam.position = [100, 200, 300];
+            cam.interpolate(1);
             cam.getViewMatrix();
             const t2 = [v1[12], v1[13], v1[14]];
 
-            // At least one of the translation values should differ
             const anyDifferent = t1.some((val, i) => Math.abs(val - t2[i]) > 0.01);
             expect(anyDifferent).toBe(true);
         });

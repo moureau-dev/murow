@@ -300,6 +300,7 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     }
 
     storePreviousState(): void {
+        this.camera.storePrevious();
         const dyn = this.dynamicData;
         this.batcher.each((_sheetId, instances, count) => {
             for (let i = 0; i < count; i++) {
@@ -317,6 +318,8 @@ export class WebGPU2DRenderer extends Base2DRenderer {
 
     render(alpha: number): void {
         if (!this._initialized) return;
+
+        this.camera.interpolate(alpha);
 
         // Upload dynamic data (every frame, zero-GC)
         this.device.queue.writeBuffer(
