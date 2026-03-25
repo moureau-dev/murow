@@ -1,0 +1,58 @@
+{
+  "name": "@murow/webgpu",
+  "version": "0.0.1",
+  "description": "WebGPU rendering backend for murow — 2D and 3D instanced renderers",
+  "main": "dist/index.js",
+  "module": "dist/index.esm.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "source": "./src/index.ts",
+        "default": "./dist/index.esm.js"
+      },
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "npm run build:types && npm run build:js",
+    "build:js": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=cjs --platform=neutral --minify --external:murow --external:typegpu && esbuild src/index.ts --bundle --outfile=dist/index.esm.js --format=esm --platform=neutral --minify --external:murow --external:typegpu",
+    "build:types": "tsc --project tsconfig.json",
+    "dev": "npm run build:js -- --watch",
+    "prepublishOnly": "npm run build",
+    "test": "bun test ./src"
+  },
+  "keywords": [
+    "webgpu",
+    "renderer",
+    "2d",
+    "3d",
+    "instancing",
+    "game-engine",
+    "murow"
+  ],
+  "author": "Luiz Felipe Moureau",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mococa/murow.git",
+    "directory": "packages/webgpu"
+  },
+  "peerDependencies": {
+    "murow": "workspace:*"
+  },
+  "dependencies": {
+    "typegpu": "^0.10.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.16",
+    "@webgpu/types": "^0.1.0",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.0.0"
+  }
+}
