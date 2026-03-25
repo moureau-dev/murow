@@ -22,6 +22,7 @@
  * trail.update(deltaTime);
  * ```
  */
+import { SimpleRNG } from 'murow';
 import type { SpriteHandle, SpritesheetHandle } from 'murow';
 import type { WebGPU2DRenderer } from '../2d/renderer';
 
@@ -56,13 +57,12 @@ export class ParticleEmitter {
     private velocitiesY: Float32Array;
     private activeCount = 0;
     private head = 0; // ring buffer write head
-
-    // Simple LCG PRNG for deterministic, zero-alloc randomness
-    private rngState: number;
+    private rng: SimpleRNG;
 
     constructor(renderer: WebGPU2DRenderer, config: ParticleEmitterConfig) {
         this.renderer = renderer;
         this.config = config;
+        this.rng = new SimpleRNG(config.seed);
 
         const max = config.max;
         this.sprites = new Array(max).fill(null);
@@ -70,17 +70,6 @@ export class ParticleEmitter {
         this.maxLifetimes = new Float32Array(max);
         this.velocitiesX = new Float32Array(max);
         this.velocitiesY = new Float32Array(max);
-
-        this.rngState = config.seed ?? (Math.random() * 0x7FFFFFFF) | 0;
-    }
-
-    private rand(): number {
-        this.rngState = (this.rngState * 1664525 + 1013904223) & 0x7FFFFFFF;
-        return this.rngState / 0x7FFFFFFF;
-    }
-
-    private randRange(range: Range): number {
-        return range.min + this.rand() * (range.max - range.min);
     }
 
     emit(x: number, y: number, count: number = 1): void {
@@ -94,11 +83,12 @@ export class ParticleEmitter {
                 this.sprites[idx] = null;
             }
 
-            const dirDeg = this.randRange(this.config.direction);
+            const rng = this.rng;
+            const dirDeg = rng.range(this.config.direction.min, this.config.direction.max);
             const dirRad = dirDeg * (Math.PI / 180);
-            const speed = this.randRange(this.config.speed);
-            const lifetime = this.randRange(this.config.lifetime);
-            const size = this.randRange(this.config.size);
+            const speed = rng.range(this.config.speed.min, this.config.speed.max);
+            const lifetime = rng.range(this.config.lifetime.min, this.config.lifetime.max);
+            const size = rng.range(this.config.size.min, this.config.size.max);
 
             this.velocitiesX[idx] = Math.cos(dirRad) * speed;
             this.velocitiesY[idx] = Math.sin(dirRad) * speed;
