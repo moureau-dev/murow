@@ -308,3 +308,86 @@ describe("World", () => {
     }).not.toThrow();
   });
 });
+
+describe("getDespawned / flushDespawned", () => {
+  function makeWorld() {
+    return new World({ maxEntities: 100, components: [Transform, Health] });
+  }
+
+  test("returns empty when nothing was despawned", () => {
+    const world = makeWorld();
+    expect(world.getDespawned().length).toBe(0);
+  });
+
+  test("tracks a single despawned entity", () => {
+    const world = makeWorld();
+    const eid = world.spawn();
+    world.despawn(eid);
+    const despawned = world.getDespawned();
+    expect(despawned.length).toBe(1);
+    expect(despawned[0]).toBe(eid);
+  });
+
+  test("tracks multiple despawned entities", () => {
+    const world = makeWorld();
+    const a = world.spawn();
+    const b = world.spawn();
+    const c = world.spawn();
+    world.despawn(a);
+    world.despawn(c);
+    const despawned = world.getDespawned();
+    expect(despawned.length).toBe(2);
+    expect(Array.from(despawned).sort()).toEqual([a, c].sort());
+  });
+
+  test("flushDespawned resets the tracker", () => {
+    const world = makeWorld();
+    const eid = world.spawn();
+    world.despawn(eid);
+    expect(world.getDespawned().length).toBe(1);
+    world.flushDespawned();
+    expect(world.getDespawned().length).toBe(0);
+  });
+
+  test("accumulates across multiple despawns before flush", () => {
+    const world = makeWorld();
+    const a = world.spawn();
+    const b = world.spawn();
+    world.despawn(a);
+    expect(world.getDespawned().length).toBe(1);
+    world.despawn(b);
+    expect(world.getDespawned().length).toBe(2);
+  });
+
+  test("tracks despawns across multiple flush cycles", () => {
+    const world = makeWorld();
+    const a = world.spawn();
+    const b = world.spawn();
+
+    world.despawn(a);
+    expect(world.getDespawned().length).toBe(1);
+    world.flushDespawned();
+
+    world.despawn(b);
+    const despawned = world.getDespawned();
+    expect(despawned.length).toBe(1);
+    expect(despawned[0]).toBe(b);
+  });
+
+  test("double despawn does not duplicate in tracker", () => {
+    const world = makeWorld();
+    const eid = world.spawn();
+    world.despawn(eid);
+    world.despawn(eid); // should be a no-op
+    expect(world.getDespawned().length).toBe(1);
+  });
+
+  test("getDespawned returns a view, not a copy", () => {
+    const world = makeWorld();
+    const eid = world.spawn();
+    world.despawn(eid);
+    const view1 = world.getDespawned();
+    const view2 = world.getDespawned();
+    expect(view1.buffer).toBe(view2.buffer);
+  });
+});

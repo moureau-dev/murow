@@ -88,6 +88,11 @@ export class World extends WorldSystems {
     // Query mask cache (avoid recomputing masks for same component combinations)
     private queryMaskCache: Record<string, number[]> = {};
 
+    // Despawn tracker: collects entity IDs despawned this tick.
+    // Call flushDespawned() after processing to reset.
+    private despawnedBuffer: Uint32Array;
+    private despawnedCount: number = 0;
+
     // Debug ID
     private worldId = generateId({ prefix: "world_" });
 
@@ -122,6 +127,9 @@ export class World extends WorldSystems {
 
         // Pre-allocate alive flags for O(1) alive checks
         this.aliveEntityFlags = new Uint8Array(this.maxEntities);
+
+        // Pre-allocate despawn tracker
+        this.despawnedBuffer = new Uint32Array(this.maxEntities);
 
         // Pre-allocate arrays for component stores
         this.componentStoresArray = new Array(config.components.length);
@@ -488,6 +496,9 @@ export class World extends WorldSystems {
             return; // Already despawned
         }
 
+        // Track this despawn
+        this.despawnedBuffer[this.despawnedCount++] = entity;
+
         this.aliveEntityFlags[entity] = 0;
 
         // Remove from array (swap with last for O(1) removal)
@@ -528,6 +539,21 @@ export class World extends WorldSystems {
      */
     isAlive(entity: Entity): boolean {
         return this.aliveEntityFlags[entity] === 1;
+    }
+
+    /**
+     * Get entities despawned since the last flushDespawned() call.
+     * Returns a subarray view — zero allocations.
+     */
+    getDespawned(): Uint32Array {
+        return this.despawnedBuffer.subarray(0, this.despawnedCount);
+    }
+
+    /**
+     * Clear the despawn tracker. Call once per tick after processing despawns.
+     */
+    flushDespawned(): void {
+        this.despawnedCount = 0;
     }
 
     /**
