@@ -73,3 +73,41 @@ export const StaticInstance3D = d.struct({
     custom0: d.f32,
     custom1: d.f32,
 });
+
+// --- 3D Euler-based Instance Data (simpler, for common use) ---
+
+export const DynamicMesh = d.struct({
+    prevPosX: d.f32,
+    prevPosY: d.f32,
+    prevPosZ: d.f32,
+    currPosX: d.f32,
+    currPosY: d.f32,
+    currPosZ: d.f32,
+    prevRotX: d.f32,
+    prevRotY: d.f32,
+    prevRotZ: d.f32,
+    currRotX: d.f32,
+    currRotY: d.f32,
+    currRotZ: d.f32,
+});
+
+export const DYNAMIC_MESH_FLOATS = 12;
+
+export const StaticMesh = d.struct({
+    scaleX: d.f32,
+    scaleY: d.f32,
+    scaleZ: d.f32,
+    colorR: d.f32,
+    colorG: d.f32,
+    colorB: d.f32,
+});
+
+export const STATIC_MESH_FLOATS = 6;
+
+export const MeshUniforms = d.struct({
+    viewProjection: d.mat4x4f,
+    alpha: d.f32,
+    lightDirX: d.f32,
+    lightDirY: d.f32,
+    lightDirZ: d.f32,
+});

@@ -14,6 +14,7 @@ export { SpriteAccessor } from './2d/sprite-accessor';
 
 // 3D Renderer
 export { WebGPU3DRenderer } from './3d/renderer';
+export type { ModelHandle, MeshInstanceHandle, MeshInstanceOptions } from './3d/renderer';
 
 // Camera
 export { Camera2D } from './camera/camera-2d';
@@ -35,4 +36,4 @@ export type { ParticleEmitterConfig, Range } from './particle/emitter';
 
 // Core
 export * from './core/constants';
-export { DynamicSprite, StaticSprite, SpriteUniforms, DynamicInstance3D, StaticInstance3D } from './core/types';
+export { DynamicSprite, StaticSprite, SpriteUniforms, DynamicInstance3D, StaticInstance3D, DynamicMesh, StaticMesh, MeshUniforms } from './core/types';

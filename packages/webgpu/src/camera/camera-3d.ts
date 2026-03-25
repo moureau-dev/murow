@@ -1,8 +1,9 @@
 /**
  * Camera3D — perspective camera for the 3D renderer.
  * Produces view and projection matrices as Float32Array(16) each.
+ * Supports prev/curr state for frame interpolation.
  */
-import type { Camera3DState } from "murow";
+import { lerp, type Camera3DState } from "murow/core";
 
 export class Camera3D implements Camera3DState {
     position: [number, number, number] = [0, 5, -10];
@@ -13,15 +14,47 @@ export class Camera3D implements Camera3DState {
     far: number = 1000;
     aspect: number = 1;
 
+    // Previous state for interpolation (stored before each tick)
+    private _prevPosition: [number, number, number] = [0, 5, -10];
+    private _prevTarget: [number, number, number] = [0, 0, 0];
+
+    // Interpolated state used for rendering
+    private _renderPosition: [number, number, number] = [0, 5, -10];
+    private _renderTarget: [number, number, number] = [0, 0, 0];
+
     private _viewMatrix = new Float32Array(16);
     private _projMatrix = new Float32Array(16);
     private _vpMatrix = new Float32Array(16);
 
     /**
-     * Build the view matrix (lookAt).
+     * Store current position/target as previous. Call before each tick.
+     */
+    storePrevious(): void {
+        this._prevPosition[0] = this.position[0];
+        this._prevPosition[1] = this.position[1];
+        this._prevPosition[2] = this.position[2];
+        this._prevTarget[0] = this.target[0];
+        this._prevTarget[1] = this.target[1];
+        this._prevTarget[2] = this.target[2];
+    }
+
+    /**
+     * Interpolate between previous and current state. Call before rendering.
+     */
+    interpolate(alpha: number): void {
+        this._renderPosition[0] = lerp(this._prevPosition[0], this.position[0], alpha);
+        this._renderPosition[1] = lerp(this._prevPosition[1], this.position[1], alpha);
+        this._renderPosition[2] = lerp(this._prevPosition[2], this.position[2], alpha);
+        this._renderTarget[0] = lerp(this._prevTarget[0], this.target[0], alpha);
+        this._renderTarget[1] = lerp(this._prevTarget[1], this.target[1], alpha);
+        this._renderTarget[2] = lerp(this._prevTarget[2], this.target[2], alpha);
+    }
+
+    /**
+     * Build the view matrix (lookAt) using interpolated state.
      */
     getViewMatrix(): Float32Array {
-        lookAt(this._viewMatrix, this.position, this.target, this.up);
+        lookAt(this._viewMatrix, this._renderPosition, this._renderTarget, this.up);
         return this._viewMatrix;
     }
 
@@ -45,6 +78,75 @@ export class Camera3D implements Camera3DState {
 
     setAspect(width: number, height: number): void {
         this.aspect = width / height;
+    }
+
+    /**
+     * Move the camera in local space. Zero allocations.
+     * @param right   Movement along the camera's right axis (positive = right)
+     * @param up      Movement along the camera's up axis (positive = up)
+     * @param forward Movement along the camera's forward axis (positive = toward target)
+     */
+    move(right: number, up: number, forward: number): void {
+        // Ensure view matrix is current
+        this.getViewMatrix();
+        const m = this._viewMatrix;
+
+        // View matrix rows = camera axes (transposed from lookAt columns)
+        // Row 0 = right:   m[0], m[4], m[8]
+        // Row 1 = up:      m[1], m[5], m[9]
+        // Row 2 = -forward: m[2], m[6], m[10]
+        const dx = m[0] * right + m[1] * up - m[2] * forward;
+        const dy = m[4] * right + m[5] * up - m[6] * forward;
+        const dz = m[8] * right + m[9] * up - m[10] * forward;
+
+        this.position[0] += dx;
+        this.position[1] += dy;
+        this.position[2] += dz;
+        this.target[0] += dx;
+        this.target[1] += dy;
+        this.target[2] += dz;
+    }
+
+    /**
+     * Orbit around the target point. Zero allocations.
+     * @param yawDelta   Horizontal rotation in radians (positive = rotate right)
+     * @param pitchDelta Vertical rotation in radians (positive = rotate up)
+     */
+    orbit(yawDelta: number, pitchDelta: number): void {
+        // Offset from target to camera
+        let ox = this.position[0] - this.target[0];
+        let oy = this.position[1] - this.target[1];
+        let oz = this.position[2] - this.target[2];
+
+        // Current spherical coords
+        const dist = Math.sqrt(ox * ox + oy * oy + oz * oz);
+        let yaw = Math.atan2(ox, oz);
+        let pitch = Math.asin(oy / dist);
+
+        yaw += yawDelta;
+        pitch += pitchDelta;
+        pitch = Math.max(-Math.PI * 0.49, Math.min(Math.PI * 0.49, pitch));
+
+        // Back to cartesian
+        this.position[0] = this.target[0] + Math.sin(yaw) * Math.cos(pitch) * dist;
+        this.position[1] = this.target[1] + Math.sin(pitch) * dist;
+        this.position[2] = this.target[2] + Math.cos(yaw) * Math.cos(pitch) * dist;
+    }
+
+    /**
+     * Zoom by adjusting distance to target. Zero allocations.
+     * @param delta Positive = zoom in, negative = zoom out
+     */
+    zoom(delta: number): void {
+        let ox = this.position[0] - this.target[0];
+        let oy = this.position[1] - this.target[1];
+        let oz = this.position[2] - this.target[2];
+        const dist = Math.sqrt(ox * ox + oy * oy + oz * oz);
+        const newDist = Math.max(0.1, dist - delta);
+        const scale = newDist / dist;
+        this.position[0] = this.target[0] + ox * scale;
+        this.position[1] = this.target[1] + oy * scale;
+        this.position[2] = this.target[2] + oz * scale;
     }
 }
 
