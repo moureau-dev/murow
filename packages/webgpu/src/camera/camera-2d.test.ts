@@ -194,6 +194,43 @@ describe('Camera2D', () => {
         });
     });
 
+    describe('follow', () => {
+        test('smoothing=1 snaps to target', () => {
+            const cam = new Camera2D(800, 600);
+            cam.follow(100, 200, 1);
+            expect(cam.x).toBe(100);
+            expect(cam.y).toBe(200);
+        });
+
+        test('smoothing=0 stays in place', () => {
+            const cam = new Camera2D(800, 600);
+            cam.follow(100, 200, 0);
+            expect(cam.x).toBe(0);
+            expect(cam.y).toBe(0);
+        });
+
+        test('smoothing=0.5 moves halfway', () => {
+            const cam = new Camera2D(800, 600);
+            cam.follow(100, 200, 0.5);
+            expect(cam.x).toBeCloseTo(50);
+            expect(cam.y).toBeCloseTo(100);
+        });
+
+        test('repeated calls converge toward target', () => {
+            const cam = new Camera2D(800, 600);
+            for (let i = 0; i < 100; i++) cam.follow(100, 100, 0.1);
+            expect(Math.abs(cam.x - 100)).toBeLessThan(1);
+            expect(Math.abs(cam.y - 100)).toBeLessThan(1);
+        });
+
+        test('default smoothing is snap', () => {
+            const cam = new Camera2D(800, 600);
+            cam.follow(42, 99);
+            expect(cam.x).toBe(42);
+            expect(cam.y).toBe(99);
+        });
+    });
+
     describe('getMatrix returns same buffer instance', () => {
         test('subsequent calls return the same Float32Array reference', () => {
             const cam = new Camera2D(800, 600);

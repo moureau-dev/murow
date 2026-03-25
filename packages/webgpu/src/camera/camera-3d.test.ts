@@ -74,6 +74,43 @@ describe('Camera3D', () => {
             expect(v[15]).toBeCloseTo(1);
         });
 
+        test('follow snaps with smoothing=1', () => {
+            const cam = new Camera3D();
+            cam.position = [0, 0, 10];
+            cam.target = [0, 0, 0];
+            cam.follow(100, 200, 300, 1);
+            expect(cam.target).toEqual([100, 200, 300]);
+            // Position should shift by the same delta
+            expect(cam.position).toEqual([100, 200, 310]);
+        });
+
+        test('follow with smoothing=0.5 moves halfway', () => {
+            const cam = new Camera3D();
+            cam.position = [0, 0, 10];
+            cam.target = [0, 0, 0];
+            cam.follow(100, 0, 0, 0.5);
+            expect(cam.target[0]).toBeCloseTo(50);
+            expect(cam.position[0]).toBeCloseTo(50);
+        });
+
+        test('follow preserves camera-to-target offset', () => {
+            const cam = new Camera3D();
+            cam.position = [0, 5, 10];
+            cam.target = [0, 0, 0];
+            const offsetY = cam.position[1] - cam.target[1];
+            const offsetZ = cam.position[2] - cam.target[2];
+            cam.follow(100, 100, 100, 1);
+            expect(cam.position[1] - cam.target[1]).toBeCloseTo(offsetY);
+            expect(cam.position[2] - cam.target[2]).toBeCloseTo(offsetZ);
+        });
+
+        test('follow with smoothing=0 stays in place', () => {
+            const cam = new Camera3D();
+            cam.target = [0, 0, 0];
+            cam.follow(100, 100, 100, 0);
+            expect(cam.target).toEqual([0, 0, 0]);
+        });
+
         test('moving position changes translation columns', () => {
             const cam = new Camera3D();
             cam.position = [10, 20, 30];
