@@ -1,5 +1,5 @@
 {
-  "name": "benchmarks",
+  "name": "@murow/benchmarks",
   "module": "index.ts",
   "type": "module",
   "private": true,

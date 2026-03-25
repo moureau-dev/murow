@@ -1,54 +1,22 @@
 {
-  "name": "murow",
-  "version": "0.0.70",
-  "description": "A lightweight TypeScript game engine for server-authoritative multiplayer games",
-  "main": "dist/core.js",
-  "module": "dist/core.esm.js",
-  "types": "dist/core.d.ts",
-  "exports": {
-    ".": {
-      "import": "./dist/core.esm.js",
-      "require": "./dist/core.js",
-      "types": "./dist/core.d.ts"
+    "name": "murow-monorepository",
+    "version": "0.0.1",
+    "description": "Repository for all murow's packages.",
+    "scripts": {
+        "build": "cd packages/murow && npm run build"
     },
-    "./core": {
-      "import": "./dist/core.esm.js",
-      "require": "./dist/core.js",
-      "types": "./dist/core.d.ts"
+    "workspaces": [
+        "packages/*",
+        "examples/*",
+        "benchmarks"
+    ],
+    "author": "Luiz Felipe Moureau",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/mococa/murow.git"
+    },
+    "bugs": {
+        "url": "https://github.com/mococa/murow/issues"
     }
-  },
-  "files": [
-    "dist",
-    "src"
-  ],
-  "scripts": {
-    "build": "npm run build:types && npm run build:js",
-    "build:js": "esbuild src/core/index.ts --bundle --outfile=dist/core.js --format=cjs --platform=neutral --minify && esbuild src/core/index.ts --bundle --outfile=dist/core.esm.js --format=esm --platform=neutral --minify",
-    "build:types": "tsc --project tsconfig.json",
-    "dev": "npm run build:js -- --watch",
-    "prepublishOnly": "npm run build",
-    "test": "bun test ./src"
-  },
-  "keywords": [
-    "game-engine",
-    "multiplayer",
-    "typescript",
-    "server-authoritative",
-    "networking",
-    "game-development"
-  ],
-  "author": "Luiz Felipe Moureau",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/mococa/murow.git"
-  },
-  "bugs": {
-    "url": "https://github.com/mococa/murow/issues"
-  },
-  "devDependencies": {
-    "@types/bun": "^1.1.16",
-    "esbuild": "^0.19.0",
-    "typescript": "^5.0.0"
-  }
 }
