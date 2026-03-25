@@ -15,6 +15,8 @@ export { SpriteAccessor } from './2d/sprite-accessor';
 // 3D Renderer
 export { WebGPU3DRenderer } from './3d/renderer';
 export type { ModelHandle, MeshInstanceHandle, MeshInstanceOptions } from './3d/renderer';
+export { MorphAnimation } from './3d/morph-animation';
+export type { MorphClip, MorphState, MorphClipConfig } from './3d/morph-animation';
 
 // Camera
 export { Camera2D } from './camera/camera-2d';
@@ -33,6 +35,10 @@ export type { SpritesheetConfig, TexturePackerData } from './spritesheet/sprites
 // Particle
 export { ParticleEmitter } from './particle/emitter';
 export type { ParticleEmitterConfig, Range } from './particle/emitter';
+
+// Animation (2D)
+export { AnimationController } from './2d/animation';
+export type { AnimationClip, AnimationState, AnimationClipConfig } from './2d/animation';
 
 // Core
 export * from './core/constants';
