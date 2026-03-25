@@ -30,3 +30,5 @@ export * from "./ecs";
 // Game utilities
 export * from "./game";
 
+// Rendering
+export * from "./renderer";
