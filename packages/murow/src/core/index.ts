@@ -9,3 +9,5 @@ export * from './pooled-codec';
 export * from './prediction';
 export * from './input';
 export * from './free-list';
+export * from './sparse-batcher';
+export * from '../renderer';
