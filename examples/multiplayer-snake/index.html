@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Paper-like ECS</title>
+        <style>
+            body {
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+                background: #0f0f1e;
+                font-family: "Courier New", monospace;
+                color: #fff;
+            }
+
+            #info {
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                background: rgba(0, 0, 0, 0.7);
+                padding: 10px 15px;
+                border-radius: 5px;
+                font-size: 14px;
+                z-index: 1000;
+            }
+
+            #info h3 {
+                margin: 0 0 10px 0;
+                color: #00ff00;
+            }
+
+            #info p {
+                margin: 5px 0;
+                line-height: 1.5;
+            }
+
+            canvas {
+                display: block;
+                margin: 50px auto;
+                border: 2px solid #00ff00;
+                box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+            }
+        </style>
+    </head>
+    <body>
+        <script type="module" src="./src/game.ts"></script>
+    </body>
+</html>

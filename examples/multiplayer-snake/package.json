@@ -1,0 +1,17 @@
+{
+    "name": "multiplayer-snake",
+    "module": "src/index.ts",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "client": "vite --host",
+        "build": "vite build"
+    },
+    "dependencies": {
+        "pixi.js": "^8.0.0"
+    },
+    "devDependencies": {
+        "vite": "^5.0.0",
+        "typescript": "^5.0.0"
+    }
+}
