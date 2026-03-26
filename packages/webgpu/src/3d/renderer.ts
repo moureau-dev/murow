@@ -63,6 +63,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private root!: TgpuRoot;
     private device!: GPUDevice;
     private context!: GPUCanvasContext;
+    private resizeObserver: ResizeObserver | null = null;
+    private resizeCallbacks: ((width: number, height: number) => void)[] = [];
     private format!: GPUTextureFormat;
 
     // TypeGPU layout
@@ -222,15 +224,25 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     }
 
     private setupResizeObserver(): void {
-        const observer = new ResizeObserver((entries) => {
+        this.resizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
                 const box = entry.devicePixelContentBoxSize?.[0] ?? entry.contentBoxSize[0];
                 const w = box.inlineSize;
                 const h = box.blockSize;
+                if (w === this._width && h === this._height) continue;
                 this._width = w;
                 this._height = h;
-                this.canvas.width = w;
-                this.canvas.height = h;
+
+                if (this.options.autoResize) {
+                    this.canvas.width = w;
+                    this.canvas.height = h;
+                    this.context.configure({
+                        device: this.device,
+                        format: navigator.gpu.getPreferredCanvasFormat(),
+                        alphaMode: 'premultiplied',
+                    });
+                }
+
                 this.camera.aspect = w / h;
 
                 // Recreate depth texture
@@ -240,9 +252,21 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                     format: 'depth24plus',
                     usage: GPUTextureUsage.RENDER_ATTACHMENT,
                 });
+
+                for (const cb of this.resizeCallbacks) {
+                    cb(w, h);
+                }
             }
         });
-        observer.observe(this.canvas, { box: 'device-pixel-content-box' });
+        this.resizeObserver.observe(this.canvas, { box: 'device-pixel-content-box' });
+    }
+
+    /**
+     * Register a callback that fires when the canvas resizes.
+     * Receives the new width and height in physical pixels.
+     */
+    onResize(callback: (width: number, height: number) => void): void {
+        this.resizeCallbacks.push(callback);
     }
 
     /**
@@ -633,6 +657,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     }
 
     destroy(): void {
+        this.resizeObserver?.disconnect();
+        this.resizeObserver = null;
+        this.resizeCallbacks.length = 0;
         this.dynamicBuffer?.destroy();
         this.staticBuffer?.destroy();
         this.uniformBuffer?.destroy();

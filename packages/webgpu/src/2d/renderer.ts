@@ -108,6 +108,9 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     readonly camera: Camera2D;
     private uniformData = new Float32Array(20);
 
+    private resizeObserver: ResizeObserver | null = null;
+    private resizeCallbacks: ((width: number, height: number) => void)[] = [];
+
     constructor(canvas: HTMLCanvasElement, options: Renderer2DOptions) {
         super(canvas, options);
         this.camera = new Camera2D(canvas.width || 800, canvas.height || 600);
@@ -192,19 +195,41 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     }
 
     private setupResizeObserver(): void {
-        const observer = new ResizeObserver((entries) => {
+        this.resizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
                 const box = entry.devicePixelContentBoxSize?.[0] ?? entry.contentBoxSize[0];
                 const w = box.inlineSize;
                 const h = box.blockSize;
+                if (w === this._width && h === this._height) continue;
                 this._width = w;
                 this._height = h;
-                this.canvas.width = w;
-                this.canvas.height = h;
+
+                if (this.options.autoResize) {
+                    this.canvas.width = w;
+                    this.canvas.height = h;
+                    this.context.configure({
+                        device: this._device,
+                        format: this._format,
+                        alphaMode: 'premultiplied',
+                    });
+                }
+
                 this.camera.setViewport(w, h);
+
+                for (const cb of this.resizeCallbacks) {
+                    cb(w, h);
+                }
             }
         });
-        observer.observe(this.canvas, { box: 'device-pixel-content-box' });
+        this.resizeObserver.observe(this.canvas, { box: 'device-pixel-content-box' });
+    }
+
+    /**
+     * Register a callback that fires when the canvas resizes.
+     * Receives the new width and height in physical pixels.
+     */
+    onResize(callback: (width: number, height: number) => void): void {
+        this.resizeCallbacks.push(callback);
     }
 
     async loadSpritesheet(source: SpritesheetSource): Promise<SpritesheetHandle> {
@@ -400,6 +425,9 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     }
 
     destroy(): void {
+        this.resizeObserver?.disconnect();
+        this.resizeObserver = null;
+        this.resizeCallbacks.length = 0;
         this.dynamicBuffer?.destroy();
         this.staticBuffer?.destroy();
         this.uniformBuffer?.destroy();

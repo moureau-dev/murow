@@ -29,6 +29,8 @@ import type { AnyData } from 'typegpu/data';
 import type { BuiltInGeometry, GeometryData } from './built-in';
 import { resolveBuiltInGeometry } from './built-in';
 import { FreeList } from 'murow';
+import * as std from 'typegpu/std';
+import { attachShaderMetadata } from '../shaders/runtime-transpile';
 
 // =============================================================================
 // Type utilities
@@ -161,8 +163,8 @@ export function createGeometryDataLayout<
 
     const dataLayout = tgpu.bindGroupLayout({
         uniforms: { uniform: UniformStruct },
-        dynamicInstances: { storage: d.arrayOf(DynStruct, maxInstances) },
-        staticInstances: { storage: d.arrayOf(StatStruct, maxInstances) },
+        dynamic: { storage: d.arrayOf(DynStruct, maxInstances) },
+        statics: { storage: d.arrayOf(StatStruct, maxInstances) },
     });
 
     return { dataLayout, instanceLayout, uniformDefs };
@@ -573,40 +575,68 @@ type ShaderResult = {
     fragment: TgpuFragmentFn<Record<string, unknown>, unknown>;
 };
 
+/** Vertex input builtins available in shader functions. */
+export interface VertexInput {
+    /** The vertex index within the current draw call (0-5 for a quad). */
+    vertexIndex: number;
+    /** The instance index within the current draw call. */
+    instanceIndex: number;
+}
+
+/**
+ * Declarative shader config — no `tgpu.vertexFn`, no `'use gpu'`.
+ * The builder handles all TypeGPU wiring internally.
+ */
+export interface DeclarativeShaders<
+    TDynamic extends Record<string, AnyData> = Record<string, AnyData>,
+    TStatic extends Record<string, AnyData> = Record<string, AnyData>,
+    TUniforms extends Record<string, AnyData> = Record<string, AnyData>,
+> {
+    vertex: {
+        /** Varyings output from vertex to fragment (position is always included). */
+        out: Record<string, AnyData>;
+        /** Vertex shader body. Receives typed context and vertex input. */
+        fn: (
+            ctx: ShaderContext<TDynamic, TStatic, TUniforms>,
+            input: VertexInput,
+        ) => Record<string, unknown>;
+    };
+    fragment: {
+        /** Fragment shader body. Receives varyings from vertex shader. */
+        fn: (input: Record<string, unknown>) => unknown;
+    };
+}
+
 /**
  * Context passed to the shader factory callback.
+ * Provides `dynamic`, `statics`, and `uniforms` accessors with typed field names.
  *
- * Use `layout.$` inside `'use gpu'` function bodies to access instance/uniform data.
- * Field names autocomplete from your `.instanceLayout()` and `.uniforms()` definitions.
+ * **These accessors are lazy** — they only resolve when accessed inside a `'use gpu'` body.
+ * Capture them in the closure and use inside shader functions:
  *
  * ```ts
- * .shaders(({ layout }) => ({
+ * .shaders(({ dynamic, statics, uniforms }) => ({
  *     vertex: tgpu.vertexFn({...})(function(input) {
  *         'use gpu';
- *         const pos = layout.$.dynamicInstances[input.instanceIndex].position;
- *         const time = layout.$.uniforms.time;
+ *         const pos = dynamic[input.instanceIndex].position;
+ *         const time = uniforms.time;
  *     }),
  * }))
  * ```
- *
- * Note: `layout.$` is a compile-time reference — only access it inside `'use gpu'` bodies.
  */
 export interface ShaderContext<
     TDynamic extends Record<string, AnyData> = Record<string, AnyData>,
     TStatic extends Record<string, AnyData> = Record<string, AnyData>,
     TUniforms extends Record<string, AnyData> = Record<string, AnyData>,
 > {
-    /** TypeGPU bind group layout. Use `layout.$.dynamicInstances`, `layout.$.staticInstances`, `layout.$.uniforms` inside `'use gpu'` bodies. */
-    readonly layout: TgpuBindGroupLayout & {
-        readonly $: {
-            /** Per-instance dynamic data. Access: `dynamicInstances[instanceIndex].fieldName` */
-            readonly dynamicInstances: { readonly [index: number]: { readonly [K in keyof TDynamic]: unknown } };
-            /** Per-instance static data. Access: `staticInstances[instanceIndex].fieldName` */
-            readonly staticInstances: { readonly [index: number]: { readonly [K in keyof TStatic]: unknown } };
-            /** Shared uniforms. Access: `uniforms.fieldName` */
-            readonly uniforms: { readonly [K in keyof TUniforms]: unknown };
-        };
-    };
+    /** Per-instance dynamic data (updated every frame). Access: `dynamic[instanceIndex].fieldName` */
+    readonly dynamic: { readonly [index: number]: { readonly [K in keyof TDynamic]: unknown } };
+    /** Per-instance static data (set once). Access: `statics[instanceIndex].fieldName` */
+    readonly statics: { readonly [index: number]: { readonly [K in keyof TStatic]: unknown } };
+    /** Shared uniforms. Access: `uniforms.fieldName` */
+    readonly uniforms: { readonly [K in keyof TUniforms]: unknown };
+    /** Raw TypeGPU bind group layout — escape hatch for advanced usage. */
+    readonly layout: TgpuBindGroupLayout;
 }
 
 type ShaderFactory<
@@ -629,6 +659,10 @@ export class GeometryBuilder<
     private _vertexFn: TgpuVertexFn<Record<string, unknown>, Record<string, unknown>> | null = null;
     private _fragmentFn: TgpuFragmentFn<Record<string, unknown>, unknown> | null = null;
     private _shaderFactory: ShaderFactory<TDynamic, TStatic, TUniforms> | null = null;
+    private _vertexVaryings: Record<string, AnyData> | null = null;
+    private _vertexFactory: ((ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => Function) | null = null;
+    private _fragmentFactory: Function | null = null;
+    private _declarativeShaders: DeclarativeShaders<TDynamic, TStatic, TUniforms> | null = null;
     private _dataLayout: GeometryDataLayout<TDynamic, TStatic, TUniforms> | null = null;
 
     constructor(name: string, options: GeometryOptions, root: TgpuRoot, format: GPUTextureFormat) {
@@ -679,15 +713,9 @@ export class GeometryBuilder<
     /**
      * Provide shaders via a factory callback that receives a typed context.
      *
-     * The context provides `dynamic`, `statics`, and `uniforms` accessors
-     * with full autocomplete on field names — no raw TypeGPU layout access needed.
-     *
      * ```ts
      * .shaders(({ dynamic, statics, uniforms }) => ({
-     *     vertex: tgpu.vertexFn({...})(function(input) {
-     *         const pos = dynamic[input.instanceIndex].position;
-     *         const time = uniforms.time;
-     *     }),
+     *     vertex: tgpu.vertexFn({...})(function(input) { ... }),
      *     fragment: tgpu.fragmentFn({...})(function(input) { ... }),
      * }))
      * ```
@@ -698,15 +726,64 @@ export class GeometryBuilder<
      * ```
      */
     shaders(
-        vertexOrFactory: TgpuVertexFn<Record<string, unknown>, Record<string, unknown>> | ShaderFactory<TDynamic, TStatic, TUniforms>,
+        vertexOrFactoryOrConfig:
+            | TgpuVertexFn<Record<string, unknown>, Record<string, unknown>>
+            | ShaderFactory<TDynamic, TStatic, TUniforms>
+            | DeclarativeShaders<TDynamic, TStatic, TUniforms>,
         fragment?: TgpuFragmentFn<Record<string, unknown>, unknown>,
     ): this {
         if (fragment !== undefined) {
-            this._vertexFn = vertexOrFactory as TgpuVertexFn<Record<string, unknown>, Record<string, unknown>>;
+            // .shaders(vertexFn, fragmentFn)
+            this._vertexFn = vertexOrFactoryOrConfig as TgpuVertexFn<Record<string, unknown>, Record<string, unknown>>;
             this._fragmentFn = fragment;
+        } else if (typeof vertexOrFactoryOrConfig === 'function') {
+            // .shaders((ctx) => ({ vertex, fragment }))
+            this._shaderFactory = vertexOrFactoryOrConfig as ShaderFactory<TDynamic, TStatic, TUniforms>;
         } else {
-            this._shaderFactory = vertexOrFactory as ShaderFactory<TDynamic, TStatic, TUniforms>;
+            // .shaders({ vertex: { out, fn }, fragment: { fn } })
+            this._declarativeShaders = vertexOrFactoryOrConfig as DeclarativeShaders<TDynamic, TStatic, TUniforms>;
         }
+        return this;
+    }
+
+    /**
+     * Set the vertex shader with typed context.
+     * The builder handles `tgpu.vertexFn` wrapping and builtin inputs.
+     *
+     * ```ts
+     * .vertex(
+     *     { brightness: d.f32, localUV: d.vec2f },  // varyings
+     *     (ctx) => function(input) {
+     *         'use gpu';
+     *         const pos = ctx.dynamic[input.instanceIndex].position;
+     *         return { pos: d.vec4f(...), brightness, localUV };
+     *     }
+     * )
+     * ```
+     */
+    vertexShader<V extends Record<string, AnyData>>(
+        varyings: V,
+        factory: (ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => (input: { vertexIndex: number; instanceIndex: number }) => Record<string, unknown>,
+    ): this {
+        this._vertexVaryings = varyings;
+        this._vertexFactory = factory;
+        return this;
+    }
+
+    /**
+     * Set the fragment shader.
+     *
+     * ```ts
+     * .fragmentShader(function(input) {
+     *     'use gpu';
+     *     return d.vec4f(1, 1, 1, 1);
+     * })
+     * ```
+     */
+    fragmentShader(
+        fn: (input: Record<string, unknown>) => unknown,
+    ): this {
+        this._fragmentFactory = fn;
         return this;
     }
 
@@ -724,12 +801,83 @@ export class GeometryBuilder<
             this._layoutConfig, this._uniformDefs, maxInstances,
         );
 
-        // Resolve shader factory if used
+        // Build the lazy shader context (getters defer layout.$ access to GPU evaluation time)
+        const layout = geoLayout.dataLayout;
+        const lazyCtx = Object.create(null) as ShaderContext<TDynamic, TStatic, TUniforms>;
+        Object.defineProperties(lazyCtx, {
+            dynamic: { get: () => layout.$.dynamic },
+            statics: { get: () => layout.$.statics },
+            uniforms: { get: () => layout.$.uniforms },
+            layout: { value: layout },
+        });
+
+        // Resolve shaders
         if (this._shaderFactory) {
-            const ctx = { layout: geoLayout.dataLayout } as ShaderContext<TDynamic, TStatic, TUniforms>;
-            const shaders = this._shaderFactory(ctx);
+            // Callback: .shaders((ctx) => ({ vertex, fragment }))
+            const shaders = this._shaderFactory(lazyCtx);
             this._vertexFn = shaders.vertex;
             this._fragmentFn = shaders.fragment;
+        } else if (this._declarativeShaders) {
+            // Declarative: .shaders({ vertex: { out, fn }, fragment: { fn } })
+            const decl = this._declarativeShaders;
+            const varyings = decl.vertex.out;
+
+            const vertexOut: Record<string, unknown> = { pos: d.builtin.position };
+            const fragmentIn: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(varyings)) {
+                vertexOut[k] = v;
+                fragmentIn[k] = v;
+            }
+
+            // Build the externals resolver — maps free variable names in the shader body
+            // to their runtime values. Called lazily by TypeGPU during pipeline resolution
+            // (inside GPU context, so layout.$ is valid).
+            const resolveExternals = (knownExternals: Record<string, unknown>) => () => {
+                // Provide layout accessors + typegpu data module
+                return {
+                    dynamic: layout.$.dynamic,
+                    statics: layout.$.statics,
+                    uniforms: layout.$.uniforms,
+                    d,
+                    std,
+                    ...knownExternals,
+                };
+            };
+
+            // Attach runtime metadata — parses function source with Acorn + tinyest-for-wgsl
+            // Vertex fn has (ctx, input) — strip the first param, its destructured names become externals
+            attachShaderMetadata(decl.vertex.fn, resolveExternals({}), true);
+            attachShaderMetadata(decl.fragment.fn, resolveExternals({}));
+
+            this._vertexFn = tgpu.vertexFn({
+                in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
+                out: vertexOut,
+            } as Parameters<typeof tgpu.vertexFn>[0])(decl.vertex.fn as unknown as Parameters<ReturnType<typeof tgpu.vertexFn>>[0]) as TgpuVertexFn<Record<string, unknown>, Record<string, unknown>>;
+
+            this._fragmentFn = tgpu.fragmentFn({
+                in: fragmentIn,
+                out: d.vec4f,
+            } as Parameters<typeof tgpu.fragmentFn>[0])(decl.fragment.fn as unknown as Parameters<ReturnType<typeof tgpu.fragmentFn>>[0]) as TgpuFragmentFn<Record<string, unknown>, unknown>;
+        } else if (this._vertexFactory && this._fragmentFactory) {
+            // Builder methods: .vertexShader().fragmentShader()
+            const varyings = this._vertexVaryings ?? {};
+            const vertexOut: Record<string, unknown> = { pos: d.builtin.position };
+            const fragmentIn: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(varyings)) {
+                vertexOut[k] = v;
+                fragmentIn[k] = v;
+            }
+
+            const vertexBody = this._vertexFactory(lazyCtx);
+            this._vertexFn = tgpu.vertexFn({
+                in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
+                out: vertexOut,
+            } as Parameters<typeof tgpu.vertexFn>[0])(vertexBody as Parameters<ReturnType<typeof tgpu.vertexFn>>[0]) as TgpuVertexFn<Record<string, unknown>, Record<string, unknown>>;
+
+            this._fragmentFn = tgpu.fragmentFn({
+                in: fragmentIn,
+                out: d.vec4f,
+            } as Parameters<typeof tgpu.fragmentFn>[0])(this._fragmentFactory as Parameters<ReturnType<typeof tgpu.fragmentFn>>[0]) as TgpuFragmentFn<Record<string, unknown>, unknown>;
         }
 
         if (!this._vertexFn) throw new Error(`Geometry "${this._name}": vertex shader is required`);
@@ -762,8 +910,8 @@ export class GeometryBuilder<
         const dataBindGroup = (root as unknown as { createBindGroup(layout: TgpuBindGroupLayout, entries: Record<string, unknown>): TgpuBindGroup })
             .createBindGroup(dataLayout, {
                 uniforms: uniformBuffer,
-                dynamicInstances: dynamicBuffer,
-                staticInstances: staticBuffer,
+                dynamic: dynamicBuffer,
+                statics: staticBuffer,
             });
 
         // Pipeline — TypeGPU's createRenderPipeline has complex generics, cast required
