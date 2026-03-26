@@ -86,17 +86,13 @@ export const starfield: Program = {
         let lastFpsTime = performance.now();
 
         const loop = new GameLoop({ tickRate: 1, type: 'client' });
+        let time = 0;
 
-        loop.events.on('render', () => {
-            geom.updateUniforms({
-                time: (performance.now() / 1000) % 1000,
-                resolution: [canvas.width, canvas.height],
-            });
+        loop.events.on('render', ({ deltaTime }) => {
+            time += deltaTime;
 
-            const context = canvas.getContext('webgpu');
-            if (!context) return;
-            const view = context.getCurrentTexture().createView();
-            geom.render(view, [0, 0, 0.02, 1]);
+            geom.updateUniforms({ time });
+            geom.render();
 
             frameCount++;
             const now = performance.now();

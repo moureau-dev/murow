@@ -2,7 +2,7 @@ import { GameLoop } from 'murow';
 import { WebGPU2DRenderer, d, std } from '@murow/webgpu';
 import type { Program } from '../index';
 
-const MAX_PARTICLES = 50_000;
+const MAX_PARTICLES = 1_000_000;
 
 const Particle = d.struct({
     posX: d.f32,
@@ -102,12 +102,12 @@ export const gpuParticles: Program = {
                     },
                 },
                 fragment: {
-                    fn(input) {
-                        const dist = std.length(input.localUV);
+                    fn({ localUV, vLife, vHue }) {
+                        const dist = std.length(localUV);
                         const glow = std.pow(std.saturate(1.0 - dist), 2.0);
-                        const fade = std.saturate(input.vLife * 0.5);
+                        const fade = std.saturate(vLife * 0.5);
 
-                        const h = input.vHue * 6.0;
+                        const h = vHue * 6.0;
                         const r = std.saturate(std.abs(h - 3.0) - 1.0);
                         const g = std.saturate(2.0 - std.abs(h - 2.0));
                         const b = std.saturate(2.0 - std.abs(h - 4.0));
@@ -139,19 +139,14 @@ export const gpuParticles: Program = {
 
         let frameCount = 0;
         let lastFpsTime = performance.now();
-        let lastTime = performance.now();
 
         const loop = new GameLoop({ tickRate: 5, type: 'client' });
 
         loop.events.on('render', ({ deltaTime }) => {
-            const context = canvas.getContext('webgpu');
-            if (!context) return;
-            const view = context.getCurrentTexture().createView();
-
             // Compute + render — zero CPU involvement
             compute.write('config', { deltaTime, gravity: 0.3, bounceEnergy: 0.8, count: MAX_PARTICLES });
             compute.dispatch(MAX_PARTICLES);
-            render.render(view, [0.02, 0.02, 0.05, 1]);
+            render.render();
 
             frameCount++;
             const now = performance.now();
