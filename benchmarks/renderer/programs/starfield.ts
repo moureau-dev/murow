@@ -24,7 +24,7 @@ export const starfield: Program = {
                 static: { speed: d.f32, phase: d.f32 },
             })
             .uniforms({ time: d.f32, resolution: d.vec2f })
-            .shaders((layout) => ({
+            .shaders(({ layout }) => ({
                 vertex: tgpu.vertexFn({
                     in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
                     out: { pos: d.builtin.position, brightness: d.f32, localUV: d.vec2f },
@@ -79,7 +79,7 @@ export const starfield: Program = {
         for (let i = 0; i < MAX_STARS; i++) {
             geom.addInstance({
                 position: [Math.random(), Math.random()],
-                speed: 0.5 + Math.random() * 2,
+                speed: 0.5 + Math.random(),
                 phase: Math.random() * Math.PI * 2,
             });
         }
