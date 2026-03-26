@@ -44,7 +44,7 @@ renderer.render(alpha);
 ## API
 
 - `WebGPU2DRenderer` — instanced 2D sprite renderer with batching and interpolation.
-- `WebGPU3DRenderer` — 3D renderer skeleton (WIP).
+- `WebGPU3DRenderer` — instanced 3D mesh renderer with GLTF loading, frustum culling, and morph animation.
 - `SpriteAccessor` — zero-alloc handle for reading/writing sprite data directly into typed arrays.
 - `Camera2D` / `Camera3D` — orthographic and perspective cameras.
 - `GeometryBuilder` — fluent builder for custom instanced geometries with TypeGPU shaders.
