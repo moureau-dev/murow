@@ -62,6 +62,7 @@ import {
     type TexturePackerData,
 } from '../spritesheet/spritesheet';
 import { GeometryBuilder, type GeometryOptions } from '../geometry/geometry-builder';
+import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder';
 
 export class WebGPU2DRenderer extends Base2DRenderer {
     private root!: TgpuRoot;
@@ -342,6 +343,10 @@ export class WebGPU2DRenderer extends Base2DRenderer {
 
     createGeometry(name: string, options: GeometryOptions): GeometryBuilder {
         return new GeometryBuilder(name, options, this.root, this._format);
+    }
+
+    createCompute(name: string, options: ComputeOptions): ComputeBuilder {
+        return new ComputeBuilder(name, options, this.root);
     }
 
     render(alpha: number): void {

@@ -11,6 +11,7 @@ import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer } from 'typegpu';
 import * as d from 'typegpu/data';
 import { Base3DRenderer, FreeList, SparseBatcher } from 'murow';
+import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder';
 import type { Camera3DState, Renderer3DOptions } from 'murow';
 import {
     DYNAMIC_MESH_FLOATS,
@@ -267,6 +268,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
      */
     onResize(callback: (width: number, height: number) => void): void {
         this.resizeCallbacks.push(callback);
+    }
+
+    createCompute(name: string, options: ComputeOptions): ComputeBuilder {
+        return new ComputeBuilder(name, options, this.root);
     }
 
     /**
