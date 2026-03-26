@@ -342,7 +342,7 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     }
 
     createGeometry(name: string, options: GeometryOptions): GeometryBuilder {
-        return new GeometryBuilder(name, options, this.root, this._format);
+        return new GeometryBuilder(name, options, this.root, this._format, this.canvas, this._clearColor);
     }
 
     createCompute(name: string, options: ComputeOptions): ComputeBuilder {

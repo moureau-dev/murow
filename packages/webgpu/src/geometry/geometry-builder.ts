@@ -216,6 +216,8 @@ export class CustomGeometry<
     private uniformBuffer: TgpuBuffer<unknown>;
     private pipeline: TgpuRenderPipeline;
     private dataBindGroup: TgpuBindGroup;
+    private canvas: HTMLCanvasElement;
+    private clearColor: [number, number, number, number];
 
     /** @internal — use GeometryBuilder to create instances. */
     constructor(
@@ -225,6 +227,7 @@ export class CustomGeometry<
         dynamicBuffer: TgpuBuffer<unknown>, staticBuffer: TgpuBuffer<unknown>,
         uniformBuffer: TgpuBuffer<unknown>,
         pipeline: TgpuRenderPipeline, dataBindGroup: TgpuBindGroup,
+        canvas: HTMLCanvasElement, clearColor: [number, number, number, number],
         isComputeSourced = false,
     ) {
         this.name = name;
@@ -251,6 +254,8 @@ export class CustomGeometry<
         this.uniformBuffer = uniformBuffer;
         this.pipeline = pipeline;
         this.dataBindGroup = dataBindGroup;
+        this.canvas = canvas;
+        this.clearColor = clearColor;
 
         this.activeSlots = new Uint32Array(maxInstances);
         this.slotToActive = new Int32Array(maxInstances).fill(-1);
@@ -375,10 +380,14 @@ export class CustomGeometry<
         this._staticDirty = true;
     }
 
-    render(canvasView: GPUTextureView, clearColor?: [number, number, number, number]): void {
+    render(): void {
         const device = this.root.device;
         const count = this._isComputeSourced ? this._drawCount : this.freeList.getAllocatedCount();
         if (count === 0) return;
+
+        const context = this.canvas.getContext('webgpu');
+        if (!context) return;
+        const view = context.getCurrentTexture().createView();
 
         // Skip dynamic buffer upload for compute-sourced geometries — compute owns the buffer
         if (!this._isComputeSourced && this._dynamicDirty) {
@@ -396,14 +405,14 @@ export class CustomGeometry<
             this._uniformDirty = false;
         }
 
-        // TypeGPU pipeline API — types are internal, cast required
+        const [r, g, b, a] = this.clearColor;
         (this.pipeline as unknown as { with(bg: TgpuBindGroup): { withColorAttachment(opts: Record<string, unknown>): { draw(v: number, i: number): void } } })
             .with(this.dataBindGroup)
             .withColorAttachment({
-                view: canvasView,
-                loadOp: clearColor ? 'clear' : 'load',
+                view,
+                loadOp: 'clear',
                 storeOp: 'store',
-                ...(clearColor ? { clearValue: clearColor } : {}),
+                clearValue: { r, g, b, a },
             })
             .draw(this.geometryData.vertexCount, count);
     }
@@ -685,11 +694,16 @@ export class GeometryBuilder<
     private _computeSource: { kernel: ComputeKernel<Record<string, unknown>>; bufferName: string } | null = null;
     private _dataLayout: GeometryDataLayout<TDynamic, TStatic, TUniforms> | null = null;
 
-    constructor(name: string, options: GeometryOptions, root: TgpuRoot, format: GPUTextureFormat) {
+    private _canvas: HTMLCanvasElement;
+    private _clearColor: [number, number, number, number];
+
+    constructor(name: string, options: GeometryOptions, root: TgpuRoot, format: GPUTextureFormat, canvas: HTMLCanvasElement, clearColor: [number, number, number, number]) {
         this._name = name;
         this._options = options;
         this._root = root;
         this._format = format;
+        this._canvas = canvas;
+        this._clearColor = clearColor;
     }
 
     instanceLayout<
@@ -983,6 +997,7 @@ export class GeometryBuilder<
             dynamicBuffer as TgpuBuffer<unknown>, staticBuffer as TgpuBuffer<unknown>,
             uniformBuffer as TgpuBuffer<unknown>,
             pipeline, dataBindGroup,
+            this._canvas, this._clearColor,
             !!this._computeSource,
         );
     }
