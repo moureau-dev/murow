@@ -2,99 +2,80 @@ import tgpu from 'typegpu';
 import * as d from 'typegpu/data';
 import * as std from 'typegpu/std';
 import { GameLoop } from 'murow';
-import {
-    WebGPU2DRenderer,
-    createGeometryDataLayout,
-} from '@murow/webgpu';
+import { WebGPU2DRenderer } from '@murow/webgpu';
 import type { Program } from '../index';
 
 const MAX_STARS = 1_000;
-
-const instanceLayout = {
-    dynamic: { position: d.vec2f },
-    static: { speed: d.f32, phase: d.f32 },
-};
-
-const uniformDefs = {
-    time: d.f32,
-    resolution: d.vec2f,
-};
 
 export const starfield: Program = {
     name: 'Starfield',
 
     async init(canvas: HTMLCanvasElement, stats: HTMLElement) {
         const renderer = new WebGPU2DRenderer(canvas, {
-            maxSprites: 1, // we don't use the sprite system
+            maxSprites: 1,
             clearColor: [0, 0, 0.02, 1],
         });
         await renderer.init();
 
-        const layout = createGeometryDataLayout(instanceLayout, uniformDefs, MAX_STARS);
-
-        const dataLayout = layout.dataLayout;
-
-        // Vertex shader: position the star quad, compute brightness
-        const vertexFn = tgpu.vertexFn({
-            in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
-            out: { pos: d.builtin.position, brightness: d.f32, localUV: d.vec2f },
-        })(function starfieldVertex(input: { vertexIndex: number; instanceIndex: number }) {
-            'use gpu';
-            const starPos = dataLayout.$.dynamicInstances[input.instanceIndex].position;
-            const speed = dataLayout.$.staticInstances[input.instanceIndex].speed;
-            const phase = dataLayout.$.staticInstances[input.instanceIndex].phase;
-            const time = dataLayout.$.uniforms.time;
-            const resX = dataLayout.$.uniforms.resolution.x;
-            const resY = dataLayout.$.uniforms.resolution.y;
-
-            // Quad: draw(6, count) → vertexIndex is 0-5 per instance
-            // v0(-1,-1) v1(1,-1) v2(1,1) v3(-1,-1) v4(1,1) v5(-1,1)
-            const vf = d.f32(input.vertexIndex);
-            // right for v1(1), v2(2), v4(4):
-            const r1 = std.step(0.5, vf) * (1.0 - std.step(1.5, vf));   // 1 only when vf in [0.5, 1.5)
-            const r2 = std.step(1.5, vf) * (1.0 - std.step(2.5, vf));   // 1 only when vf in [1.5, 2.5)
-            const r4 = std.step(3.5, vf) * (1.0 - std.step(4.5, vf));   // 1 only when vf in [3.5, 4.5)
-            // top for v2(2), v4(4), v5(5):
-            const t2 = r2;
-            const t4 = r4;
-            const t5 = std.step(4.5, vf) * (1.0 - std.step(5.5, vf));
-            const qx = std.max(std.max(r1, r2), r4) * 2.0 - 1.0;
-            const qy = std.max(std.max(t2, t4), t5) * 2.0 - 1.0;
-
-            // Star size in NDC (~4px on screen), aspect-correct
-            const sizeX = 8.0 / resX;
-            const sizeY = 8.0 / resY;
-            const wx = (starPos.x * 2.0 - 1.0) + qx * sizeX;
-            const wy = (1.0 - starPos.y * 2.0) + qy * sizeY;
-
-            const brightness = std.sin(time * speed + phase) * 0.5 + 0.5;
-
-            return {
-                pos: d.vec4f(wx, wy, 0, 1),
-                brightness,
-                localUV: d.vec2f(qx, qy),
-            };
-        });
-
-        const fragmentFn = tgpu.fragmentFn({
-            in: { brightness: d.f32, localUV: d.vec2f },
-            out: d.vec4f,
-        })(function starfieldFragment(input: { brightness: number; localUV: d.v2f }) {
-            'use gpu';
-            const dist = std.length(input.localUV);
-            const glow = std.pow(std.saturate(1.0 - dist), 3.0);
-            const c = glow * input.brightness;
-            return d.vec4f(c * 0.9, c * 0.95, c, glow);
-        });
-
         const geom = renderer
             .createGeometry('starfield', { maxInstances: MAX_STARS, geometry: 'quad' })
-            .instanceLayout(layout)
-            .uniforms(uniformDefs)
-            .shaders(vertexFn, fragmentFn)
+            .instanceLayout({
+                dynamic: { position: d.vec2f },
+                static: { speed: d.f32, phase: d.f32 },
+            })
+            .uniforms({ time: d.f32, resolution: d.vec2f })
+            .shaders((layout) => ({
+                vertex: tgpu.vertexFn({
+                    in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
+                    out: { pos: d.builtin.position, brightness: d.f32, localUV: d.vec2f },
+                })(function starfieldVertex(input: { vertexIndex: number; instanceIndex: number }) {
+                    'use gpu';
+                    const starPos = layout.$.dynamicInstances[input.instanceIndex].position;
+                    const speed = layout.$.staticInstances[input.instanceIndex].speed;
+                    const phase = layout.$.staticInstances[input.instanceIndex].phase;
+                    const time = layout.$.uniforms.time;
+                    const resX = layout.$.uniforms.resolution.x;
+                    const resY = layout.$.uniforms.resolution.y;
+
+                    // Quad: draw(6, count) → vertexIndex is 0-5 per instance
+                    const vf = d.f32(input.vertexIndex);
+                    const r1 = std.step(0.5, vf) * (1.0 - std.step(1.5, vf));
+                    const r2 = std.step(1.5, vf) * (1.0 - std.step(2.5, vf));
+                    const r4 = std.step(3.5, vf) * (1.0 - std.step(4.5, vf));
+                    const t2 = r2;
+                    const t4 = r4;
+                    const t5 = std.step(4.5, vf) * (1.0 - std.step(5.5, vf));
+                    const qx = std.max(std.max(r1, r2), r4) * 2.0 - 1.0;
+                    const qy = std.max(std.max(t2, t4), t5) * 2.0 - 1.0;
+
+                    const sizeX = 8.0 / resX;
+                    const sizeY = 8.0 / resY;
+                    const wx = (starPos.x * 2.0 - 1.0) + qx * sizeX;
+                    const wy = (1.0 - starPos.y * 2.0) + qy * sizeY;
+
+                    const brightness = std.sin(time * speed + phase) * 0.5 + 0.5;
+
+                    return {
+                        pos: d.vec4f(wx, wy, 0, 1),
+                        brightness,
+                        localUV: d.vec2f(qx, qy),
+                    };
+                }),
+
+                fragment: tgpu.fragmentFn({
+                    in: { brightness: d.f32, localUV: d.vec2f },
+                    out: d.vec4f,
+                })(function starfieldFragment(input: { brightness: number; localUV: d.v2f }) {
+                    'use gpu';
+                    const dist = std.length(input.localUV);
+                    const glow = std.pow(std.saturate(1.0 - dist), 3.0);
+                    const c = glow * input.brightness;
+                    return d.vec4f(c * 0.9, c * 0.95, c, glow);
+                }),
+            }))
             .build();
 
-        // Initialize stars in normalized coordinates
+        // Initialize stars
         for (let i = 0; i < MAX_STARS; i++) {
             geom.addInstance({
                 position: [Math.random(), Math.random()],
@@ -108,14 +89,12 @@ export const starfield: Program = {
             resolution: [canvas.width, canvas.height],
         });
 
-        // FPS tracking
         let frameCount = 0;
         let lastFpsTime = performance.now();
 
         const loop = new GameLoop({ tickRate: 1, type: 'client' });
 
         loop.events.on('render', () => {
-            // Update uniforms
             geom.updateUniforms({
                 time: (performance.now() / 1000) % 1000,
                 resolution: [canvas.width, canvas.height],
@@ -126,7 +105,6 @@ export const starfield: Program = {
             const view = context.getCurrentTexture().createView();
             geom.render(view, [0, 0, 0.02, 1]);
 
-            // FPS counter
             frameCount++;
             const now = performance.now();
             if (now - lastFpsTime >= 1000) {
@@ -139,7 +117,6 @@ export const starfield: Program = {
 
         loop.start();
 
-        // Resize handler — reconfigure WebGPU surface
         const context = canvas.getContext('webgpu')!;
         const resizeObserver = new ResizeObserver(() => {
             canvas.width = window.innerWidth * devicePixelRatio;
