@@ -40,6 +40,9 @@ export type { ParticleEmitterConfig, Range } from './particle/emitter';
 export { AnimationController } from './2d/animation';
 export type { AnimationClip, AnimationState, AnimationClipConfig } from './2d/animation';
 
+// Shader utilities
+export { rotate2d, worldToClip2d, worldToClip3d, remap, scaleRotate2d, inverseLerp } from './shaders/utils';
+
 // Core
 export * from './core/constants';
 export { DynamicSprite, StaticSprite, SpriteUniforms, DynamicInstance3D, StaticInstance3D, DynamicMesh, StaticMesh, MeshUniforms } from './core/types';
