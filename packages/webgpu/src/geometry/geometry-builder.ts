@@ -287,7 +287,19 @@ export class CustomGeometry {
     }
 
     updateUniforms(values: Record<string, number | number[]>): void {
-        Object.assign(this.uniformValues, values);
+        for (const [key, val] of Object.entries(values)) {
+            if (typeof val === 'number') {
+                this.uniformValues[key] = val;
+            } else if (Array.isArray(val)) {
+                // Convert plain arrays to TypeGPU vector types for .write() compatibility
+                if (val.length === 2) this.uniformValues[key] = d.vec2f(val[0], val[1]);
+                else if (val.length === 3) this.uniformValues[key] = d.vec3f(val[0], val[1], val[2]);
+                else if (val.length === 4) this.uniformValues[key] = d.vec4f(val[0], val[1], val[2], val[3]);
+                else this.uniformValues[key] = val;
+            } else {
+                this.uniformValues[key] = val;
+            }
+        }
         this._uniformDirty = true;
     }
 

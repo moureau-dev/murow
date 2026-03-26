@@ -65,9 +65,12 @@ import { GeometryBuilder, type GeometryOptions } from '../geometry/geometry-buil
 
 export class WebGPU2DRenderer extends Base2DRenderer {
     private root!: TgpuRoot;
-    private device!: GPUDevice;
+    private _device!: GPUDevice;
     private context!: GPUCanvasContext;
-    private format!: GPUTextureFormat;
+    private _format!: GPUTextureFormat;
+
+    get device(): GPUDevice { return this._device; }
+    get format(): GPUTextureFormat { return this._format; }
 
     private spriteLayout!: SpriteDataLayout;
     private textureLayout!: SpriteTextureLayout;
@@ -117,13 +120,13 @@ export class WebGPU2DRenderer extends Base2DRenderer {
 
     async init(): Promise<void> {
         this.root = await tgpu.init();
-        this.device = this.root.device;
+        this._device = this.root.device;
 
         this.context = this.canvas.getContext('webgpu')!;
-        this.format = navigator.gpu.getPreferredCanvasFormat();
+        this._format = navigator.gpu.getPreferredCanvasFormat();
         this.context.configure({
-            device: this.device,
-            format: this.format,
+            device: this._device,
+            format: this._format,
             alphaMode: 'premultiplied',
         });
 
@@ -144,7 +147,7 @@ export class WebGPU2DRenderer extends Base2DRenderer {
             vertex,
             fragment,
             targets: {
-                format: this.format,
+                format: this._format,
                 blend: {
                     color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
                     alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -206,9 +209,9 @@ export class WebGPU2DRenderer extends Base2DRenderer {
 
     async loadSpritesheet(source: SpritesheetSource): Promise<SpritesheetHandle> {
         const bitmap = await loadImage(source.image);
-        const { texture, view } = createTextureFromBitmap(this.device, bitmap);
+        const { texture, view } = createTextureFromBitmap(this._device, bitmap);
 
-        const sampler = this.device.createSampler({
+        const sampler = this._device.createSampler({
             magFilter: 'nearest',
             minFilter: 'nearest',
         });
@@ -228,7 +231,7 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         const sheet = new Spritesheet(id, texture, view, sampler, uvs, bitmap.width, bitmap.height);
         this.sheets.set(id, sheet);
 
-        const bindGroup = this.device.createBindGroup({
+        const bindGroup = this._device.createBindGroup({
             layout: this.rawTextureLayout,
             entries: [
                 { binding: 0, resource: view },
@@ -313,7 +316,7 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     }
 
     createGeometry(name: string, options: GeometryOptions): GeometryBuilder {
-        return new GeometryBuilder(name, options, this.root, this.format);
+        return new GeometryBuilder(name, options, this.root, this._format);
     }
 
     render(alpha: number): void {
@@ -322,14 +325,14 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         this.camera.interpolate(alpha);
 
         // Upload dynamic data (every frame, zero-GC)
-        this.device.queue.writeBuffer(
+        this._device.queue.writeBuffer(
             this.rawDynamicBuffer, 0,
             this.dynamicData.buffer, this.dynamicData.byteOffset, this.dynamicData.byteLength,
         );
 
         // Upload static data (only when dirty)
         if (this.staticDirty) {
-            this.device.queue.writeBuffer(
+            this._device.queue.writeBuffer(
                 this.rawStaticBuffer, 0,
                 this.staticData.buffer, this.staticData.byteOffset, this.staticData.byteLength,
             );
@@ -342,14 +345,14 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         this.uniformData[12] = alpha;
         this.uniformData[14] = this._width;
         this.uniformData[15] = this._height;
-        this.device.queue.writeBuffer(
+        this._device.queue.writeBuffer(
             this.rawUniformBuffer, 0,
             this.uniformData.buffer, this.uniformData.byteOffset, 64,
         );
 
         // Render pass
         const textureView = this.context.getCurrentTexture().createView();
-        const encoder = this.device.createCommandEncoder();
+        const encoder = this._device.createCommandEncoder();
         const pass = encoder.beginRenderPass({
             colorAttachments: [{
                 view: textureView,
@@ -371,7 +374,7 @@ export class WebGPU2DRenderer extends Base2DRenderer {
 
         // Upload slot index buffer
         if (indexOffset > 0) {
-            this.device.queue.writeBuffer(
+            this._device.queue.writeBuffer(
                 this.rawSlotIndexBuffer, 0,
                 this.slotIndexData.buffer, this.slotIndexData.byteOffset,
                 indexOffset * 4,
@@ -393,7 +396,7 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         });
 
         pass.end();
-        this.device.queue.submit([encoder.finish()]);
+        this._device.queue.submit([encoder.finish()]);
     }
 
     destroy(): void {
