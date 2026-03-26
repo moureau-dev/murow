@@ -5,6 +5,7 @@ import type { ClearColor, RendererOptions } from "./types";
 
 export abstract class BaseRenderer<TOptions extends RendererOptions = RendererOptions> {
     readonly canvas: HTMLCanvasElement;
+    protected readonly options: TOptions;
     protected _clearColor: ClearColor;
     protected _width: number = 0;
     protected _height: number = 0;
@@ -12,6 +13,7 @@ export abstract class BaseRenderer<TOptions extends RendererOptions = RendererOp
 
     constructor(canvas: HTMLCanvasElement, options: TOptions) {
         this.canvas = canvas;
+        this.options = options;
         this._clearColor = options.clearColor ?? [0, 0, 0, 1];
     }
 
