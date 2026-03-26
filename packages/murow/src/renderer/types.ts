@@ -8,6 +8,8 @@ export type ClearColor = [r: number, g: number, b: number, a: number];
 
 export interface RendererOptions {
     clearColor?: ClearColor;
+    /** Automatically resize the canvas and reconfigure the GPU context on window resize. */
+    autoResize?: boolean;
 }
 
 export interface Renderer2DOptions extends RendererOptions {
