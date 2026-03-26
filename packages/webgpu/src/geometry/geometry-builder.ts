@@ -31,6 +31,7 @@ import { resolveBuiltInGeometry } from './built-in';
 import { FreeList } from 'murow';
 import * as std from 'typegpu/std';
 import { attachShaderMetadata } from '../shaders/runtime-transpile';
+import type { ComputeKernel } from '../compute/compute-builder';
 
 // =============================================================================
 // Type utilities
@@ -146,8 +147,12 @@ export function createGeometryDataLayout<
     uniformDefs: U,
     maxInstances: number,
 ): GeometryDataLayout<D, S, U> {
-    const DynStruct = buildStructFromLayout(instanceLayout.dynamic);
-    const StatStruct = buildStructFromLayout(instanceLayout.static);
+    const DynStruct = Object.keys(instanceLayout.dynamic).length > 0
+        ? buildStructFromLayout(instanceLayout.dynamic)
+        : d.struct({ _pad: d.f32 });
+    const StatStruct = Object.keys(instanceLayout.static).length > 0
+        ? buildStructFromLayout(instanceLayout.static)
+        : d.struct({ _pad: d.f32 });
 
     const parsedUniformDefs: Record<string, AnyData> = {};
     for (const [key, val] of Object.entries(uniformDefs)) {
@@ -198,6 +203,8 @@ export class CustomGeometry<
     private _dynamicDirty = true;
     private _staticDirty = true;
     private _uniformDirty = true;
+    private _isComputeSourced = false;
+    private _drawCount = 0;
 
     private activeSlots: Uint32Array;
     private activeCount = 0;
@@ -218,6 +225,7 @@ export class CustomGeometry<
         dynamicBuffer: TgpuBuffer<unknown>, staticBuffer: TgpuBuffer<unknown>,
         uniformBuffer: TgpuBuffer<unknown>,
         pipeline: TgpuRenderPipeline, dataBindGroup: TgpuBindGroup,
+        isComputeSourced = false,
     ) {
         this.name = name;
         this.root = root;
@@ -247,6 +255,16 @@ export class CustomGeometry<
         this.activeSlots = new Uint32Array(maxInstances);
         this.slotToActive = new Int32Array(maxInstances).fill(-1);
         this._ctx = new InstanceContext<TDynamic, TStatic>();
+        this._isComputeSourced = isComputeSourced;
+        if (isComputeSourced) this._drawCount = maxInstances;
+    }
+
+    /**
+     * Set the number of instances to draw. Only needed for compute-sourced geometries
+     * where the instance count may change dynamically.
+     */
+    setDrawCount(count: number): void {
+        this._drawCount = count;
     }
 
     addInstance(data: FieldValues<TDynamic> & FieldValues<TStatic>): number {
@@ -359,10 +377,11 @@ export class CustomGeometry<
 
     render(canvasView: GPUTextureView, clearColor?: [number, number, number, number]): void {
         const device = this.root.device;
-        const count = this.freeList.getAllocatedCount();
+        const count = this._isComputeSourced ? this._drawCount : this.freeList.getAllocatedCount();
         if (count === 0) return;
 
-        if (this._dynamicDirty) {
+        // Skip dynamic buffer upload for compute-sourced geometries — compute owns the buffer
+        if (!this._isComputeSourced && this._dynamicDirty) {
             device.queue.writeBuffer(this.root.unwrap(this.dynamicBuffer) as GPUBuffer, 0,
                 this.dynamicData.buffer, this.dynamicData.byteOffset, this.dynamicData.byteLength);
             this._dynamicDirty = false;
@@ -663,6 +682,7 @@ export class GeometryBuilder<
     private _vertexFactory: ((ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => Function) | null = null;
     private _fragmentFactory: Function | null = null;
     private _declarativeShaders: DeclarativeShaders<TDynamic, TStatic, TUniforms> | null = null;
+    private _computeSource: { kernel: ComputeKernel<Record<string, unknown>>; bufferName: string } | null = null;
     private _dataLayout: GeometryDataLayout<TDynamic, TStatic, TUniforms> | null = null;
 
     constructor(name: string, options: GeometryOptions, root: TgpuRoot, format: GPUTextureFormat) {
@@ -691,6 +711,28 @@ export class GeometryBuilder<
         const next = this as unknown as GeometryBuilder<TDynamic, TStatic, U>;
         next._uniformDefs = defs;
         return next;
+    }
+
+    /**
+     * Bind a compute kernel's buffer as this geometry's dynamic instance data.
+     * Zero-copy: the render shader reads directly from the compute buffer.
+     *
+     * ```ts
+     * const compute = renderer.createCompute('physics', { workgroupSize: 256 })
+     *     .buffers({ particles: { storage: d.arrayOf(ParticleStruct, MAX), readwrite: true } })
+     *     .shader(...)
+     *     .build();
+     *
+     * const render = renderer.createGeometry('vis', { maxInstances: MAX, geometry: 'quad' })
+     *     .fromCompute(compute, 'particles')
+     *     .uniforms({ resolution: d.vec2f })
+     *     .shaders({ ... })
+     *     .build();
+     * ```
+     */
+    fromCompute(kernel: ComputeKernel<Record<string, unknown>>, bufferName: string): this {
+        this._computeSource = { kernel, bufferName };
+        return this;
     }
 
     /**
@@ -891,8 +933,12 @@ export class GeometryBuilder<
         }
 
         // TypeGPU structs
-        const DynStruct = buildStructFromLayout(this._layoutConfig.dynamic);
-        const StatStruct = buildStructFromLayout(this._layoutConfig.static);
+        const DynStruct = Object.keys(this._layoutConfig.dynamic).length > 0
+            ? buildStructFromLayout(this._layoutConfig.dynamic)
+            : d.struct({ _pad: d.f32 });
+        const StatStruct = Object.keys(this._layoutConfig.static).length > 0
+            ? buildStructFromLayout(this._layoutConfig.static)
+            : d.struct({ _pad: d.f32 });
         const parsedUniformDefs: Record<string, AnyData> = {};
         for (const [key, val] of Object.entries(this._uniformDefs)) {
             parsedUniformDefs[key] = (val === d.f32 || val === d.vec2f || val === d.vec3f || val === d.vec4f) ? val : d.f32;
@@ -901,8 +947,10 @@ export class GeometryBuilder<
             ? buildStructFromLayout(parsedUniformDefs)
             : d.struct({ _pad: d.f32 });
 
-        // Buffers
-        const dynamicBuffer = root.createBuffer(d.arrayOf(DynStruct, maxInstances)).$usage('storage');
+        // Buffers — if fromCompute() was called, reuse the compute buffer as dynamic data
+        const dynamicBuffer = this._computeSource
+            ? this._computeSource.kernel.getBuffer(this._computeSource.bufferName)
+            : root.createBuffer(d.arrayOf(DynStruct, maxInstances)).$usage('storage');
         const staticBuffer = root.createBuffer(d.arrayOf(StatStruct, maxInstances)).$usage('storage');
         const uniformBuffer = root.createBuffer(UniformStruct).$usage('uniform');
 
@@ -935,6 +983,7 @@ export class GeometryBuilder<
             dynamicBuffer as TgpuBuffer<unknown>, staticBuffer as TgpuBuffer<unknown>,
             uniformBuffer as TgpuBuffer<unknown>,
             pipeline, dataBindGroup,
+            !!this._computeSource,
         );
     }
 }

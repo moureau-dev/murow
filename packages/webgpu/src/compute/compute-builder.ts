@@ -69,15 +69,20 @@ export interface ComputeInput {
 }
 
 /**
- * Context passed to the compute shader function.
- * Buffer names and their data types are inferred from `.buffers()`.
+ * Buffer accessors passed to the compute shader as the first parameter.
+ * Buffer names and data types are inferred from `.buffers()`.
  */
-export type ComputeShaderContext<TBuffers extends Record<string, ComputeBufferDef>> = {
+export type ComputeBufferAccessors<TBuffers extends Record<string, ComputeBufferDef>> = {
     readonly [K in keyof TBuffers]: BufferDataType<TBuffers[K]>;
-} & ComputeInput;
+};
 
+/**
+ * Compute shader function signature.
+ * First param: buffer accessors (typed from `.buffers()`).
+ * Second param: compute builtins (globalId, localId, etc.).
+ */
 type ComputeShaderFn<TBuffers extends Record<string, ComputeBufferDef>> =
-    (ctx: ComputeShaderContext<TBuffers>) => void;
+    (buffers: ComputeBufferAccessors<TBuffers>, input: ComputeInput) => void;
 
 // =============================================================================
 // ComputeKernel (built result)
@@ -144,11 +149,22 @@ export class ComputeKernel<TBuffers extends Record<string, ComputeBufferDef> = R
 
     /**
      * Read data back from a storage buffer.
+     * Warning: this forces a GPU → CPU sync stall. Avoid in hot paths.
      */
     async read(bufferName: keyof TBuffers & string): Promise<unknown> {
         const buffer = this.buffers.get(bufferName);
         if (!buffer) throw new Error(`Buffer "${bufferName}" not found in compute kernel "${this.name}"`);
         return buffer.read();
+    }
+
+    /**
+     * Get the raw TypeGPU buffer for a named buffer.
+     * Use this to share buffers between compute and render pipelines (zero-copy).
+     */
+    getBuffer(bufferName: keyof TBuffers & string): TgpuBuffer<unknown> {
+        const buffer = this.buffers.get(bufferName);
+        if (!buffer) throw new Error(`Buffer "${bufferName}" not found in compute kernel "${this.name}"`);
+        return buffer;
     }
 
     destroy(): void {
@@ -247,15 +263,15 @@ export class ComputeBuilder<
         const bindGroup = (root as unknown as { createBindGroup(l: TgpuBindGroupLayout, e: Record<string, unknown>): TgpuBindGroup })
             .createBindGroup(layout, bindGroupEntries);
 
-        // Build compute function with runtime transpilation
-        // The shader fn signature is (ctx) => void, where ctx has buffer names + builtins.
-        // We need to strip that single param and make the buffer names + builtins externals.
+        // Build compute function with runtime transpilation.
+        // The user writes (buffers, input) => { buffers.particles[...]; input.globalId.x; }
+        // We strip the first param (buffers) — buffer names become externals.
+        // The second param (input) maps to compute builtins.
         attachShaderMetadata(this._shaderFn, () => {
             const externals: Record<string, unknown> = {
                 d,
                 std,
             };
-            // Buffer accessors from the layout
             const bound = layout.$;
             for (const name of Object.keys(bufferDefs)) {
                 externals[name] = (bound as Record<string, unknown>)[name];
@@ -263,7 +279,6 @@ export class ComputeBuilder<
             return externals;
         }, true);
 
-        // Build compute input builtins
         const computeIn: Record<string, unknown> = {
             globalId: d.builtin.globalInvocationId,
             localId: d.builtin.localInvocationId,

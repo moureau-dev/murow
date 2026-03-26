@@ -1,4 +1,5 @@
 import { starfield } from './programs/starfield';
+import { gpuParticles } from './programs/gpu-particles';
 
 export interface Program {
     name: string;
@@ -7,6 +8,7 @@ export interface Program {
 
 const programs: Program[] = [
     starfield,
+    gpuParticles,
 ];
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
