@@ -1,5 +1,5 @@
 {
-  "name": "ecs-with-pixi-example",
+  "name": "bouncing-3d-webgpu",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -8,10 +8,13 @@
     "build": "vite build"
   },
   "dependencies": {
-    "pixi.js": "^8.0.0",
-    "murow": "workspace:*"
+    "murow": "workspace:*",
+    "@murow/webgpu": "workspace:*",
+    "primitive-geometry": "^2.11.0"
   },
   "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "unplugin-typegpu": "^0.10.2",
     "vite": "^5.0.0",
     "typescript": "^5.0.0"
   }

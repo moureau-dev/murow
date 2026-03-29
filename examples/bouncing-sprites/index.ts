@@ -5,7 +5,7 @@ import {
   BinaryCodec,
   lerp,
   GameLoop,
-} from '../../src';
+} from 'murow';
 
 
 namespace Components {
@@ -72,7 +72,7 @@ class PixiRenderer {
   /**
    * Store the previous state of all entities in the world.
    * For interpolation during rendering.
-   * 
+   *
    * @param world ECS world to store previous state from
    */
   storePreviousState(world: World) {
@@ -89,7 +89,7 @@ class PixiRenderer {
    * Render the ECS world using PixiJS.
    * This runs every frame and interpolates entity positions
    * with the given alpha factor from the fixed ticker.
-   * 
+   *
    * @param world ECS world to render
    * @param alpha Interpolation factor between ticks
    */
@@ -124,22 +124,23 @@ class PixiRenderer {
 
   /**
    * Clean up sprites for despawned entities.
-   * 
+   *
    * @param world ECS world to check for despawned entities
    */
   cleanup(world: World) {
-    for (const [eid, sprite] of this.sprites) {
-      if (!world.isAlive(eid)) {
-        this.app.stage.removeChild(sprite);
-        sprite.destroy();
-        this.sprites.delete(eid);
-        this.previousPositions.delete(eid);
-      }
+    const despawned = world.getDespawned();
+    for (const eid of despawned) {
+      const sprite = this.sprites.get(eid)
+      this.app.stage.removeChild(sprite);
+      sprite.destroy();
+      this.sprites.delete(eid);
+      this.previousPositions.delete(eid);
     }
+    world.flushDespawned();
   }
 }
 
-const AMOUNT_OF_ENTITIES = 1_000;
+const AMOUNT_OF_ENTITIES = 60_000;
 
 /**
  * Game class with ECS simulation calling pixi rendering.
@@ -150,7 +151,7 @@ class Game extends GameLoop {
 
   constructor() {
     super({
-      tickRate: 15,
+      tickRate: 8,
       type: 'client',
       onRender: (_, alpha) => {
         this.renderer.render(this.world, alpha);
@@ -182,7 +183,7 @@ class Game extends GameLoop {
 
     // Setup ECS world
     this.world = new World({
-      maxEntities: AMOUNT_OF_ENTITIES * 100, // Extra buffer for entities that will spawn/despawn
+      maxEntities: AMOUNT_OF_ENTITIES * 2, // Extra buffer for entities that will spawn/despawn
       components: Object.values(Components),
     });
 
@@ -245,7 +246,7 @@ class Game extends GameLoop {
       .query(Components.Health)
       .fields([{ health: ['value'] }])
       .run((entity, deltaTime) => {
-        entity.health_value -= 10 * deltaTime;
+        entity.health_value -= 5 * deltaTime;
       });
 
     // Despawn system

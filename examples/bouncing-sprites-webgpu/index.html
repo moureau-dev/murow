@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ECS + WebGPU Renderer — Bouncing Sprites</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #0f0f1e;
+      font-family: 'Courier New', monospace;
+      color: #fff;
+    }
+
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 10px 15px;
+      border-radius: 5px;
+      font-size: 14px;
+      z-index: 1000;
+    }
+
+    #info h3 {
+      margin: 0 0 10px 0;
+      color: #00ff00;
+    }
+
+    #info p {
+      margin: 5px 0;
+      line-height: 1.5;
+    }
+
+    canvas {
+      display: block;
+      margin: 50px auto;
+      border: 2px solid #00ff00;
+      box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <div id="info">
+    <h3>ECS + @murow/webgpu</h3>
+    <p data-id="physics"><strong>Physics:</strong> %ticks% ticks/sec (deterministic)</p>
+    <p id="fps">FPS: </p>
+    <p>Press and hold <strong>Space</strong> to spawn more entities</p>
+  </div>
+  <canvas id="canvas" width="1200" height="800"></canvas>
+  <script type="module" src="./index.ts"></script>
+</body>
+</html>
