@@ -106,11 +106,49 @@ export class GameLoop<T extends GameLoopType = DriverType> {
                 },
             );
         }
+
+        if (this._isClient) {
+            // calculate FPS every (TICK RATE / 2) ticks - twice a second
+            const events = this.events as EventSystem<EventsFor<'client'>>;
+            const TICK_LOOP = Math.round(this.options.tickRate / 2);
+            const fpsArray = new Array<number>(TICK_LOOP).fill(0);
+
+            let frameCount = 0;
+            let lastStatsTime = performance.now();
+            let currTick = 0;
+            let samples = 0;
+
+            events.on('tick', () => {
+                currTick = (currTick + 1) % TICK_LOOP;
+
+                const now = performance.now();
+                const dt = now - lastStatsTime;
+
+                if (dt > 0) {
+                    const fps = frameCount * 1000 / dt;
+                    fpsArray[currTick] = fps;
+
+                    if (samples < TICK_LOOP) samples++;
+                }
+
+                frameCount = 0;
+                lastStatsTime = now;
+
+                // average only valid samples
+                let sum = 0;
+                for (let i = 0; i < samples; i++) sum += fpsArray[i];
+
+                this.fps = Math.round(sum / samples);
+            });
+
+            events.on('render', () => {
+                frameCount++;
+            });
+        }
     }
 
     step(deltaTime: number) {
         this.ticker.tick(deltaTime);
-        this.fps = 1 / deltaTime;
 
         if (this._isClient) {
             const peek = this._input.peek();
