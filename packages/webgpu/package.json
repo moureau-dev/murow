@@ -25,7 +25,6 @@
     "build:cjs": "bun run build:js:type --outdir=dist/cjs --format=cjs",
     "build:js": "bun run build:esm && bun run build:cjs",
     "build:types": "tsc --emitDeclarationOnly --project tsconfig.json",
-    "prepublishOnly": "npm run build",
     "test": "bun test ./src"
   },
   "keywords": [
