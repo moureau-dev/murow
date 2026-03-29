@@ -1243,8 +1243,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     /**
      * Update skeletal animations for all skinned instances. Call once per tick.
      */
-    // Pre-allocated dedup tracker for updateAnimations (zero-GC)
-    private updatedBoneOffsets = new Uint8Array(DEFAULT_MAX_SKINNED_INSTANCES);
+    // Pre-allocated dedup tracker for updateAnimations — indexed by bone offset, not slot (zero-GC)
+    private updatedBoneOffsets = new Uint8Array(DEFAULT_MAX_TOTAL_BONES);
 
     private updateAnimations(deltaTime: number): void {
         // Track which bone offsets have been updated to avoid duplicate updates
@@ -1256,22 +1256,14 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             if (!animState || !animState.playing) continue;
 
             const boneOffset = this.skinnedInstanceBoneOffsets[slot];
-            if (this.updatedBoneOffsets[slot]) continue;
-
-            // Mark all slots sharing this bone offset as updated
-            for (let s2 = slot; s2 < this.maxSkinnedInstances; s2++) {
-                if (this.skinnedInstanceBoneOffsets[s2] === boneOffset) {
-                    this.updatedBoneOffsets[s2] = 1;
-                }
-            }
+            if (this.updatedBoneOffsets[boneOffset]) continue;
+            this.updatedBoneOffsets[boneOffset] = 1;
 
             const modelId = this.skinnedInstanceModelIds[slot];
             const model = this.models[modelId];
             if (!model || model.skinIndex === -1) continue;
 
             const skinModel = this.skinnedModels[model.skinIndex];
-
-            // Write directly into boneMatrixData at the correct offset (zero-alloc)
             skinModel.animation.update(animState, deltaTime, this.boneMatrixData, boneOffset * 16);
         }
         this.boneMatrixDirty = true;
