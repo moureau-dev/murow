@@ -28,7 +28,7 @@ describe('getFieldFloats', () => {
     });
 
     test('unknown primitive falls back to 1', () => {
-        expect(getFieldFloats('unknown')).toBe(1);
+        expect(getFieldFloats('unknown' as any)).toBe(1);
     });
 
     test('null falls back to 1', () => {
@@ -36,7 +36,7 @@ describe('getFieldFloats', () => {
     });
 
     test('number falls back to 1', () => {
-        expect(getFieldFloats(42)).toBe(1);
+        expect(getFieldFloats(42 as any)).toBe(1);
     });
 
     test('struct type hits fallback path (sizeOf or 1)', () => {
@@ -104,7 +104,7 @@ describe('InstanceAccessor', () => {
 
         test('throws for unknown field', () => {
             const { accessor } = createAccessor();
-            expect(() => accessor.get('nonexistent')).toThrow('Field "nonexistent" not found');
+            expect(() => accessor.get('nonexistent' as any)).toThrow('Field "nonexistent" not found');
         });
     });
 
@@ -140,7 +140,7 @@ describe('InstanceAccessor', () => {
 
         test('throws for unknown field', () => {
             const { accessor } = createAccessor();
-            expect(() => accessor.set('nonexistent', 1)).toThrow('Field "nonexistent" not found');
+            expect(() => accessor.set('nonexistent' as any, 1)).toThrow('Field "nonexistent" not found');
         });
     });
 
