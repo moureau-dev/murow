@@ -3,6 +3,9 @@
     "version": "0.0.1",
     "description": "Repository for all murow's packages.",
     "scripts": {
+        "test:murow": "cd packages/murow && npm run test",
+        "test:webgpu": "cd packages/webgpu && npm run test",
+        "test": "concurrently --kill-others-on-fail \"npm run test:murow\" \"npm run test:webgpu\"",
         "build:murow": "cd packages/murow && npm run build",
         "build:webgpu": "cd packages/webgpu && npm run build",
         "build": "concurrently \"npm run build:murow\" \"npm run build:webgpu\""
