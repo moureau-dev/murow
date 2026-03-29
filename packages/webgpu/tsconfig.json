@@ -17,8 +17,8 @@
     "downlevelIteration": true,
     "types": ["bun-types", "@webgpu/types", "node"],
     "paths": {
-      "murow": ["../murow/dist/types/index.d.ts"],
-      "murow/*": ["../murow/dist/types/*"]
+      "murow": ["../../murow/src/", "../../murow/dist/types/"],
+      "murow/*": ["../../murow/src/*", "../../murow/dist/types/*"],
     }
   },
   "include": ["src/**/*"],
