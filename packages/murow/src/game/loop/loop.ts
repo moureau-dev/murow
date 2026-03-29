@@ -39,7 +39,7 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
     private _skipData = { ticks: 0 };
     private _renderData = { deltaTime: 0, alpha: 0, input: null as InputSnapshot };
 
-    constructor(public options: GameLoopOptions & { type: T }) {
+    constructor(public options: GameLoopOptions<T>) {
         const CLIENT_TYPES = new Set<DriverType | Manual>([
             "client",
             "manual-client",
@@ -192,9 +192,9 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
     }
 }
 
-interface GameLoopOptions {
+interface GameLoopOptions<T extends DriverType | Manual> {
     tickRate: number;
-    type: DriverType | Manual;
+    type: T;
     onTick?: (
         dt: number,
         tick: number,
