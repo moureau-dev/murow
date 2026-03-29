@@ -14,10 +14,7 @@
       "types": "./dist/types/index.d.ts"
     }
   },
-  "files": [
-    "dist",
-    "src"
-  ],
+  "files": ["dist"],
   "scripts": {
     "build": "npm run build:types && npm run build:js",
     "build:js:type": "esbuild src/index.ts --bundle --platform=browser --packages=external --minify",
