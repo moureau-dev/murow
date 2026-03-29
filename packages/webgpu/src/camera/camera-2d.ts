@@ -3,7 +3,8 @@
  * Produces a 3x3 column-major matrix padded to 12 floats (std140).
  * Supports prev/curr state for frame interpolation.
  */
-import { lerp, type Camera2DState } from "murow";
+import { lerp } from "murow/core/lerp";
+import type { Camera2DState } from 'murow/renderer/types';
 
 export class Camera2D implements Camera2DState {
     x: number = 0;

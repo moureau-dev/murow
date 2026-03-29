@@ -3,7 +3,8 @@
  * Produces view and projection matrices as Float32Array(16) each.
  * Supports prev/curr state for frame interpolation.
  */
-import { lerp, type Camera3DState } from "murow/core";
+ import { lerp } from "murow/core/lerp";
+ import type { Camera3DState } from 'murow/renderer/types';
 
 export class Camera3D implements Camera3DState {
     position: [number, number, number] = [0, 5, -10];

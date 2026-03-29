@@ -30,8 +30,9 @@ export const rotate2d = tgpu.fn([d.vec2f, d.f32], d.vec2f)(
 export const worldToClip2d = tgpu.fn([d.vec2f, d.mat3x3f], d.vec4f)(
     function worldToClip2d(worldPos: d.v2f, cameraMatrix: d.m3x3f) {
         'use gpu';
+        // @ts-ignore — TGSL: matrix * vector is valid in WGSL, transpiled by TypeGPU
         const clip = cameraMatrix * d.vec3f(worldPos.x, worldPos.y, 1.0);
-        return d.vec4f(clip.x, clip.y, 0.0, 1.0);
+        return d.vec4f((clip as any).x, (clip as any).y, 0.0, 1.0);
     },
 );
 
@@ -41,7 +42,8 @@ export const worldToClip2d = tgpu.fn([d.vec2f, d.mat3x3f], d.vec4f)(
 export const worldToClip3d = tgpu.fn([d.vec3f, d.mat4x4f], d.vec4f)(
     function worldToClip3d(worldPos: d.v3f, vpMatrix: d.m4x4f) {
         'use gpu';
-        return vpMatrix * d.vec4f(worldPos.x, worldPos.y, worldPos.z, 1.0);
+        // @ts-ignore — TGSL: matrix * vector is valid in WGSL, transpiled by TypeGPU
+        return vpMatrix * d.vec4f(worldPos.x, worldPos.y, worldPos.z, 1.0) as unknown as d.v4f;
     },
 );
 

@@ -2,23 +2,23 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "ESNext",
-    "lib": ["ES2020", "DOM"],
     "moduleResolution": "bundler",
+    "lib": ["DOM", "ES2024"],
     "declaration": true,
-    "outDir": "./dist",
-    "composite": false,
+    "outDir": "./dist/types",
+    "rootDir": "./src",
     "strict": false,
     "strictNullChecks": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "skipDefaultLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "downlevelIteration": true,
-    "types": ["bun-types", "@webgpu/types"],
+    "types": ["bun-types", "@webgpu/types", "node"],
     "paths": {
-      "murow": ["../murow/src/core/index.ts"],
-      "murow/*": ["../murow/src/*"]
+      "murow": ["../murow/dist/types/index.d.ts"],
+      "murow/*": ["../murow/dist/types/*"]
     }
   },
   "include": ["src/**/*"],

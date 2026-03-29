@@ -5,7 +5,7 @@
  * Texture creation uses the raw GPUDevice (accessed via root.device)
  * since TypeGPU's texture API is unstable and we need copyExternalImageToTexture.
  */
-import type { SpritesheetHandle, SpriteUV } from 'murow';
+import type { SpritesheetHandle, SpriteUV } from 'murow/renderer/types';
 
 export interface GridSpritesheetConfig {
     image: string;

@@ -42,7 +42,7 @@ export type { AnimationClip, AnimationState, AnimationClipConfig } from './2d/an
 
 // Compute
 export { ComputeBuilder, ComputeKernel } from './compute/compute-builder';
-export type { ComputeOptions, ComputeBufferDef, ComputeInput, ComputeShaderContext } from './compute/compute-builder';
+export type { ComputeOptions, ComputeBufferDef, ComputeInput } from './compute/compute-builder';
 
 // Shader utilities
 export { rotate2d, worldToClip2d, worldToClip3d, remap, scaleRotate2d, inverseLerp } from './shaders/utils';

@@ -10,9 +10,11 @@
 import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer } from 'typegpu';
 import * as d from 'typegpu/data';
-import { Base3DRenderer, FreeList, SparseBatcher } from 'murow';
+import { Base3DRenderer } from 'murow/renderer/base-3d-renderer';
+import type { Renderer3DOptions } from 'murow/renderer/types';
+import { FreeList } from 'murow/core/free-list';
+import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder';
-import type { Camera3DState, Renderer3DOptions } from 'murow';
 import {
     DYNAMIC_MESH_FLOATS,
     STATIC_MESH_FLOATS,

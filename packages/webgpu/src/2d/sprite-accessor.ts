@@ -26,7 +26,7 @@ import {
     STATIC_OFFSET_UV_MIN_X,
     STATIC_OFFSET_UV_MIN_Y,
 } from "../core/constants";
-import type { SpriteHandle } from "murow";
+import type { SpriteHandle } from "murow/renderer/types";
 
 export class SpriteAccessor implements SpriteHandle {
     private dynamicData: Float32Array;

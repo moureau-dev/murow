@@ -22,8 +22,8 @@
  * trail.update(deltaTime);
  * ```
  */
-import { SimpleRNG } from 'murow';
-import type { SpriteHandle, SpritesheetHandle } from 'murow';
+import { SimpleRNG } from 'murow/core/simple-rng';
+import type { SpriteHandle, SpritesheetHandle } from 'murow/renderer/types';
 import type { WebGPU2DRenderer } from '../2d/renderer';
 
 export interface Range {

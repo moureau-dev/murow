@@ -2,17 +2,16 @@
   "name": "@murow/webgpu",
   "version": "0.0.1",
   "description": "WebGPU rendering backend for murow — 2D and 3D instanced renderers",
-  "main": "dist/index.js",
-  "module": "dist/index.esm.js",
-  "types": "dist/index.d.ts",
+  "type": "module",
+  "types": "dist/types/index.d.ts",
   "exports": {
     ".": {
       "import": {
         "source": "./src/index.ts",
-        "default": "./dist/index.esm.js"
+        "default": "./dist/esm/index.js"
       },
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/types/index.d.ts"
     }
   },
   "files": [
@@ -21,9 +20,11 @@
   ],
   "scripts": {
     "build": "npm run build:types && npm run build:js",
-    "build:js": "esbuild src/index.ts --bundle --outfile=dist/index.js --format=cjs --platform=neutral --minify --external:murow --external:typegpu && esbuild src/index.ts --bundle --outfile=dist/index.esm.js --format=esm --platform=neutral --minify --external:murow --external:typegpu",
-    "build:types": "tsc --project tsconfig.json",
-    "dev": "npm run build:js -- --watch",
+    "build:js:type": "esbuild src/index.ts --bundle --platform=browser --packages=external --minify",
+    "build:esm": "bun run build:js:type --outdir=dist/esm --format=esm",
+    "build:cjs": "bun run build:js:type --outdir=dist/cjs --format=cjs",
+    "build:js": "bun run build:esm && bun run build:cjs",
+    "build:types": "tsc --emitDeclarationOnly --project tsconfig.json",
     "prepublishOnly": "npm run build",
     "test": "bun test ./src"
   },
@@ -47,11 +48,14 @@
     "murow": "workspace:*"
   },
   "dependencies": {
+    "acorn": "^8.16.0",
+    "tinyest": "^0.3.1",
+    "tinyest-for-wgsl": "^0.3.2",
     "typegpu": "^0.10.2"
   },
   "devDependencies": {
     "@types/bun": "^1.1.16",
-    "@webgpu/types": "^0.1.0",
+    "@webgpu/types": "^0.1.69",
     "esbuild": "^0.19.0",
     "typescript": "^5.0.0"
   }

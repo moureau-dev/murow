@@ -9,14 +9,15 @@
 import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer } from 'typegpu';
 import * as d from 'typegpu/data'; // used for buffer type creation
-import { Base2DRenderer, FreeList } from 'murow';
+import { FreeList } from 'murow/core/free-list';
+import { Base2DRenderer} from 'murow/renderer/base-2d-renderer';
 import type {
     Renderer2DOptions,
     SpriteHandle,
     SpriteOptions,
     SpritesheetHandle,
     SpritesheetSource,
-} from 'murow';
+} from 'murow/renderer';
 import {
     DYNAMIC_FLOATS_PER_SPRITE,
     DYNAMIC_OFFSET_CURR_X,
@@ -42,7 +43,7 @@ import {
     STATIC_OFFSET_TINT_A,
 } from '../core/constants';
 import { DynamicSprite, StaticSprite, SpriteUniforms } from '../core/types';
-import { SparseBatcher } from 'murow';
+import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { SpriteAccessor } from './sprite-accessor';
 import { Camera2D } from '../camera/camera-2d';
 import {

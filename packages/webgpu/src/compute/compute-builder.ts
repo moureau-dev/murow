@@ -25,7 +25,7 @@
 import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer, TgpuBindGroupLayout, TgpuBindGroup, TgpuComputePipeline } from 'typegpu';
 import * as d from 'typegpu/data';
-import type { AnyData } from 'typegpu/data';
+import type { AnyWgslData, AnyData } from 'typegpu/data';
 import * as std from 'typegpu/std';
 import { attachShaderMetadata } from '../shaders/runtime-transpile';
 
@@ -34,7 +34,7 @@ import { attachShaderMetadata } from '../shaders/runtime-transpile';
 // =============================================================================
 
 /** Buffer definition for a compute shader. */
-export interface ComputeBufferDef<TStorage extends AnyData = AnyData, TUniform extends AnyData = AnyData> {
+export interface ComputeBufferDef<TStorage extends AnyWgslData = AnyWgslData, TUniform extends AnyData = AnyData> {
     /** Storage buffer (read-only or read-write). Provide an arrayOf(...) schema. */
     storage?: TStorage;
     /** Uniform buffer. Provide a struct schema. */
@@ -94,7 +94,7 @@ export class ComputeKernel<TBuffers extends Record<string, ComputeBufferDef> = R
     private root: TgpuRoot;
     private pipeline: TgpuComputePipeline;
     private bindGroup: TgpuBindGroup;
-    private buffers: Map<string, TgpuBuffer<unknown>>;
+    private buffers: Map<string, TgpuBuffer<AnyWgslData>>;
     private workgroupSize: [number, number, number];
 
     constructor(
@@ -102,7 +102,7 @@ export class ComputeKernel<TBuffers extends Record<string, ComputeBufferDef> = R
         root: TgpuRoot,
         pipeline: TgpuComputePipeline,
         bindGroup: TgpuBindGroup,
-        buffers: Map<string, TgpuBuffer<unknown>>,
+        buffers: Map<string, TgpuBuffer<AnyWgslData>>,
         workgroupSize: [number, number, number],
     ) {
         this.name = name;
@@ -161,7 +161,7 @@ export class ComputeKernel<TBuffers extends Record<string, ComputeBufferDef> = R
      * Get the raw TypeGPU buffer for a named buffer.
      * Use this to share buffers between compute and render pipelines (zero-copy).
      */
-    getBuffer(bufferName: keyof TBuffers & string): TgpuBuffer<unknown> {
+    getBuffer(bufferName: keyof TBuffers & string): TgpuBuffer<AnyWgslData> {
         const buffer = this.buffers.get(bufferName);
         if (!buffer) throw new Error(`Buffer "${bufferName}" not found in compute kernel "${this.name}"`);
         return buffer;
@@ -243,18 +243,18 @@ export class ComputeBuilder<
         const layout = tgpu.bindGroupLayout(layoutEntries as Parameters<typeof tgpu.bindGroupLayout>[0]);
 
         // Create buffers
-        const tgpuBuffers = new Map<string, TgpuBuffer<unknown>>();
+        const tgpuBuffers = new Map<string, TgpuBuffer<AnyWgslData>>();
         const bindGroupEntries: Record<string, unknown> = {};
 
         for (const [name, def] of Object.entries(bufferDefs)) {
             if (def.storage) {
                 const buf = root.createBuffer(def.storage as Parameters<typeof root.createBuffer>[0])
-                    .$usage('storage') as TgpuBuffer<unknown>;
+                    .$usage('storage') as TgpuBuffer<AnyWgslData>;
                 tgpuBuffers.set(name, buf);
                 bindGroupEntries[name] = buf;
             } else if (def.uniform) {
                 const buf = root.createBuffer(def.uniform as Parameters<typeof root.createBuffer>[0])
-                    .$usage('uniform') as TgpuBuffer<unknown>;
+                    .$usage('uniform') as TgpuBuffer<AnyWgslData>;
                 tgpuBuffers.set(name, buf);
                 bindGroupEntries[name] = buf;
             }
