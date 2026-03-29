@@ -1,5 +1,5 @@
 import { GameLoop } from 'murow';
-import { WebGPU2DRenderer, d, std } from '@murow/webgpu';
+import { WebGPU2DRenderer, d, std } from 'murow/webgpu';
 import type { Program } from '../index';
 
 const MAX_PARTICLES = 1_000_000;

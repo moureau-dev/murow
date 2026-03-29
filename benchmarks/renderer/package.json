@@ -8,8 +8,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "murow": "workspace:*",
-    "@murow/webgpu": "workspace:*"
+    "murow": "workspace:*"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^2.3.0",
