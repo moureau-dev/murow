@@ -14,9 +14,12 @@ export { SpriteAccessor } from './2d/sprite-accessor';
 
 // 3D Renderer
 export { WebGPU3DRenderer } from './3d/renderer';
-export type { ModelData, ModelHandle, MeshInstanceHandle, MeshInstanceOptions } from './3d/renderer';
+export type { ModelData, ModelHandle, GltfModel, InstanceHandle, MeshInstanceHandle, MeshInstanceOptions } from './3d/renderer';
 export { MorphAnimation } from './3d/morph-animation';
 export type { MorphClip, MorphState, MorphClipConfig } from './3d/morph-animation';
+export { SkeletalAnimation } from './3d/skeletal-animation';
+export type { SkeletalClip, SkeletalAnimState, PlayOptions } from './3d/skeletal-animation';
+export type { SkinData, AnimationClipData, AnimationChannel } from './3d/gltf-skin-parser';
 
 // Camera
 export { Camera2D } from './camera/camera-2d';
@@ -49,4 +52,4 @@ export { rotate2d, worldToClip2d, worldToClip3d, remap, scaleRotate2d, inverseLe
 
 // Core
 export * from './core/constants';
-export { DynamicSprite, StaticSprite, SpriteUniforms, DynamicInstance3D, StaticInstance3D, DynamicMesh, StaticMesh, MeshUniforms } from './core/types';
+export { DynamicSprite, StaticSprite, SpriteUniforms, DynamicInstance3D, StaticInstance3D, DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms } from './core/types';

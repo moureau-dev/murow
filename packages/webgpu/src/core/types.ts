@@ -104,6 +104,20 @@ export const StaticMesh = d.struct({
 
 export const STATIC_MESH_FLOATS = 6;
 
+// --- 3D Skinned Instance Data (adds bone offset for skeletal animation) ---
+
+export const SkinnedStaticMesh = d.struct({
+    scaleX: d.f32,
+    scaleY: d.f32,
+    scaleZ: d.f32,
+    colorR: d.f32,
+    colorG: d.f32,
+    colorB: d.f32,
+    boneOffset: d.u32,
+});
+
+export const SKINNED_STATIC_MESH_FLOATS = 7;
+
 export const MeshUniforms = d.struct({
     viewProjection: d.mat4x4f,
     alpha: d.f32,

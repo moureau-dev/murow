@@ -18,8 +18,10 @@ import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder'
 import {
     DYNAMIC_MESH_FLOATS,
     STATIC_MESH_FLOATS,
+    SKINNED_STATIC_MESH_FLOATS,
     DynamicMesh,
     StaticMesh,
+    SkinnedStaticMesh,
     MeshUniforms,
 } from '../core/types';
 import { Camera3D } from '../camera/camera-3d';
@@ -31,8 +33,16 @@ import {
     createTextureBindGroupLayout,
     createTexturedMeshVertex,
     createTexturedMeshFragment,
+    createSkinnedMeshLayout,
+    createSkinnedMeshVertex,
+    createSkinnedMeshFragment,
+    createSkinnedTexturedMeshFragment,
     type MeshDataLayout,
+    type SkinnedMeshDataLayout,
 } from './shader';
+import { nodeToMat4 } from '../core/math';
+import { parseSkin, parseAnimations, parsePrimitiveSkinAttributes, type SkinData, type AnimationClipData, type PrimitiveSkinAttributes } from './gltf-skin-parser';
+import { SkeletalAnimation, type SkeletalAnimState, type PlayOptions } from './skeletal-animation';
 
 // --- Dynamic offset constants ---
 const DYN_PREV_PX = 0, DYN_PREV_PY = 1, DYN_PREV_PZ = 2;
@@ -43,6 +53,16 @@ const DYN_CURR_RX = 9, DYN_CURR_RY = 10, DYN_CURR_RZ = 11;
 // --- Static offset constants ---
 const STAT_SX = 0, STAT_SY = 1, STAT_SZ = 2;
 const STAT_CR = 3, STAT_CG = 4, STAT_CB = 5;
+
+// --- Skinned static offset constants (extra boneOffset) ---
+const SSTAT_SX = 0, SSTAT_SY = 1, SSTAT_SZ = 2;
+const SSTAT_CR = 3, SSTAT_CG = 4, SSTAT_CB = 5;
+const SSTAT_BONE_OFFSET = 6;
+
+// Default limits for skinned rendering
+const DEFAULT_MAX_SKINNED_INSTANCES = 700;
+const DEFAULT_MAX_BONES_PER_SKIN = 128;
+const DEFAULT_MAX_TOTAL_BONES = DEFAULT_MAX_SKINNED_INSTANCES * DEFAULT_MAX_BONES_PER_SKIN;
 
 export interface ModelData {
     positions: Float32Array;
@@ -56,18 +76,41 @@ export interface ModelHandle {
     readonly id: number;
     readonly vertexCount: number;
     readonly indexCount: number;
+    readonly skinned: boolean;
 }
 
 export interface MeshInstanceHandle {
     readonly slot: number;
     readonly modelId: number;
+    readonly skinned: boolean;
     setPosition(x: number, y: number, z: number): void;
     setRotation(x: number, y: number, z: number): void;
     setScale(x: number, y: number, z: number): void;
+    play?(name: string, opts?: PlayOptions): void;
+    stop?(): void;
+}
+
+/** A loaded glTF model — may contain multiple mesh parts that share a skeleton. */
+export interface GltfModel {
+    readonly parts: ModelHandle[];
+    readonly totalVertexCount: number;
+    readonly skinned: boolean;
+    /** Animation clip names available on this model (empty if not skinned). */
+    readonly animations: string[];
+}
+
+/** Handle to a spawned instance (single primitive or multi-part glTF). */
+export interface InstanceHandle {
+    setPosition(x: number, y: number, z: number): void;
+    setRotation(x: number, y: number, z: number): void;
+    setScale(x: number, y: number, z: number): void;
+    play?(name: string, opts?: PlayOptions): void;
+    stop?(): void;
+    readonly skinned: boolean;
 }
 
 export interface MeshInstanceOptions {
-    model: ModelHandle;
+    model: ModelHandle | GltfModel;
     x?: number; y?: number; z?: number;
     rotX?: number; rotY?: number; rotZ?: number;
     scaleX?: number; scaleY?: number; scaleZ?: number;
@@ -126,24 +169,80 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         boundingRadius: number;
         hasTexture: boolean;
         textureBindGroup: GPUBindGroup | null;
+        skinned: boolean;
+        skinIndex: number; // index into skinnedModels, or -1
     }[] = [];
     private nextModelId = 0;
+
+    // Skinned model data
+    private skinnedModels: {
+        animation: SkeletalAnimation;
+        jointCount: number;
+    }[] = [];
+
+    // Skinned pipeline resources
+    private skinnedMeshLayout!: SkinnedMeshDataLayout;
+    private rawSkinnedPipeline!: GPURenderPipeline;
+    private rawSkinnedTexturedPipeline!: GPURenderPipeline;
+    private rawSkinnedBindGroup!: GPUBindGroup;
+
+    // Bone matrix buffer (shared across all skinned instances)
+    private boneMatrixData!: Float32Array;
+    private rawBoneMatrixBuffer!: GPUBuffer;
+    private boneMatrixDirty = true;
+    private maxTotalBones = DEFAULT_MAX_TOTAL_BONES;
+
+    // Per-instance skinned state
+    private skinnedDynamicData!: Float32Array;
+    private skinnedStaticData!: Float32Array;
+    private skinnedSlotIndexData!: Uint32Array;
+    private skinnedFreeList!: FreeList;
+    private skinnedBatcher!: SparseBatcher;
+    private skinnedStaticDirty = false;
+    private skinnedInstanceModelIds!: Uint8Array;
+    private skinnedInstanceBoneOffsets!: Uint32Array;
+    private skinnedAnimStates: (SkeletalAnimState | null)[] = [];
+    private nextBoneOffset = 0;
+    private maxSkinnedInstances = DEFAULT_MAX_SKINNED_INSTANCES;
+
+    // Raw skinned GPU buffers
+    private rawSkinnedDynamicBuffer!: GPUBuffer;
+    private rawSkinnedStaticBuffer!: GPUBuffer;
+    private rawSkinnedUniformBuffer!: GPUBuffer; // shares uniform data with non-skinned
+    private rawSkinnedSlotIndexBuffer!: GPUBuffer;
 
     // Frustum planes (6 planes × 4 floats each), extracted from VP matrix
     private frustumPlanes = new Float32Array(24);
 
     readonly camera: Camera3D;
     private uniformData = new Float32Array(24); // mat4x4 (16) + alpha (1) + lightDir (3) + padding (4)
+    private lastRenderTime = 0;
 
     constructor(canvas: HTMLCanvasElement, options: Renderer3DOptions) {
         super(canvas, options);
         this.camera = new Camera3D();
+
+        // Non-skinned instance buffers
         this.freeList = new FreeList(options.maxModels);
         this.batcher = new SparseBatcher(options.maxModels);
         this.dynamicData = new Float32Array(options.maxModels * DYNAMIC_MESH_FLOATS);
         this.staticData = new Float32Array(options.maxModels * STATIC_MESH_FLOATS);
         this.slotIndexData = new Uint32Array(options.maxModels);
         this.instanceModelIds = new Uint8Array(options.maxModels);
+
+        // Skinned instance buffers
+        const msi = this.maxSkinnedInstances;
+        this.skinnedFreeList = new FreeList(msi);
+        this.skinnedBatcher = new SparseBatcher(msi);
+        this.skinnedDynamicData = new Float32Array(msi * DYNAMIC_MESH_FLOATS);
+        this.skinnedStaticData = new Float32Array(msi * SKINNED_STATIC_MESH_FLOATS);
+        this.skinnedSlotIndexData = new Uint32Array(msi);
+        this.skinnedInstanceModelIds = new Uint8Array(msi);
+        this.skinnedInstanceBoneOffsets = new Uint32Array(msi);
+        this.skinnedAnimStates = new Array(msi).fill(null);
+
+        // Bone matrix buffer (CPU side)
+        this.boneMatrixData = new Float32Array(this.maxTotalBones * 16);
     }
 
     async init(): Promise<void> {
@@ -244,6 +343,73 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 { binding: 1, resource: { buffer: this.rawDynamicBuffer } },
                 { binding: 2, resource: { buffer: this.rawStaticBuffer } },
                 { binding: 3, resource: { buffer: this.rawSlotIndexBuffer } },
+            ],
+        });
+
+        // --- Skinned pipelines ---
+        const msi = this.maxSkinnedInstances;
+        this.skinnedMeshLayout = createSkinnedMeshLayout(msi, this.maxTotalBones);
+
+        // Skinned vertex buffer: pos(3f) + normal(3f) + uv(2f) + joints(4xu16) + weights(4f) = 56 bytes
+        const skinnedVertexBufferLayout: GPUVertexBufferLayout = {
+            arrayStride: 56,
+            stepMode: 'vertex',
+            attributes: [
+                { shaderLocation: 0, offset: 0, format: 'float32x3' },   // position
+                { shaderLocation: 1, offset: 12, format: 'float32x3' },  // normal
+                { shaderLocation: 2, offset: 24, format: 'float32x2' },  // uv
+                { shaderLocation: 3, offset: 32, format: 'uint16x4' },   // joints
+                { shaderLocation: 4, offset: 40, format: 'float32x4' },  // weights
+            ],
+        };
+
+        const skinnedVertex = createSkinnedMeshVertex(this.skinnedMeshLayout);
+        const skinnedFragment = createSkinnedMeshFragment(this.skinnedMeshLayout);
+        const { code: skinnedWgsl } = tgpu.resolveWithContext([skinnedVertex, skinnedFragment]);
+        const skinnedShaderModule = this.device.createShaderModule({ code: skinnedWgsl });
+        const rawSkinnedBGL = this.root.unwrap(this.skinnedMeshLayout);
+
+        this.rawSkinnedPipeline = this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [rawSkinnedBGL] }),
+            vertex: { module: skinnedShaderModule, buffers: [skinnedVertexBufferLayout] },
+            fragment: { module: skinnedShaderModule, targets: [{ format: this.format }] },
+            primitive,
+            depthStencil,
+        });
+
+        // Skinned + textured pipeline
+        const skinnedTexVertex = createSkinnedMeshVertex(this.skinnedMeshLayout);
+        const skinnedTexFragment = createSkinnedTexturedMeshFragment(this.skinnedMeshLayout, texLayout);
+        const { code: skinnedTexWgsl } = tgpu.resolveWithContext([skinnedTexVertex, skinnedTexFragment]);
+        const skinnedTexShaderModule = this.device.createShaderModule({ code: skinnedTexWgsl });
+
+        this.rawSkinnedTexturedPipeline = this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [rawSkinnedBGL, rawTexBGL] }),
+            vertex: { module: skinnedTexShaderModule, buffers: [skinnedVertexBufferLayout] },
+            fragment: { module: skinnedTexShaderModule, targets: [{ format: this.format }] },
+            primitive,
+            depthStencil,
+        });
+
+        // Skinned GPU buffers
+        const skinnedDynBuf = this.root.createBuffer(d.arrayOf(DynamicMesh, msi)).$usage('storage');
+        const skinnedStatBuf = this.root.createBuffer(d.arrayOf(SkinnedStaticMesh, msi)).$usage('storage');
+        const skinnedSlotBuf = this.root.createBuffer(d.arrayOf(d.u32, msi)).$usage('storage');
+        const boneBuf = this.root.createBuffer(d.arrayOf(d.mat4x4f, this.maxTotalBones)).$usage('storage');
+
+        this.rawSkinnedDynamicBuffer = this.root.unwrap(skinnedDynBuf) as any;
+        this.rawSkinnedStaticBuffer = this.root.unwrap(skinnedStatBuf) as any;
+        this.rawSkinnedSlotIndexBuffer = this.root.unwrap(skinnedSlotBuf) as any;
+        this.rawBoneMatrixBuffer = this.root.unwrap(boneBuf) as any;
+
+        this.rawSkinnedBindGroup = this.device.createBindGroup({
+            layout: rawSkinnedBGL,
+            entries: [
+                { binding: 0, resource: { buffer: this.rawUniformBuffer } },
+                { binding: 1, resource: { buffer: this.rawSkinnedDynamicBuffer } },
+                { binding: 2, resource: { buffer: this.rawSkinnedStaticBuffer } },
+                { binding: 3, resource: { buffer: this.rawSkinnedSlotIndexBuffer } },
+                { binding: 4, resource: { buffer: this.rawBoneMatrixBuffer } },
             ],
         });
 
@@ -403,9 +569,126 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             boundingRadius,
             hasTexture,
             textureBindGroup,
+            skinned: false,
+            skinIndex: -1,
         };
 
-        return { id, vertexCount, indexCount };
+        return { id, vertexCount, indexCount, skinned: false };
+    }
+
+    /**
+     * Register a skinned model with joint/weight vertex data.
+     * Called internally by loadGltf when a skin is detected.
+     */
+    private loadSkinnedModel(
+        data: ModelData,
+        skinAttrs: PrimitiveSkinAttributes,
+        skinIndex: number,
+    ): ModelHandle {
+        const { positions, indices, texture } = data;
+        const vertexCount = positions.length / 3;
+        const normals = data.normals ?? this.computeNormals(positions, indices);
+        const uvs = data.uvs ?? new Float32Array(vertexCount * 2);
+        const hasTexture = !!texture;
+
+        // Compute bounding radius
+        let maxRadiusSq = 0;
+        for (let i = 0; i < vertexCount; i++) {
+            const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
+            const rSq = px * px + py * py + pz * pz;
+            if (rSq > maxRadiusSq) maxRadiusSq = rSq;
+        }
+        const boundingRadius = Math.sqrt(maxRadiusSq);
+
+        // Interleave: pos(3f) + normal(3f) + uv(2f) + joints(4xu16) + weights(4f) = 56 bytes
+        const buf = new ArrayBuffer(vertexCount * 56);
+        const floatView = new Float32Array(buf);
+        const u16View = new Uint16Array(buf);
+
+        for (let i = 0; i < vertexCount; i++) {
+            const fBase = i * 14; // 56 bytes / 4 = 14 floats per vertex
+            const u16Base = i * 28; // 56 bytes / 2 = 28 u16s per vertex
+
+            // position (3f) at byte 0
+            floatView[fBase + 0] = positions[i * 3 + 0];
+            floatView[fBase + 1] = positions[i * 3 + 1];
+            floatView[fBase + 2] = positions[i * 3 + 2];
+            // normal (3f) at byte 12
+            floatView[fBase + 3] = normals[i * 3 + 0];
+            floatView[fBase + 4] = normals[i * 3 + 1];
+            floatView[fBase + 5] = normals[i * 3 + 2];
+            // uv (2f) at byte 24
+            floatView[fBase + 6] = uvs[i * 2 + 0];
+            floatView[fBase + 7] = uvs[i * 2 + 1];
+            // joints (4xu16) at byte 32
+            u16View[u16Base + 16] = skinAttrs.joints[i * 4 + 0];
+            u16View[u16Base + 17] = skinAttrs.joints[i * 4 + 1];
+            u16View[u16Base + 18] = skinAttrs.joints[i * 4 + 2];
+            u16View[u16Base + 19] = skinAttrs.joints[i * 4 + 3];
+            // weights (4f) at byte 40
+            floatView[fBase + 10] = skinAttrs.weights[i * 4 + 0];
+            floatView[fBase + 11] = skinAttrs.weights[i * 4 + 1];
+            floatView[fBase + 12] = skinAttrs.weights[i * 4 + 2];
+            floatView[fBase + 13] = skinAttrs.weights[i * 4 + 3];
+        }
+
+        const vertexBuffer = this.device.createBuffer({
+            size: buf.byteLength,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+            mappedAtCreation: true,
+        });
+        new Uint8Array(vertexBuffer.getMappedRange()).set(new Uint8Array(buf));
+        vertexBuffer.unmap();
+
+        let indexBuffer: GPUBuffer | null = null;
+        let indexCount = 0;
+        if (indices) {
+            indexCount = indices.length;
+            const alignedSize = Math.ceil(indices.byteLength / 4) * 4;
+            indexBuffer = this.device.createBuffer({
+                size: alignedSize,
+                usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+                mappedAtCreation: true,
+            });
+            if (indices instanceof Uint16Array) {
+                new Uint16Array(indexBuffer.getMappedRange()).set(indices);
+            } else {
+                new Uint32Array(indexBuffer.getMappedRange()).set(indices);
+            }
+            indexBuffer.unmap();
+        }
+
+        // Texture bind group
+        let textureBindGroup: GPUBindGroup | null = null;
+        if (texture) {
+            const { texture: gpuTexture, view } = createTextureFromBitmap(this.device, texture);
+            const sampler = this.device.createSampler({
+                magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear',
+            });
+            textureBindGroup = this.device.createBindGroup({
+                layout: this.rawSkinnedTexturedPipeline.getBindGroupLayout(1),
+                entries: [
+                    { binding: 0, resource: view },
+                    { binding: 1, resource: sampler },
+                ],
+            });
+        }
+
+        const id = this.nextModelId++;
+        this.models[id] = {
+            rawVertexBuffer: vertexBuffer,
+            rawIndexBuffer: indexBuffer,
+            vertexCount,
+            indexCount,
+            indexFormat: indices instanceof Uint32Array ? 'uint32' as const : 'uint16' as const,
+            boundingRadius,
+            hasTexture,
+            textureBindGroup,
+            skinned: true,
+            skinIndex,
+        };
+
+        return { id, vertexCount, indexCount, skinned: true };
     }
 
     /**
@@ -464,14 +747,12 @@ export class WebGPU3DRenderer extends Base3DRenderer {
      * Most models have multiple primitives (body parts, material groups, etc.).
      *
      * ```ts
-     * const parts = await renderer.loadGltf('assets/hero.glb');
-     * // Spawn all parts as one unit
-     * for (const part of parts) {
-     *     renderer.addInstance({ model: part, x: 0, y: 0, z: 0 });
-     * }
+     * const model = await renderer.loadGltf('assets/hero.glb');
+     * const instance = renderer.addInstance({ model, x: 0, y: 0, z: 0 });
+     * instance.playAnimation?.('walk');
      * ```
      */
-    async loadGltf(url: string): Promise<ModelHandle[]> {
+    async loadGltf(url: string): Promise<GltfModel> {
         const response = await fetch(url);
         const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
 
@@ -532,7 +813,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
             const typeMap: Record<number, any> = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
             const byteSizeMap: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
-            const sizeMap: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
+            const sizeMap: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
 
             const TypedArray = typeMap[accessor.componentType];
             const componentBytes = byteSizeMap[accessor.componentType];
@@ -588,54 +869,57 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             return undefined;
         };
 
-        // --- Matrix helpers (used for skinning + mesh node transform) ---
-        const getNodeLocalMatrix = (node: any): Float32Array => {
-            const m = new Float32Array(16);
-            if (node.matrix) {
-                m.set(node.matrix);
-                return m;
-            }
-            const t = node.translation ?? [0, 0, 0];
-            const r = node.rotation ?? [0, 0, 0, 1];
-            const s = node.scale ?? [1, 1, 1];
+        // Find the first mesh node (used for skin detection)
+        const meshNodeIndex = gltf.nodes?.findIndex((n: any) => n.mesh !== undefined) ?? -1;
 
-            const qx = r[0], qy = r[1], qz = r[2], qw = r[3];
-            const xx = qx * qx, yy = qy * qy, zz = qz * qz;
-            const xy = qx * qy, xz = qx * qz, yz = qy * qz;
-            const wx = qw * qx, wy = qw * qy, wz = qw * qz;
+        // --- Detect skin and parse animation data ---
+        const skinIndex = meshNodeIndex !== -1 ? gltf.nodes?.[meshNodeIndex]?.skin : undefined;
+        let skinData: SkinData | null = null;
+        let animClips: AnimationClipData[] = [];
+        let skinnedModelSkinIndex = -1;
 
-            m[0]  = (1 - 2 * (yy + zz)) * s[0];
-            m[1]  = 2 * (xy + wz) * s[0];
-            m[2]  = 2 * (xz - wy) * s[0];
-            m[3]  = 0;
-            m[4]  = 2 * (xy - wz) * s[1];
-            m[5]  = (1 - 2 * (xx + zz)) * s[1];
-            m[6]  = 2 * (yz + wx) * s[1];
-            m[7]  = 0;
-            m[8]  = 2 * (xz + wy) * s[2];
-            m[9]  = 2 * (yz - wx) * s[2];
-            m[10] = (1 - 2 * (xx + yy)) * s[2];
-            m[11] = 0;
-            m[12] = t[0];
-            m[13] = t[1];
-            m[14] = t[2];
-            m[15] = 1;
-            return m;
-        };
+        if (skinIndex !== undefined && gltf.skins?.[skinIndex]) {
+            skinData = parseSkin(gltf, skinIndex, getAccessorData);
+            animClips = parseAnimations(gltf, skinData, getAccessorData);
 
-        // --- Mesh node transform (e.g. scale: [-1,1,1] for X mirror) ---
-        const meshNodeIndex = gltf.nodes?.findIndex((n: any) => n.mesh === 0);
-        let meshNodeMatrix: Float32Array | null = null;
-        if (meshNodeIndex !== -1 && meshNodeIndex !== undefined) {
-            const meshNode = gltf.nodes[meshNodeIndex];
-            if (meshNode.scale || meshNode.rotation || meshNode.translation || meshNode.matrix) {
-                meshNodeMatrix = getNodeLocalMatrix(meshNode);
-            }
+            // Register the skeletal animation controller
+            const animation = new SkeletalAnimation(skinData, animClips, gltf.nodes);
+            skinnedModelSkinIndex = this.skinnedModels.length;
+            this.skinnedModels.push({
+                animation,
+                jointCount: skinData.jointCount,
+            });
         }
 
-        // --- Load all primitives from the first mesh ---
-        const mesh = gltf.meshes[0];
+        // --- Load all primitives from all meshes ---
         const handles: ModelHandle[] = [];
+
+        // Collect all mesh node indices (nodes that have a mesh property)
+        const meshNodeIndices: number[] = [];
+        for (let i = 0; i < gltf.nodes.length; i++) {
+            if (gltf.nodes[i].mesh !== undefined) meshNodeIndices.push(i);
+        }
+        // Fallback: if no mesh nodes found, just use meshes[0]
+        const meshIndicesToLoad = meshNodeIndices.length > 0
+            ? meshNodeIndices.map((ni: number) => gltf.nodes[ni].mesh as number)
+            : [0];
+
+        for (const meshIdx of meshIndicesToLoad) {
+            const mesh = gltf.meshes[meshIdx];
+            if (!mesh) continue;
+
+            // Check if this mesh's node has a skin
+            const meshNodeForThis = gltf.nodes.find((n: any) => n.mesh === meshIdx);
+            const meshSkinIndex = meshNodeForThis?.skin;
+            const isSkinned = skinData && meshSkinIndex !== undefined;
+
+            // Get mesh node transform for this specific mesh node
+            let thisMeshNodeMatrix: Float32Array | null = null;
+            if (meshNodeForThis && !isSkinned) {
+                if (meshNodeForThis.scale || meshNodeForThis.rotation || meshNodeForThis.translation || meshNodeForThis.matrix) {
+                    thisMeshNodeMatrix = nodeToMat4(meshNodeForThis);
+                }
+            }
 
         for (const primitive of mesh.primitives) {
             // Positions (required)
@@ -663,10 +947,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                     : new Uint16Array(idxAccess.data);
             }
 
-            // TODO: bind-pose baking (skeletal animation) — needs GPU skinning implementation
-
-            // Apply mesh node transform (e.g. scale [-1,1,1] for X mirror)
-            if (meshNodeMatrix) {
+            // Apply mesh node transform (e.g. scale [-1,1,1] for X mirror) — non-skinned only
+            if (thisMeshNodeMatrix && !isSkinned) {
+                const meshNodeMatrix = thisMeshNodeMatrix;
                 const mm = meshNodeMatrix;
                 const vertexCount = positions.length / 3;
                 for (let v = 0; v < vertexCount; v++) {
@@ -701,13 +984,58 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 }
             }
 
+            // Skinned vs non-skinned model loading
+            if (isSkinned) {
+                const skinAttrs = parsePrimitiveSkinAttributes(primitive, getAccessorData);
+                if (skinAttrs) {
+                    handles.push(this.loadSkinnedModel(
+                        { positions, normals, uvs, indices, texture },
+                        skinAttrs,
+                        skinnedModelSkinIndex,
+                    ));
+                    continue;
+                }
+            }
+
             handles.push(this.loadModel({ positions, normals, uvs, indices, texture }));
         }
+        } // end for meshIdx
 
-        return handles;
+        let totalVertexCount = 0;
+        for (const h of handles) totalVertexCount += h.vertexCount;
+
+        const animNames = skinnedModelSkinIndex >= 0
+            ? this.skinnedModels[skinnedModelSkinIndex].animation.getClipNames()
+            : [];
+
+        return {
+            parts: handles,
+            totalVertexCount,
+            skinned: handles.some(h => h.skinned),
+            animations: animNames,
+        };
     }
 
-    addInstance(opts: MeshInstanceOptions): MeshInstanceHandle {
+    /**
+     * Add an instance. For skinned models, pass `linkedTo` to share bone matrices
+     * with another instance (e.g., when spawning all parts of a character).
+     */
+    addInstance(opts: MeshInstanceOptions): InstanceHandle {
+        const modelOrGltf = opts.model;
+
+        // GltfModel: spawn all parts as a linked group
+        if ('parts' in modelOrGltf) {
+            return this.addGltfInstance(opts, modelOrGltf as GltfModel);
+        }
+
+        const modelHandle = modelOrGltf as ModelHandle;
+        const model = this.models[modelHandle.id];
+
+        // Route skinned models to the skinned instance path
+        if (model?.skinned) {
+            return this.addSkinnedInstance(opts, modelHandle, model.skinIndex);
+        }
+
         const slot = this.freeList.allocate();
         if (slot === -1) throw new Error(`Max instances (${this.maxModels}) reached`);
 
@@ -740,15 +1068,14 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         this.staticData[statBase + STAT_CB] = color[2];
 
         this.staticDirty = true;
-        this.instanceModelIds[slot] = opts.model.id;
-        this.batcher.add(0, opts.model.id, slot);
+        this.instanceModelIds[slot] = modelHandle.id;
+        this.batcher.add(0, modelHandle.id, slot);
 
         const dynamicData = this.dynamicData;
         const staticData = this.staticData;
 
         return {
-            slot,
-            modelId: opts.model.id,
+            skinned: false,
             setPosition(nx: number, ny: number, nz: number) {
                 dynamicData[dynBase + DYN_CURR_PX] = nx;
                 dynamicData[dynBase + DYN_CURR_PY] = ny;
@@ -767,6 +1094,189 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         };
     }
 
+    private addGltfInstance(opts: MeshInstanceOptions, gltf: GltfModel): InstanceHandle {
+        const childHandles: MeshInstanceHandle[] = [];
+        let firstSkinnedSlot: number | undefined;
+
+        for (const part of gltf.parts) {
+            const partOpts = { ...opts, model: part };
+            const model = this.models[part.id];
+
+            let handle: MeshInstanceHandle;
+            if (model?.skinned) {
+                handle = this.addSkinnedInstance(partOpts, part, model.skinIndex, firstSkinnedSlot);
+                if (firstSkinnedSlot === undefined) firstSkinnedSlot = handle.slot;
+            } else {
+                // Re-use the single-part non-skinned path directly
+                handle = this.addInstance(partOpts) as MeshInstanceHandle;
+            }
+            childHandles.push(handle);
+        }
+
+        // Find the first skinned handle for animation control
+        const skinnedHandle = childHandles.find(h => h.skinned);
+
+        return {
+            skinned: gltf.skinned,
+            setPosition(x: number, y: number, z: number) {
+                for (const h of childHandles) h.setPosition(x, y, z);
+            },
+            setRotation(x: number, y: number, z: number) {
+                for (const h of childHandles) h.setRotation(x, y, z);
+            },
+            setScale(x: number, y: number, z: number) {
+                for (const h of childHandles) h.setScale(x, y, z);
+            },
+            play: skinnedHandle?.play ? (name: string, opts?: PlayOptions) => {
+                skinnedHandle.play!(name, opts);
+            } : undefined,
+            stop: skinnedHandle?.stop ? () => {
+                skinnedHandle.stop!();
+            } : undefined,
+        };
+    }
+
+    private addSkinnedInstance(opts: MeshInstanceOptions, modelHandle: ModelHandle, skinIndex: number, linkedSlot?: number): MeshInstanceHandle {
+        const slot = this.skinnedFreeList.allocate();
+        if (slot === -1) throw new Error(`Max skinned instances (${this.maxSkinnedInstances}) reached`);
+
+        const skinModel = this.skinnedModels[skinIndex];
+        const jointCount = skinModel.jointCount;
+
+        let boneOffset: number;
+        let animState: SkeletalAnimState | null;
+
+        if (linkedSlot !== undefined) {
+            // Share bone offset and animation state with linked slot
+            boneOffset = this.skinnedInstanceBoneOffsets[linkedSlot];
+            animState = this.skinnedAnimStates[linkedSlot];
+        } else {
+            // Allocate new bone offset block
+            boneOffset = this.nextBoneOffset;
+            this.nextBoneOffset += jointCount;
+
+            // Write rest-pose bone matrices directly into boneMatrixData (zero-alloc)
+            skinModel.animation.computeRestPose(this.boneMatrixData, boneOffset * 16);
+            this.boneMatrixDirty = true;
+
+            // Create animation state (auto-plays first clip if available)
+            animState = skinModel.animation.clipCount > 0
+                ? skinModel.animation.createState(0, 1, true)
+                : null;
+        }
+
+        this.skinnedInstanceBoneOffsets[slot] = boneOffset;
+        this.skinnedAnimStates[slot] = animState;
+
+        const dynBase = slot * DYNAMIC_MESH_FLOATS;
+        const statBase = slot * SKINNED_STATIC_MESH_FLOATS;
+
+        const x = opts.x ?? 0, y = opts.y ?? 0, z = opts.z ?? 0;
+        this.skinnedDynamicData[dynBase + DYN_PREV_PX] = x;
+        this.skinnedDynamicData[dynBase + DYN_PREV_PY] = y;
+        this.skinnedDynamicData[dynBase + DYN_PREV_PZ] = z;
+        this.skinnedDynamicData[dynBase + DYN_CURR_PX] = x;
+        this.skinnedDynamicData[dynBase + DYN_CURR_PY] = y;
+        this.skinnedDynamicData[dynBase + DYN_CURR_PZ] = z;
+
+        const rx = opts.rotX ?? 0, ry = opts.rotY ?? 0, rz = opts.rotZ ?? 0;
+        this.skinnedDynamicData[dynBase + DYN_PREV_RX] = rx;
+        this.skinnedDynamicData[dynBase + DYN_PREV_RY] = ry;
+        this.skinnedDynamicData[dynBase + DYN_PREV_RZ] = rz;
+        this.skinnedDynamicData[dynBase + DYN_CURR_RX] = rx;
+        this.skinnedDynamicData[dynBase + DYN_CURR_RY] = ry;
+        this.skinnedDynamicData[dynBase + DYN_CURR_RZ] = rz;
+
+        this.skinnedStaticData[statBase + SSTAT_SX] = opts.scaleX ?? 1;
+        this.skinnedStaticData[statBase + SSTAT_SY] = opts.scaleY ?? 1;
+        this.skinnedStaticData[statBase + SSTAT_SZ] = opts.scaleZ ?? 1;
+
+        const color = opts.color ?? [1, 1, 1];
+        this.skinnedStaticData[statBase + SSTAT_CR] = color[0];
+        this.skinnedStaticData[statBase + SSTAT_CG] = color[1];
+        this.skinnedStaticData[statBase + SSTAT_CB] = color[2];
+
+        // boneOffset is u32, but stored in a Float32Array — use DataView for correct bit pattern
+        new DataView(this.skinnedStaticData.buffer).setUint32(
+            (statBase + SSTAT_BONE_OFFSET) * 4, boneOffset, true
+        );
+
+        this.skinnedStaticDirty = true;
+        this.skinnedInstanceModelIds[slot] = modelHandle.id;
+        this.skinnedBatcher.add(0, modelHandle.id, slot);
+
+        const dynamicData = this.skinnedDynamicData;
+        const staticData = this.skinnedStaticData;
+        const animStates = this.skinnedAnimStates;
+        const animation = skinModel.animation;
+
+        return {
+            slot,
+            modelId: modelHandle.id,
+            skinned: true,
+            setPosition(nx: number, ny: number, nz: number) {
+                dynamicData[dynBase + DYN_CURR_PX] = nx;
+                dynamicData[dynBase + DYN_CURR_PY] = ny;
+                dynamicData[dynBase + DYN_CURR_PZ] = nz;
+            },
+            setRotation(nx: number, ny: number, nz: number) {
+                dynamicData[dynBase + DYN_CURR_RX] = nx;
+                dynamicData[dynBase + DYN_CURR_RY] = ny;
+                dynamicData[dynBase + DYN_CURR_RZ] = nz;
+            },
+            setScale(nx: number, ny: number, nz: number) {
+                staticData[statBase + SSTAT_SX] = nx;
+                staticData[statBase + SSTAT_SY] = ny;
+                staticData[statBase + SSTAT_SZ] = nz;
+            },
+            play(name: string, opts?: PlayOptions) {
+                const state = animStates[slot];
+                if (state) animation.play(state, name, opts);
+            },
+            stop() {
+                const state = animStates[slot];
+                if (state) animation.stop(state);
+            },
+        };
+    }
+
+    /**
+     * Update skeletal animations for all skinned instances. Call once per tick.
+     */
+    // Pre-allocated dedup tracker for updateAnimations (zero-GC)
+    private updatedBoneOffsets = new Uint8Array(DEFAULT_MAX_SKINNED_INSTANCES);
+
+    private updateAnimations(deltaTime: number): void {
+        // Track which bone offsets have been updated to avoid duplicate updates
+        // (linked instances share the same bone offset + anim state)
+        this.updatedBoneOffsets.fill(0);
+
+        for (let slot = 0; slot < this.maxSkinnedInstances; slot++) {
+            const animState = this.skinnedAnimStates[slot];
+            if (!animState || !animState.playing) continue;
+
+            const boneOffset = this.skinnedInstanceBoneOffsets[slot];
+            if (this.updatedBoneOffsets[slot]) continue;
+
+            // Mark all slots sharing this bone offset as updated
+            for (let s2 = slot; s2 < this.maxSkinnedInstances; s2++) {
+                if (this.skinnedInstanceBoneOffsets[s2] === boneOffset) {
+                    this.updatedBoneOffsets[s2] = 1;
+                }
+            }
+
+            const modelId = this.skinnedInstanceModelIds[slot];
+            const model = this.models[modelId];
+            if (!model || model.skinIndex === -1) continue;
+
+            const skinModel = this.skinnedModels[model.skinIndex];
+
+            // Write directly into boneMatrixData at the correct offset (zero-alloc)
+            skinModel.animation.update(animState, deltaTime, this.boneMatrixData, boneOffset * 16);
+        }
+        this.boneMatrixDirty = true;
+    }
+
     removeInstance(handle: MeshInstanceHandle): void {
         this.batcher.remove(0, handle.modelId, handle.slot);
         this.freeList.free(handle.slot);
@@ -780,8 +1290,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
     storePreviousState(): void {
         this.camera.storePrevious();
+
+        // Non-skinned instances
         const dyn = this.dynamicData;
-        this.batcher.each((_modelId, instances, count) => {
+        this.batcher.each((_, instances, count) => {
             for (let i = 0; i < count; i++) {
                 const base = instances[i] * DYNAMIC_MESH_FLOATS;
                 dyn[base + DYN_PREV_PX] = dyn[base + DYN_CURR_PX];
@@ -792,10 +1304,32 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 dyn[base + DYN_PREV_RZ] = dyn[base + DYN_CURR_RZ];
             }
         });
+
+        // Skinned instances
+        const sDyn = this.skinnedDynamicData;
+        this.skinnedBatcher.each((_, instances, count) => {
+            for (let i = 0; i < count; i++) {
+                const base = instances[i] * DYNAMIC_MESH_FLOATS;
+                sDyn[base + DYN_PREV_PX] = sDyn[base + DYN_CURR_PX];
+                sDyn[base + DYN_PREV_PY] = sDyn[base + DYN_CURR_PY];
+                sDyn[base + DYN_PREV_PZ] = sDyn[base + DYN_CURR_PZ];
+                sDyn[base + DYN_PREV_RX] = sDyn[base + DYN_CURR_RX];
+                sDyn[base + DYN_PREV_RY] = sDyn[base + DYN_CURR_RY];
+                sDyn[base + DYN_PREV_RZ] = sDyn[base + DYN_CURR_RZ];
+            }
+        });
     }
 
     render(alpha: number): void {
         if (!this._initialized) return;
+
+        // Advance skeletal animations at render framerate
+        const now = performance.now();
+        if (this.lastRenderTime > 0) {
+            const deltaTime = (now - this.lastRenderTime) / 1000;
+            this.updateAnimations(deltaTime);
+        }
+        this.lastRenderTime = now;
 
         this.camera.interpolate(alpha);
 
@@ -879,6 +1413,59 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             );
         }
 
+        // --- Upload skinned buffers ---
+        this.device.queue.writeBuffer(
+            this.rawSkinnedDynamicBuffer, 0,
+            this.skinnedDynamicData.buffer, this.skinnedDynamicData.byteOffset, this.skinnedDynamicData.byteLength,
+        );
+
+        if (this.skinnedStaticDirty) {
+            this.device.queue.writeBuffer(
+                this.rawSkinnedStaticBuffer, 0,
+                this.skinnedStaticData.buffer, this.skinnedStaticData.byteOffset, this.skinnedStaticData.byteLength,
+            );
+            this.skinnedStaticDirty = false;
+        }
+
+        if (this.boneMatrixDirty) {
+            this.device.queue.writeBuffer(
+                this.rawBoneMatrixBuffer, 0,
+                this.boneMatrixData.buffer, this.boneMatrixData.byteOffset, this.boneMatrixData.byteLength,
+            );
+            this.boneMatrixDirty = false;
+        }
+
+        // Pack skinned slot indices
+        let skinnedIndexOffset = 0;
+        const skinnedBatchOffsets: { modelId: number; offset: number; count: number }[] = [];
+        const sDyn = this.skinnedDynamicData;
+        const sStat = this.skinnedStaticData;
+
+        this.skinnedBatcher.each((modelId, instances, count) => {
+            const model = this.models[modelId];
+            if (!model) return;
+            const batchStart = skinnedIndexOffset;
+
+            // Skip frustum culling for skinned models — bounding radius is unreliable
+            // since bone transforms move vertices far from their bind-pose positions
+            for (let i = 0; i < count; i++) {
+                this.skinnedSlotIndexData[skinnedIndexOffset++] = instances[i];
+            }
+
+            const visibleCount = skinnedIndexOffset - batchStart;
+            if (visibleCount > 0) {
+                skinnedBatchOffsets.push({ modelId, offset: batchStart, count: visibleCount });
+            }
+        });
+
+        if (skinnedIndexOffset > 0) {
+            this.device.queue.writeBuffer(
+                this.rawSkinnedSlotIndexBuffer, 0,
+                this.skinnedSlotIndexData.buffer, this.skinnedSlotIndexData.byteOffset,
+                skinnedIndexOffset * 4,
+            );
+        }
+
         // Render pass with depth
         const textureView = this.context.getCurrentTexture().createView();
         const encoder = this.device.createCommandEncoder();
@@ -900,7 +1487,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             },
         });
 
-        // Draw per model type, switching pipeline for textured vs untextured
+        // --- Draw non-skinned models ---
         let currentPipeline: GPURenderPipeline | null = null;
 
         for (const batch of batchOffsets) {
@@ -911,6 +1498,34 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             if (pipeline !== currentPipeline) {
                 pass.setPipeline(pipeline);
                 pass.setBindGroup(0, this.rawBindGroup);
+                currentPipeline = pipeline;
+            }
+
+            if (model.hasTexture && model.textureBindGroup) {
+                pass.setBindGroup(1, model.textureBindGroup);
+            }
+
+            pass.setVertexBuffer(0, model.rawVertexBuffer);
+
+            if (model.rawIndexBuffer) {
+                pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
+                pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
+            } else {
+                pass.draw(model.vertexCount, batch.count, 0, batch.offset);
+            }
+        }
+
+        // --- Draw skinned models ---
+        currentPipeline = null;
+
+        for (const batch of skinnedBatchOffsets) {
+            const model = this.models[batch.modelId];
+            if (!model) continue;
+
+            const pipeline = model.hasTexture ? this.rawSkinnedTexturedPipeline : this.rawSkinnedPipeline;
+            if (pipeline !== currentPipeline) {
+                pass.setPipeline(pipeline);
+                pass.setBindGroup(0, this.rawSkinnedBindGroup);
                 currentPipeline = pipeline;
             }
 

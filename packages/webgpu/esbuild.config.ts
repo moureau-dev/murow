@@ -26,7 +26,7 @@ async function main() {
             format: 'esm',
             platform: 'browser',
             packages: 'external',
-            minify: true,
+            // minify: true,
             bundle: true,
         }),
         build({
@@ -36,7 +36,7 @@ async function main() {
             format: 'cjs',
             platform: 'browser',
             packages: 'external',
-            minify: true,
+            // minify: true,
             bundle: true,
         }),
     ]);
