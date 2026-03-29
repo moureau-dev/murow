@@ -8,7 +8,9 @@
         "test": "concurrently --kill-others-on-fail \"npm run test:murow\" \"npm run test:webgpu\"",
         "build:murow": "cd packages/murow && npm run build",
         "build:webgpu": "cd packages/webgpu && npm run build",
-        "build": "concurrently \"npm run build:murow\" \"npm run build:webgpu\""
+        "copy-webgpu": "cp -r packages/webgpu/dist packages/murow/dist/webgpu",
+        "build": "concurrently --kill-others-on-fail \"npm run build:murow\" \"npm run build:webgpu\"",
+        "postbuild": "bun run copy-webgpu"
     },
     "workspaces": [
         "packages/*",
