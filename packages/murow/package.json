@@ -13,7 +13,6 @@
     "build:js": "bun run build:esm && bun run build:cjs",
     "build:types": "tsc --emitDeclarationOnly --project tsconfig.json",
     "dev": "npm run build:js -- --watch",
-    "prepublishOnly": "npm run build",
     "test": "bun test ./src"
   },
   "keywords": [
@@ -53,8 +52,8 @@
     },
     "./core/*": {
       "types": "./dist/types/core/*.d.ts",
-      "import": "./dist/esm/core/*.js",
-      "require": "./dist/cjs/core/*.js"
+      "import": "./dist/esm/core/*/index.js",
+      "require": "./dist/cjs/core/*/index.js"
     },
     "./ecs": {
       "types": "./dist/types/ecs/index.d.ts",
@@ -64,8 +63,8 @@
     },
     "./ecs/*": {
       "types": "./dist/types/ecs/*.d.ts",
-      "import": "./dist/esm/ecs/*.js",
-      "require": "./dist/cjs/ecs/*.js"
+      "import": "./dist/esm/ecs/*/index.js",
+      "require": "./dist/cjs/ecs/*/index.js"
     },
     "./game": {
       "types": "./dist/types/game/index.d.ts",
@@ -75,8 +74,8 @@
     },
     "./game/*": {
       "types": "./dist/types/game/*.d.ts",
-      "import": "./dist/esm/game/*.js",
-      "require": "./dist/cjs/game/*.js"
+      "import": "./dist/esm/game/*/index.js",
+      "require": "./dist/cjs/game/*/index.js"
     },
     "./net": {
       "types": "./dist/types/net/index.d.ts",
@@ -86,8 +85,8 @@
     },
     "./net/*": {
       "types": "./dist/types/net/*.d.ts",
-      "import": "./dist/esm/net/*.js",
-      "require": "./dist/cjs/net/*.js"
+      "import": "./dist/esm/net/*/index.js",
+      "require": "./dist/cjs/net/*/index.js"
     },
     "./protocol": {
       "types": "./dist/types/protocol/index.d.ts",
@@ -97,8 +96,8 @@
     },
     "./protocol/*": {
       "types": "./dist/types/protocol/*.d.ts",
-      "import": "./dist/esm/protocol/*.js",
-      "require": "./dist/cjs/protocol/*.js"
+      "import": "./dist/esm/protocol/*/index.js",
+      "require": "./dist/cjs/protocol/*/index.js"
     },
     "./renderer": {
       "types": "./dist/types/renderer/index.d.ts",
@@ -108,9 +107,21 @@
     },
     "./renderer/*": {
       "types": "./dist/types/renderer/*.d.ts",
-      "import": "./dist/esm/renderer/*.js",
-      "require": "./dist/cjs/renderer/*.js"
+      "import": "./dist/esm/renderer/*/index.js",
+      "require": "./dist/cjs/renderer/*/index.js"
+    },
+    "./webgpu": {
+      "types": "./dist/webgpu/types/index.d.ts",
+      "import": "./dist/webgpu/esm/index.js",
+      "require": "./dist/webgpu/cjs/index.js",
+      "default": "./dist/webgpu/esm/index.js"
     }
+  },
+  "optionalDependencies": {
+    "acorn": "^8.16.0",
+    "tinyest": "^0.3.1",
+    "tinyest-for-wgsl": "^0.3.2",
+    "typegpu": "^0.10.2"
   },
   "files": ["dist"]
 }
