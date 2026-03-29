@@ -11,7 +11,7 @@ import { InputManager, BrowserInputSource, type InputSnapshot } from "../../core
  * GameLoop class that manages the main game loop with tick events and optional rendering.
  * It supports both client and server types, emitting appropriate events for both.
  */
-export class GameLoop<T extends DriverType | Manual = DriverType> {
+export class GameLoop<T extends GameLoopType = DriverType> {
     private _driver?: LoopDriver;
     private _input: InputManager;
     private readonly _isClient: boolean;
@@ -40,12 +40,12 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
     private _renderData = { deltaTime: 0, alpha: 0, input: null as InputSnapshot };
 
     constructor(public options: GameLoopOptions<T>) {
-        const CLIENT_TYPES = new Set<DriverType | Manual>([
+        const CLIENT_TYPES = new Set<GameLoopType>([
             "client",
             "manual-client",
         ]);
 
-        const MANUAL_TYPES = new Set<DriverType | Manual>([
+        const MANUAL_TYPES = new Set<GameLoopType>([
             "manual-client",
             "manual-server",
         ]);
@@ -192,7 +192,7 @@ export class GameLoop<T extends DriverType | Manual = DriverType> {
     }
 }
 
-interface GameLoopOptions<T extends DriverType | Manual> {
+interface GameLoopOptions<T extends GameLoopType> {
     tickRate: number;
     type: T;
     onTick?: (
@@ -328,3 +328,5 @@ type ServerEvents = BaseEvents;
 type Manual = "manual-client" | "manual-server";
 type ClientLike = "client" | "manual-client";
 type EventsFor<T> = T extends ClientLike ? ClientEvents : ServerEvents;
+
+export type GameLoopType = DriverType | Manual;
