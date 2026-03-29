@@ -8,7 +8,8 @@
         "build": "vite build"
     },
     "dependencies": {
-        "pixi.js": "^8.0.0"
+        "pixi.js": "^8.0.0",
+        "murow": "workspace:*"
     },
     "devDependencies": {
         "vite": "^5.0.0",

@@ -1,18 +1,18 @@
-import { GameLoop, World, type DriverType } from "../../../../packages/murow/src";
+import { GameLoop, World, type GameLoopType } from "murow";
 import { Components } from "./components";
 import { Constants } from "./constants";
 import { Enums } from "./enums";
 import { Grid } from "./grid";
 
-interface GameProps {
-    type: DriverType;
+interface GameProps<T extends GameLoopType> {
+    type: T;
 }
 
-export class Game extends GameLoop {
+export class Game<T extends GameLoopType> extends GameLoop<T> {
     world: World;
     grid: Grid;
 
-    constructor({ type }: GameProps) {
+    constructor({ type }: GameProps<T>) {
         super({ tickRate: Constants.TICK_RATE, type });
 
         this.world = new World({

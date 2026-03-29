@@ -1,4 +1,4 @@
-import { lerp, World } from "../../../../packages/murow/src";
+import { lerp, World } from "murow";
 import { Shared } from "../shared";
 import { Application, Graphics, Sprite, Texture } from "pixi.js";
 
