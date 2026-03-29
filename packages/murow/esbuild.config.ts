@@ -3,7 +3,7 @@ import { Glob } from 'bun';
 
 const exclude = [
     '.test.ts',
-    'types.ts',
+    // 'types.ts',
     'example.ts'
 ];
 

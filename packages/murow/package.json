@@ -106,7 +106,7 @@
     "./renderer/*": {
       "types": "./dist/types/renderer/*.d.ts",
       "import": "./dist/esm/renderer/index.js",
-      "require": "./dist/cjs/renderer/index.js"
+      "require": "./dist/cjs/renderer/*/index.js"
     },
     "./webgpu": {
       "types": "./dist/webgpu/types/index.d.ts",
