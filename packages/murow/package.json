@@ -107,14 +107,13 @@
     },
     "./renderer/*": {
       "types": "./dist/types/renderer/*.d.ts",
-      "import": "./dist/esm/renderer/*/index.js",
-      "require": "./dist/cjs/renderer/*/index.js"
+      "import": "./dist/esm/renderer/index.js",
+      "require": "./dist/cjs/renderer/index.js"
     },
     "./webgpu": {
       "types": "./dist/webgpu/types/index.d.ts",
       "import": "./dist/webgpu/esm/index.js",
-      "require": "./dist/webgpu/cjs/index.js",
-      "default": "./dist/webgpu/esm/index.js"
+      "require": "./dist/webgpu/cjs/index.js"
     }
   },
   "optionalDependencies": {
