@@ -104,6 +104,18 @@ export class Camera3D implements Camera3DState {
         this.aspect = width / height;
     }
 
+    setPosition(x: number, y: number, z: number): void {
+        this.position[0] = x;
+        this.position[1] = y;
+        this.position[2] = z;
+    }
+
+    setTarget(x: number, y: number, z: number): void {
+      this.target[0] = x;
+      this.target[1] = y;
+      this.target[2] = z;
+    }
+
     /**
      * Move the camera in local space. Zero allocations.
      * @param right   Movement along the camera's right axis (positive = right)

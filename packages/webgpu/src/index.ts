@@ -14,7 +14,7 @@ export { SpriteAccessor } from './2d/sprite-accessor';
 
 // 3D Renderer
 export { WebGPU3DRenderer } from './3d/renderer';
-export type { ModelHandle, MeshInstanceHandle, MeshInstanceOptions } from './3d/renderer';
+export type { ModelData, ModelHandle, MeshInstanceHandle, MeshInstanceOptions } from './3d/renderer';
 export { MorphAnimation } from './3d/morph-animation';
 export type { MorphClip, MorphState, MorphClipConfig } from './3d/morph-animation';
 

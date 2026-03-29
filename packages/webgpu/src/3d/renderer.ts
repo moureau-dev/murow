@@ -23,10 +23,14 @@ import {
     MeshUniforms,
 } from '../core/types';
 import { Camera3D } from '../camera/camera-3d';
+import { createTextureFromBitmap } from '../spritesheet/spritesheet';
 import {
     createMeshLayout,
     createMeshVertex,
     createMeshFragment,
+    createTextureBindGroupLayout,
+    createTexturedMeshVertex,
+    createTexturedMeshFragment,
     type MeshDataLayout,
 } from './shader';
 
@@ -39,6 +43,14 @@ const DYN_CURR_RX = 9, DYN_CURR_RY = 10, DYN_CURR_RZ = 11;
 // --- Static offset constants ---
 const STAT_SX = 0, STAT_SY = 1, STAT_SZ = 2;
 const STAT_CR = 3, STAT_CG = 4, STAT_CB = 5;
+
+export interface ModelData {
+    positions: Float32Array;
+    normals?: Float32Array;
+    uvs?: Float32Array;
+    indices?: Uint16Array | Uint32Array;
+    texture?: ImageBitmap;
+}
 
 export interface ModelHandle {
     readonly id: number;
@@ -101,6 +113,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     // Depth texture
     private depthTexture!: GPUTexture;
 
+    // Textured pipeline
+    private rawTexturedPipeline!: GPURenderPipeline;
+
     // Models (vertex + index buffers)
     private models: {
         rawVertexBuffer: GPUBuffer;
@@ -109,6 +124,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         indexCount: number;
         indexFormat: GPUIndexFormat;
         boundingRadius: number;
+        hasTexture: boolean;
+        textureBindGroup: GPUBindGroup | null;
     }[] = [];
     private nextModelId = 0;
 
@@ -152,52 +169,60 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             usage: GPUTextureUsage.RENDER_ATTACHMENT,
         });
 
-        // TypeGPU layout + shaders
+        // TypeGPU layouts + shaders
         this.meshLayout = createMeshLayout(this.maxModels);
+
+        // Shared depth/stencil and primitive config
+        const depthStencil: GPUDepthStencilState = {
+            format: 'depth24plus',
+            depthWriteEnabled: true,
+            depthCompare: 'less',
+        };
+        const primitive: GPUPrimitiveState = {
+            topology: 'triangle-list',
+            cullMode: 'none',
+        };
+
+        // Vertex buffer layout: position(3f) + normal(3f) + uv(2f) = 32 bytes
+        const vertexBufferLayout: GPUVertexBufferLayout = {
+            arrayStride: 32,
+            stepMode: 'vertex',
+            attributes: [
+                { shaderLocation: 0, offset: 0, format: 'float32x3' },  // position
+                { shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
+                { shaderLocation: 2, offset: 24, format: 'float32x2' }, // uv
+            ],
+        };
+
+        // --- Untextured pipeline (color only) ---
         const vertex = createMeshVertex(this.meshLayout);
         const fragment = createMeshFragment(this.meshLayout);
-
-        // Resolve WGSL from TypeGPU shaders
-        const { code: wgslCode, usedBindGroupLayouts } = tgpu.resolveWithContext(
-            [vertex, fragment],
-        );
+        const { code: wgslCode } = tgpu.resolveWithContext([vertex, fragment]);
         const shaderModule = this.device.createShaderModule({ code: wgslCode });
-
-        // Get the raw bind group layout from TypeGPU
         const rawBGL = this.root.unwrap(this.meshLayout);
 
-        // Create pipeline with raw device (we need manual vertex buffer layout)
-        const pipelineLayout = this.device.createPipelineLayout({
-            bindGroupLayouts: [rawBGL],
+        this.rawPipeline = this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [rawBGL] }),
+            vertex: { module: shaderModule, buffers: [vertexBufferLayout] },
+            fragment: { module: shaderModule, targets: [{ format: this.format }] },
+            primitive,
+            depthStencil,
         });
 
-        this.rawPipeline = this.device.createRenderPipeline({
-            layout: pipelineLayout,
-            vertex: {
-                module: shaderModule,
-                buffers: [{
-                    // Interleaved: position(3f) + normal(3f) = 24 bytes
-                    arrayStride: 24,
-                    stepMode: 'vertex',
-                    attributes: [
-                        { shaderLocation: 0, offset: 0, format: 'float32x3' },  // position
-                        { shaderLocation: 1, offset: 12, format: 'float32x3' }, // normal
-                    ],
-                }],
-            },
-            fragment: {
-                module: shaderModule,
-                targets: [{ format: this.format }],
-            },
-            primitive: {
-                topology: 'triangle-list',
-                cullMode: 'back',
-            },
-            depthStencil: {
-                format: 'depth24plus',
-                depthWriteEnabled: true,
-                depthCompare: 'less',
-            },
+        // --- Textured pipeline (texture + color tint) ---
+        const texLayout = createTextureBindGroupLayout();
+        const texVertex = createTexturedMeshVertex(this.meshLayout);
+        const texFragment = createTexturedMeshFragment(this.meshLayout, texLayout);
+        const { code: texWgslCode } = tgpu.resolveWithContext([texVertex, texFragment]);
+        const texShaderModule = this.device.createShaderModule({ code: texWgslCode });
+        const rawTexBGL = this.root.unwrap(texLayout);
+
+        this.rawTexturedPipeline = this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [rawBGL, rawTexBGL] }),
+            vertex: { module: texShaderModule, buffers: [vertexBufferLayout] },
+            fragment: { module: texShaderModule, targets: [{ format: this.format }] },
+            primitive,
+            depthStencil,
         });
 
         // Buffers
@@ -277,11 +302,30 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     }
 
     /**
-     * Register a model (vertex + index data). Returns a handle for addInstance().
+     * Register a model. Returns a handle for addInstance().
+     *
+     * ```ts
+     * const hero = renderer.loadModel({
+     *     positions: new Float32Array([...]),
+     *     normals: new Float32Array([...]),  // optional — auto-computed from faces
+     *     uvs: new Float32Array([...]),       // optional
+     *     indices: new Uint16Array([...]),    // optional
+     *     texture: myImageBitmap,             // optional
+     * });
+     * ```
      */
-    loadModel(positions: Float32Array, normals: Float32Array, indices?: Uint16Array | Uint32Array): ModelHandle {
-        // Compute bounding radius (max distance from origin)
+    loadModel(data: ModelData): ModelHandle {
+        const { positions, indices, texture } = data;
         const vertexCount = positions.length / 3;
+
+        // Auto-compute normals if not provided
+        const normals = data.normals ?? this.computeNormals(positions, indices);
+
+        // UVs: use provided or default to zeros
+        const uvs = data.uvs ?? new Float32Array(vertexCount * 2);
+        const hasTexture = !!texture;
+
+        // Compute bounding radius (max distance from origin)
         let maxRadiusSq = 0;
         for (let i = 0; i < vertexCount; i++) {
             const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
@@ -290,15 +334,18 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         }
         const boundingRadius = Math.sqrt(maxRadiusSq);
 
-        // Interleave position + normal into a single buffer
-        const interleaved = new Float32Array(vertexCount * 6);
+        // Interleave position(3f) + normal(3f) + uv(2f) = 8 floats per vertex
+        const interleaved = new Float32Array(vertexCount * 8);
         for (let i = 0; i < vertexCount; i++) {
-            interleaved[i * 6 + 0] = positions[i * 3 + 0];
-            interleaved[i * 6 + 1] = positions[i * 3 + 1];
-            interleaved[i * 6 + 2] = positions[i * 3 + 2];
-            interleaved[i * 6 + 3] = normals[i * 3 + 0];
-            interleaved[i * 6 + 4] = normals[i * 3 + 1];
-            interleaved[i * 6 + 5] = normals[i * 3 + 2];
+            const o = i * 8;
+            interleaved[o + 0] = positions[i * 3 + 0];
+            interleaved[o + 1] = positions[i * 3 + 1];
+            interleaved[o + 2] = positions[i * 3 + 2];
+            interleaved[o + 3] = normals[i * 3 + 0];
+            interleaved[o + 4] = normals[i * 3 + 1];
+            interleaved[o + 5] = normals[i * 3 + 2];
+            interleaved[o + 6] = uvs[i * 2 + 0];
+            interleaved[o + 7] = uvs[i * 2 + 1];
         }
 
         const vertexBuffer = this.device.createBuffer({
@@ -313,8 +360,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         let indexCount = 0;
         if (indices) {
             indexCount = indices.length;
+            // Buffer size must be aligned to 4 bytes (COPY_BUFFER_ALIGNMENT)
+            const alignedSize = Math.ceil(indices.byteLength / 4) * 4;
             indexBuffer = this.device.createBuffer({
-                size: indices.byteLength,
+                size: alignedSize,
                 usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
                 mappedAtCreation: true,
             });
@@ -326,6 +375,24 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             indexBuffer.unmap();
         }
 
+        // Create per-model texture bind group if texture provided
+        let textureBindGroup: GPUBindGroup | null = null;
+        if (texture) {
+            const { texture: gpuTexture, view } = createTextureFromBitmap(this.device, texture);
+            const sampler = this.device.createSampler({
+                magFilter: 'linear',
+                minFilter: 'linear',
+                mipmapFilter: 'linear',
+            });
+            textureBindGroup = this.device.createBindGroup({
+                layout: this.rawTexturedPipeline.getBindGroupLayout(1),
+                entries: [
+                    { binding: 0, resource: view },
+                    { binding: 1, resource: sampler },
+                ],
+            });
+        }
+
         const id = this.nextModelId++;
         this.models[id] = {
             rawVertexBuffer: vertexBuffer,
@@ -334,73 +401,310 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             indexCount,
             indexFormat: indices instanceof Uint32Array ? 'uint32' as const : 'uint16' as const,
             boundingRadius,
+            hasTexture,
+            textureBindGroup,
         };
 
         return { id, vertexCount, indexCount };
     }
 
     /**
-     * Load a GLTF model from a URL. Parses the first mesh's positions, normals, and indices.
+     * Auto-compute flat normals from triangle faces.
      */
-    async loadGltf(url: string): Promise<ModelHandle> {
+    private computeNormals(positions: Float32Array, indices?: Uint16Array | Uint32Array): Float32Array {
+        const vertexCount = positions.length / 3;
+        const normals = new Float32Array(vertexCount * 3);
+        const triCount = indices ? indices.length / 3 : vertexCount / 3;
+
+        for (let t = 0; t < triCount; t++) {
+            const i0 = indices ? indices[t * 3 + 0] : t * 3 + 0;
+            const i1 = indices ? indices[t * 3 + 1] : t * 3 + 1;
+            const i2 = indices ? indices[t * 3 + 2] : t * 3 + 2;
+
+            // Edge vectors
+            const ax = positions[i1 * 3] - positions[i0 * 3];
+            const ay = positions[i1 * 3 + 1] - positions[i0 * 3 + 1];
+            const az = positions[i1 * 3 + 2] - positions[i0 * 3 + 2];
+            const bx = positions[i2 * 3] - positions[i0 * 3];
+            const by = positions[i2 * 3 + 1] - positions[i0 * 3 + 1];
+            const bz = positions[i2 * 3 + 2] - positions[i0 * 3 + 2];
+
+            // Cross product (area-weighted)
+            const nx = ay * bz - az * by;
+            const ny = az * bx - ax * bz;
+            const nz = ax * by - ay * bx;
+
+            // Accumulate per vertex (smooth normals)
+            for (const idx of [i0, i1, i2]) {
+                normals[idx * 3 + 0] += nx;
+                normals[idx * 3 + 1] += ny;
+                normals[idx * 3 + 2] += nz;
+            }
+        }
+
+        // Normalize
+        for (let i = 0; i < vertexCount; i++) {
+            const o = i * 3;
+            const len = Math.sqrt(normals[o] * normals[o] + normals[o + 1] * normals[o + 1] + normals[o + 2] * normals[o + 2]);
+            if (len > 0) {
+                const inv = 1 / len;
+                normals[o] *= inv;
+                normals[o + 1] *= inv;
+                normals[o + 2] *= inv;
+            } else {
+                normals[o + 1] = 1; // default up
+            }
+        }
+
+        return normals;
+    }
+
+    /**
+     * Load a glTF/GLB model from a URL. Returns one ModelHandle per primitive.
+     * Most models have multiple primitives (body parts, material groups, etc.).
+     *
+     * ```ts
+     * const parts = await renderer.loadGltf('assets/hero.glb');
+     * // Spawn all parts as one unit
+     * for (const part of parts) {
+     *     renderer.addInstance({ model: part, x: 0, y: 0, z: 0 });
+     * }
+     * ```
+     */
+    async loadGltf(url: string): Promise<ModelHandle[]> {
         const response = await fetch(url);
-        const gltf = await response.json();
         const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
+
+        let gltf: any;
+        let glbBinaryChunk: ArrayBuffer | null = null;
+
+        // Detect .glb (binary) vs .gltf (JSON)
+        const arrayBuffer = await response.arrayBuffer();
+        const magic = new Uint32Array(arrayBuffer, 0, 1)[0];
+
+        if (magic === 0x46546C67) {
+            // GLB: magic "glTF" (little-endian 0x46546C67)
+            let offset = 12; // past header
+
+            // Read chunks
+            while (offset < arrayBuffer.byteLength) {
+                const chunkLength = new Uint32Array(arrayBuffer, offset, 1)[0];
+                const chunkType = new Uint32Array(arrayBuffer, offset + 4, 1)[0];
+                offset += 8;
+
+                if (chunkType === 0x4E4F534A) {
+                    // JSON chunk
+                    const jsonBytes = new Uint8Array(arrayBuffer, offset, chunkLength);
+                    gltf = JSON.parse(new TextDecoder().decode(jsonBytes));
+                } else if (chunkType === 0x004E4942) {
+                    // BIN chunk
+                    glbBinaryChunk = arrayBuffer.slice(offset, offset + chunkLength);
+                }
+
+                offset += chunkLength;
+            }
+
+            if (!gltf) throw new Error(`Invalid GLB: no JSON chunk in ${url}`);
+        } else {
+            // Plain .gltf JSON
+            gltf = JSON.parse(new TextDecoder().decode(arrayBuffer));
+        }
 
         if (!gltf.meshes?.length) throw new Error(`No meshes found in ${url}`);
 
-        const mesh = gltf.meshes[0];
-        const primitive = mesh.primitives[0];
-
         // Load binary buffers
-        const buffers = await Promise.all(
-            gltf.buffers.map(async (buf: any) => {
+        const buffers: ArrayBuffer[] = [];
+        for (let i = 0; i < (gltf.buffers?.length ?? 0); i++) {
+            const buf = gltf.buffers[i];
+            if (glbBinaryChunk && (!buf.uri || buf.uri === '')) {
+                buffers.push(glbBinaryChunk);
+            } else if (buf.uri) {
                 const r = await fetch(baseUrl + buf.uri);
-                return r.arrayBuffer();
-            }),
-        );
+                buffers.push(await r.arrayBuffer());
+            }
+        }
 
-        // Helper: extract typed array from accessor
-        const getAccessorData = (accessorIndex: number): { data: Float32Array | Uint16Array | Uint32Array; count: number; elementSize: number } => {
+        // Helper: extract typed array from accessor (handles interleaved/strided bufferViews)
+        const getAccessorData = (accessorIndex: number): { data: Float32Array | Uint16Array | Uint32Array | Uint8Array; count: number; elementSize: number } => {
             const accessor = gltf.accessors[accessorIndex];
             const bufferView = gltf.bufferViews[accessor.bufferView];
             const buffer = buffers[bufferView.buffer];
 
-            const typeMap: Record<number, any> = { 5126: Float32Array, 5123: Uint16Array, 5125: Uint32Array };
+            const typeMap: Record<number, any> = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+            const byteSizeMap: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
             const sizeMap: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
 
             const TypedArray = typeMap[accessor.componentType];
+            const componentBytes = byteSizeMap[accessor.componentType];
             const elementSize = sizeMap[accessor.type] ?? 1;
-            const byteOffset = (bufferView.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
-            const data = new TypedArray(buffer, byteOffset, accessor.count * elementSize);
+            const baseOffset = (bufferView.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
+            const stride = bufferView.byteStride ?? (componentBytes * elementSize);
+            const tightStride = componentBytes * elementSize;
 
-            return { data, count: accessor.count, elementSize };
+            // If tightly packed, read directly
+            if (stride === tightStride) {
+                const data = new TypedArray(buffer, baseOffset, accessor.count * elementSize);
+                return { data, count: accessor.count, elementSize };
+            }
+
+            // Strided: de-interleave into a tightly packed array
+            const out = new TypedArray(accessor.count * elementSize);
+            const src = new Uint8Array(buffer);
+            const dst = new Uint8Array(out.buffer);
+            for (let i = 0; i < accessor.count; i++) {
+                const srcOff = baseOffset + i * stride;
+                const dstOff = i * tightStride;
+                for (let b = 0; b < tightStride; b++) {
+                    dst[dstOff + b] = src[srcOff + b];
+                }
+            }
+
+            return { data: out, count: accessor.count, elementSize };
         };
 
-        // Positions (required)
-        const posAccess = getAccessorData(primitive.attributes.POSITION);
-        const positions = new Float32Array(posAccess.data as Float32Array);
+        // Pre-load all unique textures (cache by image index to avoid duplicates)
+        const textureCache = new Map<number, ImageBitmap>();
+        const loadTexture = async (imageIndex: number): Promise<ImageBitmap | undefined> => {
+            if (textureCache.has(imageIndex)) return textureCache.get(imageIndex)!;
+            const image = gltf.images?.[imageIndex];
+            if (!image) return undefined;
 
-        // Normals (optional, default to up)
-        let normals: Float32Array;
-        if (primitive.attributes.NORMAL !== undefined) {
-            const normAccess = getAccessorData(primitive.attributes.NORMAL);
-            normals = new Float32Array(normAccess.data as Float32Array);
-        } else {
-            normals = new Float32Array(posAccess.count * 3);
-            for (let i = 0; i < posAccess.count; i++) normals[i * 3 + 1] = 1; // default Y-up
+            let blob: Blob | undefined;
+            if (image.bufferView !== undefined) {
+                const bv = gltf.bufferViews[image.bufferView];
+                const buf = buffers[bv.buffer];
+                const data = new Uint8Array(buf, bv.byteOffset ?? 0, bv.byteLength);
+                blob = new Blob([data], { type: image.mimeType ?? 'image/png' });
+            } else if (image.uri) {
+                const imgUrl = image.uri.startsWith('data:') ? image.uri : baseUrl + image.uri;
+                blob = await (await fetch(imgUrl)).blob();
+            }
+
+            if (blob) {
+                const bmp = await createImageBitmap(blob);
+                textureCache.set(imageIndex, bmp);
+                return bmp;
+            }
+            return undefined;
+        };
+
+        // --- Matrix helpers (used for skinning + mesh node transform) ---
+        const getNodeLocalMatrix = (node: any): Float32Array => {
+            const m = new Float32Array(16);
+            if (node.matrix) {
+                m.set(node.matrix);
+                return m;
+            }
+            const t = node.translation ?? [0, 0, 0];
+            const r = node.rotation ?? [0, 0, 0, 1];
+            const s = node.scale ?? [1, 1, 1];
+
+            const qx = r[0], qy = r[1], qz = r[2], qw = r[3];
+            const xx = qx * qx, yy = qy * qy, zz = qz * qz;
+            const xy = qx * qy, xz = qx * qz, yz = qy * qz;
+            const wx = qw * qx, wy = qw * qy, wz = qw * qz;
+
+            m[0]  = (1 - 2 * (yy + zz)) * s[0];
+            m[1]  = 2 * (xy + wz) * s[0];
+            m[2]  = 2 * (xz - wy) * s[0];
+            m[3]  = 0;
+            m[4]  = 2 * (xy - wz) * s[1];
+            m[5]  = (1 - 2 * (xx + zz)) * s[1];
+            m[6]  = 2 * (yz + wx) * s[1];
+            m[7]  = 0;
+            m[8]  = 2 * (xz + wy) * s[2];
+            m[9]  = 2 * (yz - wx) * s[2];
+            m[10] = (1 - 2 * (xx + yy)) * s[2];
+            m[11] = 0;
+            m[12] = t[0];
+            m[13] = t[1];
+            m[14] = t[2];
+            m[15] = 1;
+            return m;
+        };
+
+        // --- Mesh node transform (e.g. scale: [-1,1,1] for X mirror) ---
+        const meshNodeIndex = gltf.nodes?.findIndex((n: any) => n.mesh === 0);
+        let meshNodeMatrix: Float32Array | null = null;
+        if (meshNodeIndex !== -1 && meshNodeIndex !== undefined) {
+            const meshNode = gltf.nodes[meshNodeIndex];
+            if (meshNode.scale || meshNode.rotation || meshNode.translation || meshNode.matrix) {
+                meshNodeMatrix = getNodeLocalMatrix(meshNode);
+            }
         }
 
-        // Indices (optional)
-        let indices: Uint16Array | Uint32Array | undefined;
-        if (primitive.indices !== undefined) {
-            const idxAccess = getAccessorData(primitive.indices);
-            indices = idxAccess.data.length > 65535
-                ? new Uint32Array(idxAccess.data)
-                : new Uint16Array(idxAccess.data);
+        // --- Load all primitives from the first mesh ---
+        const mesh = gltf.meshes[0];
+        const handles: ModelHandle[] = [];
+
+        for (const primitive of mesh.primitives) {
+            // Positions (required)
+            const posAccess = getAccessorData(primitive.attributes.POSITION);
+            const positions = new Float32Array(posAccess.data as Float32Array);
+
+            // Normals (optional)
+            let normals: Float32Array | undefined;
+            if (primitive.attributes.NORMAL !== undefined) {
+                normals = new Float32Array(getAccessorData(primitive.attributes.NORMAL).data as Float32Array);
+            }
+
+            // UVs (optional)
+            let uvs: Float32Array | undefined;
+            if (primitive.attributes.TEXCOORD_0 !== undefined) {
+                uvs = new Float32Array(getAccessorData(primitive.attributes.TEXCOORD_0).data as Float32Array);
+            }
+
+            // Indices (optional)
+            let indices: Uint16Array | Uint32Array | undefined;
+            if (primitive.indices !== undefined) {
+                const idxAccess = getAccessorData(primitive.indices);
+                indices = idxAccess.data.length > 65535
+                    ? new Uint32Array(idxAccess.data)
+                    : new Uint16Array(idxAccess.data);
+            }
+
+            // TODO: bind-pose baking (skeletal animation) — needs GPU skinning implementation
+
+            // Apply mesh node transform (e.g. scale [-1,1,1] for X mirror)
+            if (meshNodeMatrix) {
+                const mm = meshNodeMatrix;
+                const vertexCount = positions.length / 3;
+                for (let v = 0; v < vertexCount; v++) {
+                    const o = v * 3;
+                    const px = positions[o], py = positions[o + 1], pz = positions[o + 2];
+                    positions[o]     = mm[0] * px + mm[4] * py + mm[8]  * pz + mm[12];
+                    positions[o + 1] = mm[1] * px + mm[5] * py + mm[9]  * pz + mm[13];
+                    positions[o + 2] = mm[2] * px + mm[6] * py + mm[10] * pz + mm[14];
+
+                    if (normals) {
+                        const nx = normals[o], ny = normals[o + 1], nz = normals[o + 2];
+                        const tnx = mm[0] * nx + mm[4] * ny + mm[8]  * nz;
+                        const tny = mm[1] * nx + mm[5] * ny + mm[9]  * nz;
+                        const tnz = mm[2] * nx + mm[6] * ny + mm[10] * nz;
+                        const len = Math.sqrt(tnx * tnx + tny * tny + tnz * tnz);
+                        if (len > 0) {
+                            normals[o] = tnx / len;
+                            normals[o + 1] = tny / len;
+                            normals[o + 2] = tnz / len;
+                        }
+                    }
+                }
+            }
+
+            // Texture (optional)
+            let texture: ImageBitmap | undefined;
+            if (primitive.material !== undefined) {
+                const material = gltf.materials?.[primitive.material];
+                const texIndex = material?.pbrMetallicRoughness?.baseColorTexture?.index;
+                if (texIndex !== undefined && gltf.textures?.[texIndex]) {
+                    texture = await loadTexture(gltf.textures[texIndex].source);
+                }
+            }
+
+            handles.push(this.loadModel({ positions, normals, uvs, indices, texture }));
         }
 
-        return this.loadModel(positions, normals, indices);
+        return handles;
     }
 
     addInstance(opts: MeshInstanceOptions): MeshInstanceHandle {
@@ -596,15 +900,24 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             },
         });
 
-        pass.setPipeline(this.rawPipeline);
-        pass.setBindGroup(0, this.rawBindGroup);
+        // Draw per model type, switching pipeline for textured vs untextured
+        let currentPipeline: GPURenderPipeline | null = null;
 
-        // Draw per model type
         for (const batch of batchOffsets) {
             const model = this.models[batch.modelId];
             if (!model) continue;
 
-            // Vertex buffer: interleaved pos(3f) + normal(3f) = 24 bytes stride
+            const pipeline = model.hasTexture ? this.rawTexturedPipeline : this.rawPipeline;
+            if (pipeline !== currentPipeline) {
+                pass.setPipeline(pipeline);
+                pass.setBindGroup(0, this.rawBindGroup);
+                currentPipeline = pipeline;
+            }
+
+            if (model.hasTexture && model.textureBindGroup) {
+                pass.setBindGroup(1, model.textureBindGroup);
+            }
+
             pass.setVertexBuffer(0, model.rawVertexBuffer);
 
             if (model.rawIndexBuffer) {
@@ -676,6 +989,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             m.rawVertexBuffer.destroy();
             m.rawIndexBuffer?.destroy();
         }
+        this.models.length = 0;
         this.root?.destroy();
     }
 }
