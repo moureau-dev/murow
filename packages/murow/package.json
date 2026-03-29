@@ -7,12 +7,10 @@
   "sideEffects": false,
   "scripts": {
     "build": "npm run build:types && npm run build:js",
-    "build:js:type": "esbuild $(find src -name \"*.ts\" ! -name \"*.test.ts\" ! -name \"types.ts\") --platform=neutral --minify",
-    "build:esm": "bun run build:js:type --outdir=dist/esm --format=esm",
-    "build:cjs": "bun run build:js:type --outdir=dist/cjs --format=cjs",
-    "build:js": "bun run build:esm && bun run build:cjs",
+    "build:js": "bun run esbuild.config.ts",
     "build:types": "tsc --emitDeclarationOnly --project tsconfig.json",
     "dev": "npm run build:js -- --watch",
+    "prepublishOnly": "npm run build",
     "test": "bun test ./src"
   },
   "keywords": [
