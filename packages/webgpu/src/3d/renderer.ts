@@ -179,6 +179,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private skinnedModels: {
         animation: SkeletalAnimation;
         jointCount: number;
+        boundingRadius: number; // max distance from root to any joint in bind pose
     }[] = [];
 
     // Skinned pipeline resources
@@ -900,10 +901,24 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
             // Register the skeletal animation controller
             const animation = new SkeletalAnimation(skinData, animClips, gltf.nodes);
+
+            // Compute bounding radius from IBM translations (bind-pose joint positions)
+            const ibm = skinData.inverseBindMatrices;
+            let maxRadSq = 0;
+            for (let j = 0; j < skinData.jointCount; j++) {
+                // IBM translation column = -bindPosePosition (column 3: indices 12,13,14)
+                const tx = ibm[j * 16 + 12], ty = ibm[j * 16 + 13], tz = ibm[j * 16 + 14];
+                const rSq = tx * tx + ty * ty + tz * tz;
+                if (rSq > maxRadSq) maxRadSq = rSq;
+            }
+            // Add 50% margin for animation movement
+            const skinnedRadius = Math.sqrt(maxRadSq) * 1.5;
+
             skinnedModelSkinIndex = this.skinnedModels.length;
             this.skinnedModels.push({
                 animation,
                 jointCount: skinData.jointCount,
+                boundingRadius: skinnedRadius,
             });
 
             // Pack animation data for GPU compute
@@ -1545,10 +1560,29 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             if (!model) return;
             const batchStart = skinnedIndexOffset;
 
-            // Skip frustum culling for skinned models — bounding radius is unreliable
-            // since bone transforms move vertices far from their bind-pose positions
+            // Frustum cull skinned instances using per-skin bounding radius
+            const skinModel = model.skinIndex >= 0 ? this.skinnedModels[model.skinIndex] : null;
+            const baseRadius = skinModel?.boundingRadius ?? 10;
+
             for (let i = 0; i < count; i++) {
-                this.skinnedSlotIndexData[skinnedIndexOffset++] = instances[i];
+                const slot = instances[i];
+                const base = slot * DYNAMIC_MESH_FLOATS;
+                const sBase = slot * SKINNED_STATIC_MESH_FLOATS;
+
+                const cx = sDyn[base + DYN_CURR_PX];
+                const cy = sDyn[base + DYN_CURR_PY];
+                const cz = sDyn[base + DYN_CURR_PZ];
+
+                // Scale the bounding radius by instance scale
+                const sx = sStat[sBase + SSTAT_SX];
+                const sy = sStat[sBase + SSTAT_SY];
+                const sz = sStat[sBase + SSTAT_SZ];
+                const maxScale = Math.abs(sx) > Math.abs(sy) ? (Math.abs(sx) > Math.abs(sz) ? Math.abs(sx) : Math.abs(sz)) : (Math.abs(sy) > Math.abs(sz) ? Math.abs(sy) : Math.abs(sz));
+                const radius = baseRadius * maxScale;
+
+                if (this.isInFrustum(cx, cy, cz, radius)) {
+                    this.skinnedSlotIndexData[skinnedIndexOffset++] = slot;
+                }
             }
 
             const visibleCount = skinnedIndexOffset - batchStart;
