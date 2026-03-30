@@ -4,15 +4,15 @@
  *
  * Memory (10k sprites, 3 layers × 4 sheets = 12 buckets):
  *   buckets:       12 × 10,000 × 4 bytes = ~480 KB (lazy, only used buckets)
- *   bucketSizes:   8192 × 4 bytes        = 32 KB
- *   activeBuckets: 8192 × 2 bytes        = 16 KB
- *   Total: ~528 KB base + buckets as needed
+ *   bucketSizes:   16384 × 4 bytes       = 64 KB
+ *   activeBuckets: 16384 × 2 bytes       = 32 KB
+ *   Total: ~576 KB base + buckets as needed
  *
- * MAX_SHEETS = 32 supports up to 32 unique model/spritesheet IDs per layer.
+ * MAX_SHEETS = 64 supports up to 64 unique model/spritesheet IDs per layer.
  */
 export class SparseBatcher {
     private static readonly MAX_LAYERS = 256;
-    private static readonly MAX_SHEETS = 32;
+    private static readonly MAX_SHEETS = 64;
     private static readonly MAX_BUCKETS = SparseBatcher.MAX_LAYERS * SparseBatcher.MAX_SHEETS;
     private readonly BUCKET_INITIAL_SIZE = 256;
 

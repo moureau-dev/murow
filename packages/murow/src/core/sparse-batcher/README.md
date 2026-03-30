@@ -2,7 +2,7 @@
 
 A zero-GC draw-call batcher that organizes instance slots into `[layer][sheetId]` buckets for efficient batched rendering. Only allocates buckets that are actually used — most games need fewer than 10.
 
-Supports up to **256 layers × 32 sheet/model IDs** per batcher (8192 unique buckets). The `sheetId` maps to spritesheet IDs in 2D or model IDs in 3D.
+Supports up to **256 layers × 64 sheet/model IDs** per batcher (16384 unique buckets). The `sheetId` maps to spritesheet IDs in 2D or model IDs in 3D.
 
 ## Features
 
@@ -39,7 +39,7 @@ batcher.clear();
 
 ## API
 
-- `add(layer, sheetId, slot)` — Register a slot in the given bucket. `sheetId` must be < 32.
+- `add(layer, sheetId, slot)` — Register a slot in the given bucket. `sheetId` must be < 64.
 - `remove(layer, sheetId, slot)` — Remove a slot from its bucket (O(1) swap-and-pop).
 - `each(cb)` — Iterate active buckets in ascending layer order. Callback receives `(sheetId, instances: Uint32Array, count)`.
 - `getActiveCount()` — Number of non-empty buckets.
@@ -52,10 +52,10 @@ Base allocation per batcher (lazy buckets — only used buckets are allocated):
 
 | Data          | Size     |
 |---------------|----------|
-| Bucket sizes  | 32 KB    |
-| Active list   | 16 KB    |
-| Sort buffer   | 16 KB    |
-| **Base total**| **~64 KB** |
+| Bucket sizes  | 64 KB    |
+| Active list   | 32 KB    |
+| Sort buffer   | 32 KB    |
+| **Base total**| **~128 KB** |
 | Buckets (lazy)| ~40 KB per active bucket (at 10k slots) |
 
 With 10k sprites across 3 layers × 4 sheets (12 active buckets): **~544 KB** total.
