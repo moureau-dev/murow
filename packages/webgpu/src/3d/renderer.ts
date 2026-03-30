@@ -1329,7 +1329,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                     const clip = skinModel.animation.getClip(animState.clipId);
                     if (clip && clip.duration > 0 && animState.time >= clip.duration) {
                         animState.onEnd();
-                        if (clip.loop) {
+                        if (animState.loop) {
                             animState.time %= clip.duration;
                         } else {
                             animState.time = clip.duration - 0.0001;
