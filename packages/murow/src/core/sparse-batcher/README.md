@@ -1,6 +1,8 @@
 # SparseBatcher
 
-A zero-GC draw-call batcher that organizes instance slots into `[layer][spritesheet]` buckets for efficient batched rendering. Only allocates buckets that are actually used — most games need fewer than 10.
+A zero-GC draw-call batcher that organizes instance slots into `[layer][sheetId]` buckets for efficient batched rendering. Only allocates buckets that are actually used — most games need fewer than 10.
+
+Supports up to **256 layers × 32 sheet/model IDs** per batcher (8192 unique buckets). The `sheetId` maps to spritesheet IDs in 2D or model IDs in 3D.
 
 ## Features
 
@@ -37,7 +39,7 @@ batcher.clear();
 
 ## API
 
-- `add(layer, sheetId, slot)` — Register a slot in the given bucket.
+- `add(layer, sheetId, slot)` — Register a slot in the given bucket. `sheetId` must be < 32.
 - `remove(layer, sheetId, slot)` — Remove a slot from its bucket (O(1) swap-and-pop).
 - `each(cb)` — Iterate active buckets in ascending layer order. Callback receives `(sheetId, instances: Uint32Array, count)`.
 - `getActiveCount()` — Number of non-empty buckets.
@@ -46,14 +48,17 @@ batcher.clear();
 
 ## Memory
 
-With 10k sprites across 3 layers × 4 spritesheets (12 buckets):
+Base allocation per batcher (lazy buckets — only used buckets are allocated):
 
 | Data          | Size     |
 |---------------|----------|
-| Buckets       | ~480 KB  |
-| Bucket sizes  | 16 KB    |
-| Active list   | 8 KB     |
-| **Total**     | **~504 KB** |
+| Bucket sizes  | 32 KB    |
+| Active list   | 16 KB    |
+| Sort buffer   | 16 KB    |
+| **Base total**| **~64 KB** |
+| Buckets (lazy)| ~40 KB per active bucket (at 10k slots) |
+
+With 10k sprites across 3 layers × 4 sheets (12 active buckets): **~544 KB** total.
 
 ---
 

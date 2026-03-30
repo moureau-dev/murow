@@ -3,14 +3,16 @@
  * Only allocates buckets that are actually used. Most games use <10 buckets total.
  *
  * Memory (10k sprites, 3 layers × 4 sheets = 12 buckets):
- *   buckets:       12 × 10,000 × 4 bytes = ~480 KB
- *   bucketSizes:   256 × 16 × 4 bytes    = 16 KB
- *   activeBuckets: 4096 × 2 bytes        = 8 KB
- *   Total: ~504 KB  (vs 160 MB pre-allocated)
+ *   buckets:       12 × 10,000 × 4 bytes = ~480 KB (lazy, only used buckets)
+ *   bucketSizes:   8192 × 4 bytes        = 32 KB
+ *   activeBuckets: 8192 × 2 bytes        = 16 KB
+ *   Total: ~528 KB base + buckets as needed
+ *
+ * MAX_SHEETS = 32 supports up to 32 unique model/spritesheet IDs per layer.
  */
 export class SparseBatcher {
     private static readonly MAX_LAYERS = 256;
-    private static readonly MAX_SHEETS = 16;
+    private static readonly MAX_SHEETS = 32;
     private static readonly MAX_BUCKETS = SparseBatcher.MAX_LAYERS * SparseBatcher.MAX_SHEETS;
     private readonly BUCKET_INITIAL_SIZE = 256;
 
