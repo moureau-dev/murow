@@ -54,13 +54,13 @@ export function buildAnimationKernel(
             const skelRootIdx = skelI32[skinBase + 5];
             const skinClipOffset = skelI32[skinBase + 6];
             const skinLookupOff = skelI32[skinBase + 7];
-            const boneOff = inst.boneOffset;
+            const boneOff = d.i32(inst.boneOffset);
             const worldOff = boneOff - jc;
 
             // Read clip entry
             const globalClipId = inst.clipId + skinClipOffset;
             // @ts-ignore
-            const clipBase = globalClipId * 4 + uniforms.clipTableOffset;
+            const clipBase = globalClipId * 4 + d.i32(uniforms.clipTableOffset);
             const channelStart = skelI32[clipBase + 0];
             const channelCount = skelI32[clipBase + 1];
 
@@ -84,7 +84,7 @@ export function buildAnimationKernel(
                 // Sample animation channels
                 for (let ci = 0; ci < jChCount; ci = ci + 1) {
                     // @ts-ignore
-                    const chBase = (jChStart + ci) * 4 + uniforms.channelTableOffset;
+                    const chBase = (jChStart + ci) * 4 + d.i32(uniforms.channelTableOffset);
                     const chPathInterp = skelI32[chBase + 1];
                     const chN = skelI32[chBase + 2];
                     const chDataOff = skelI32[chBase + 3];
@@ -105,7 +105,7 @@ export function buildAnimationKernel(
                     } else {
                         for (let iter = 0; iter < 20; iter = iter + 1) {
                             if (lo >= hi - 1) { break; }
-                            const mid = (lo + hi) / 2;
+                            const mid = d.i32((lo + hi) / 2);
                             if (animF32[chDataOff + mid] <= time) { lo = mid; } else { hi = mid; }
                         }
                     }
@@ -179,7 +179,7 @@ export function buildAnimationKernel(
             if (inst.prevClipId >= 0 && inst.blendWeight < 1.0) {
                 const globalPrevClipId = inst.prevClipId + skinClipOffset;
                 // @ts-ignore
-                const prevClipBase = globalPrevClipId * 4 + uniforms.clipTableOffset;
+                const prevClipBase = globalPrevClipId * 4 + d.i32(uniforms.clipTableOffset);
                 const prevTime = inst.prevTime;
 
                 for (let pti = 0; pti < jc; pti = pti + 1) {
@@ -196,7 +196,7 @@ export function buildAnimationKernel(
 
                     for (let pci = 0; pci < pChCount; pci = pci + 1) {
                         // @ts-ignore
-                        const pchBase = (pChStart + pci) * 4 + uniforms.channelTableOffset;
+                        const pchBase = (pChStart + pci) * 4 + d.i32(uniforms.channelTableOffset);
                         const pchPathInterp = skelI32[pchBase + 1];
                         const pchN = skelI32[pchBase + 2];
                         const pchDataOff = skelI32[pchBase + 3];
@@ -213,7 +213,7 @@ export function buildAnimationKernel(
                         else {
                             for (let piter = 0; piter < 20; piter = piter + 1) {
                                 if (plo >= phi - 1) { break; }
-                                const pmid = (plo + phi) / 2;
+                                const pmid = d.i32((plo + phi) / 2);
                                 if (animF32[pchDataOff + pmid] <= prevTime) { plo = pmid; } else { phi = pmid; }
                             }
                         }
