@@ -487,6 +487,44 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     }
 
     /**
+     * Create a flat grid mesh on the XZ plane at Y=0.
+     *
+     * ```ts
+     * const grid = renderer.createGrid({ size: 20, step: 1, lineWidth: 0.005 });
+     * renderer.addInstance({ model: grid, color: [0.3, 0.3, 0.3] });
+     * ```
+     */
+    createGrid(opts: { size?: number; step?: number; lineWidth?: number } = {}): ModelHandle {
+        const size = opts.size ?? 20;
+        const step = opts.step ?? 1;
+        const lw = opts.lineWidth ?? 0.005;
+
+        const positions: number[] = [];
+        const normals: number[] = [];
+        const indices: number[] = [];
+
+        for (let i = -size; i <= size; i += step) {
+            const idx = positions.length / 3;
+            // Line along Z
+            positions.push(i - lw, 0, -size, i + lw, 0, -size, i + lw, 0, size, i - lw, 0, size);
+            normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
+            indices.push(idx, idx + 1, idx + 2, idx, idx + 2, idx + 3);
+
+            const idx2 = positions.length / 3;
+            // Line along X
+            positions.push(-size, 0, i - lw, size, 0, i - lw, size, 0, i + lw, -size, 0, i + lw);
+            normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
+            indices.push(idx2, idx2 + 1, idx2 + 2, idx2, idx2 + 2, idx2 + 3);
+        }
+
+        return this.loadModel({
+            positions: new Float32Array(positions),
+            normals: new Float32Array(normals),
+            indices: new Uint16Array(indices),
+        });
+    }
+
+    /**
      * Register a model. Returns a handle for addInstance().
      *
      * ```ts
