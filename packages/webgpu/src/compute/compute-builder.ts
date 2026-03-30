@@ -41,6 +41,8 @@ export interface ComputeBufferDef<TStorage extends AnyWgslData = AnyWgslData, TU
     uniform?: TUniform;
     /** If true, storage buffer is read-write (`storage, read_write`). Default: false (read-only). */
     readwrite?: boolean;
+    /** External TgpuBuffer to use instead of creating a new one. For buffer sharing between kernels. */
+    external?: TgpuBuffer<AnyWgslData>;
 }
 
 /** Extract the data type from a buffer definition. */
@@ -123,28 +125,43 @@ export class ComputeKernel<TBuffers extends Record<string, ComputeBufferDef> = R
     }
 
     /**
-     * Dispatch the compute shader.
+     * Dispatch the compute shader (creates its own command encoder).
      * @param countOrGroups Total invocation count (divided by workgroupSize automatically),
      *                      or explicit [x, y, z] workgroup counts.
      */
     dispatch(countOrGroups: number | [number, number?, number?]): void {
-        let groupsX: number;
-        let groupsY = 1;
-        let groupsZ = 1;
-
-        if (typeof countOrGroups === 'number') {
-            groupsX = Math.ceil(countOrGroups / this.workgroupSize[0]);
-        } else {
-            groupsX = countOrGroups[0];
-            groupsY = countOrGroups[1] ?? 1;
-            groupsZ = countOrGroups[2] ?? 1;
-        }
+        const [groupsX, groupsY, groupsZ] = this._resolveGroups(countOrGroups);
 
         (this.pipeline as unknown as {
             with(bg: TgpuBindGroup): { dispatchWorkgroups(x: number, y?: number, z?: number): void }
         })
             .with(this.bindGroup)
             .dispatchWorkgroups(groupsX, groupsY, groupsZ);
+    }
+
+    /**
+     * Encode a compute dispatch into an existing command encoder.
+     * Use this to chain multiple compute passes without separate submissions.
+     * The compute pass is started and ended within this call.
+     */
+    encode(encoder: GPUCommandEncoder, countOrGroups: number | [number, number?, number?]): void {
+        const [groupsX, groupsY, groupsZ] = this._resolveGroups(countOrGroups);
+
+        const rawPipeline = this.root.unwrap(this.pipeline) as GPUComputePipeline;
+        const rawBindGroup = this.root.unwrap(this.bindGroup) as GPUBindGroup;
+
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(rawPipeline);
+        pass.setBindGroup(0, rawBindGroup);
+        pass.dispatchWorkgroups(groupsX, groupsY, groupsZ);
+        pass.end();
+    }
+
+    private _resolveGroups(countOrGroups: number | [number, number?, number?]): [number, number, number] {
+        if (typeof countOrGroups === 'number') {
+            return [Math.ceil(countOrGroups / this.workgroupSize[0]), 1, 1];
+        }
+        return [countOrGroups[0], countOrGroups[1] ?? 1, countOrGroups[2] ?? 1];
     }
 
     /**
@@ -247,7 +264,11 @@ export class ComputeBuilder<
         const bindGroupEntries: Record<string, unknown> = {};
 
         for (const [name, def] of Object.entries(bufferDefs)) {
-            if (def.storage) {
+            if (def.external) {
+                // Use externally provided buffer (for sharing between kernels)
+                tgpuBuffers.set(name, def.external);
+                bindGroupEntries[name] = def.external;
+            } else if (def.storage) {
                 const buf = root.createBuffer(def.storage as Parameters<typeof root.createBuffer>[0])
                     .$usage('storage') as TgpuBuffer<AnyWgslData>;
                 tgpuBuffers.set(name, buf);

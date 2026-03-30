@@ -205,7 +205,6 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private gpuAnimInstanceStates: { clipId: number; time: number; skinIndex: number; boneOffset: number; prevClipId: number; prevTime: number; blendWeight: number; _pad: number }[] = [];
     private gpuInstData!: Float32Array;
     private gpuInstDV!: DataView;
-    private _debugDone = false;
 
     // Per-instance skinned state
     private skinnedDynamicData!: Float32Array;

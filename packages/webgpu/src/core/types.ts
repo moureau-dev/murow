@@ -128,24 +128,6 @@ export const MeshUniforms = d.struct({
 
 // --- GPU Skeletal Animation Structs ---
 
-/** Per-channel metadata in the animation channel table. */
-export const AnimChannelGPU = d.struct({
-    jointIndex: d.u32,
-    /** bits [0:1] = path (0=translation, 1=rotation, 2=scale), bit [2] = isStep */
-    pathAndInterp: d.u32,
-    keyframeCount: d.u32,
-    /** Float index into keyframe data buffer. */
-    dataOffset: d.u32,
-});
-
-/** Per-clip metadata. */
-export const AnimClipGPU = d.struct({
-    channelStart: d.u32,
-    channelCount: d.u32,
-    duration: d.f32,
-    looping: d.u32,
-});
-
 /** Per-instance animation state, uploaded from CPU each frame. */
 export const InstanceAnimStateGPU = d.struct({
     clipId: d.i32,
@@ -156,18 +138,6 @@ export const InstanceAnimStateGPU = d.struct({
     prevTime: d.f32,
     blendWeight: d.f32,
     _pad: d.f32,
-});
-
-/** Per-skeleton metadata. */
-export const SkinEntryGPU = d.struct({
-    jointCount: d.u32,
-    parentOffset: d.u32,
-    topoOffset: d.u32,
-    ibmOffset: d.u32,
-    restTRSOffset: d.u32,
-    skelRootMatIndex: d.u32,
-    _pad0: d.u32,
-    _pad1: d.u32,
 });
 
 /** Uniforms for the animation compute shader. */
