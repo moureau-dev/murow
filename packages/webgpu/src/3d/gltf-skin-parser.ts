@@ -224,7 +224,25 @@ export function parsePrimitiveSkinAttributes(
         ? jointsAccess.data
         : new Uint16Array(jointsAccess.data);
 
-    const weights = new Float32Array(weightsAccess.data as Float32Array);
+    // Convert weights to Float32Array — handle normalized byte/short formats
+    let weights: Float32Array;
+    if (weightsAccess.data instanceof Float32Array) {
+        weights = weightsAccess.data;
+    } else if (weightsAccess.data instanceof Uint8Array) {
+        // Normalized unsigned byte: divide by 255
+        weights = new Float32Array(weightsAccess.data.length);
+        for (let i = 0; i < weightsAccess.data.length; i++) {
+            weights[i] = weightsAccess.data[i] / 255;
+        }
+    } else if (weightsAccess.data instanceof Uint16Array) {
+        // Normalized unsigned short: divide by 65535
+        weights = new Float32Array(weightsAccess.data.length);
+        for (let i = 0; i < weightsAccess.data.length; i++) {
+            weights[i] = weightsAccess.data[i] / 65535;
+        }
+    } else {
+        weights = new Float32Array(weightsAccess.data as any);
+    }
 
     return { joints, weights };
 }
@@ -255,5 +273,162 @@ export function getNodeTRS(node: any): Float32Array {
     trs[7] = s[0]; trs[8] = s[1]; trs[9] = s[2];
 
     return trs;
+}
+
+// =============================================================================
+// GPU buffer packing — flatten animation data for compute shader consumption
+// =============================================================================
+
+/** Packed GPU-ready animation data for all skins/clips loaded so far. */
+export interface PackedAnimationData {
+    /** Flat channel descriptors: [jointIndex, pathAndInterp, keyframeCount, dataOffset] per channel */
+    channels: { jointIndex: number; pathAndInterp: number; keyframeCount: number; dataOffset: number }[];
+    /** Flat keyframe data: timestamps then values for each channel */
+    keyframeData: number[];
+    /** Clip descriptors: [channelStart, channelCount, duration, loop] */
+    clips: { channelStart: number; channelCount: number; duration: number; looping: number }[];
+    /** Per-skin entries */
+    skins: { jointCount: number; parentOffset: number; topoOffset: number; ibmOffset: number; restTRSOffset: number; skelRootMatIndex: number; clipOffset: number; jointLookupStart: number }[];
+    /** Flat parent joint indices (i32), all skins concatenated */
+    parentIndices: number[];
+    /** Flat topological order (u32), all skins concatenated */
+    topoOrder: number[];
+    /** Flat inverse bind matrices (mat4x4, 16 floats each), all skins concatenated */
+    ibmData: number[];
+    /** Flat rest pose TRS (10 floats per joint), all skins concatenated */
+    restTRS: number[];
+    /** Skeleton root matrices (16 floats each), one per skin */
+    skelRootMats: number[];
+    /** Per-joint channel lookup: [clipIdx * maxJoints * 2 + joint * 2] = (channelStart, channelCount) */
+    jointChannelLookup: number[];
+}
+
+export function createPackedAnimationData(): PackedAnimationData {
+    return {
+        channels: [],
+        keyframeData: [],
+        clips: [],
+        skins: [],
+        parentIndices: [],
+        topoOrder: [],
+        ibmData: [],
+        restTRS: [],
+        skelRootMats: [],
+        jointChannelLookup: [],
+    };
+}
+
+/**
+ * Pack a skin + its animations into the flat GPU buffers.
+ * Returns the skin index within the packed data.
+ */
+export function packSkinAndAnimations(
+    packed: PackedAnimationData,
+    skinData: SkinData,
+    clips: AnimationClipData[],
+    gltfNodes: any[],
+): number {
+    const skinIndex = packed.skins.length;
+    const jc = skinData.jointCount;
+
+    // Pack skin entry
+    const parentOffset = packed.parentIndices.length;
+    const topoOffset = packed.topoOrder.length;
+    const ibmOffset = packed.ibmData.length / 16;
+    const restTRSOffset = packed.restTRS.length / 10;
+    const skelRootMatIndex = packed.skelRootMats.length / 16;
+
+    // Parent indices
+    for (let j = 0; j < jc; j++) {
+        packed.parentIndices.push(skinData.parentJointIndices[j]);
+    }
+
+    // Topological order
+    const visited = new Uint8Array(jc);
+    const visit = (j: number) => {
+        if (visited[j]) return;
+        visited[j] = 1;
+        const parent = skinData.parentJointIndices[j];
+        if (parent !== -1) visit(parent);
+        packed.topoOrder.push(j);
+    };
+    for (let j = 0; j < jc; j++) visit(j);
+
+    // Inverse bind matrices
+    for (let i = 0; i < skinData.inverseBindMatrices.length; i++) {
+        packed.ibmData.push(skinData.inverseBindMatrices[i]);
+    }
+
+    // Rest pose TRS
+    for (let j = 0; j < jc; j++) {
+        const trs = getNodeTRS(gltfNodes[skinData.jointNodeIndices[j]]);
+        for (let k = 0; k < 10; k++) packed.restTRS.push(trs[k]);
+    }
+
+    // Skeleton root matrix
+    if (skinData.skeletonRootMatrix) {
+        for (let i = 0; i < 16; i++) packed.skelRootMats.push(skinData.skeletonRootMatrix[i]);
+    } else {
+        // Identity
+        const id = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+        for (let i = 0; i < 16; i++) packed.skelRootMats.push(id[i]);
+    }
+
+    const clipOffset = packed.clips.length; // global clip index where this skin's clips start
+    const jointLookupStart = packed.jointChannelLookup.length; // where this skin's lookup starts
+
+    packed.skins.push({ jointCount: jc, parentOffset, topoOffset, ibmOffset, restTRSOffset, skelRootMatIndex, clipOffset, jointLookupStart });
+
+    // Build node → joint index map for this skin
+    const nodeToJoint = new Map<number, number>();
+    for (let j = 0; j < jc; j++) {
+        nodeToJoint.set(skinData.jointNodeIndices[j], j);
+    }
+
+    // Pack clips — sort channels by joint for GPU-friendly access
+    for (const clip of clips) {
+        const channelStart = packed.channels.length;
+
+        // Sort channels by joint index
+        const sortedChannels = [...clip.channels].sort((a, b) => a.jointIndex - b.jointIndex);
+
+        for (const ch of sortedChannels) {
+            const pathCode = ch.path === 'translation' ? 0 : ch.path === 'rotation' ? 1 : 2;
+            const isStep = ch.interpolation === 'STEP' ? 4 : 0;
+            const dataOffset = packed.keyframeData.length;
+            const n = ch.timestamps.length;
+            const compCount = ch.path === 'rotation' ? 4 : 3;
+
+            for (let i = 0; i < n; i++) packed.keyframeData.push(ch.timestamps[i]);
+            for (let i = 0; i < n * compCount; i++) packed.keyframeData.push(ch.values[i]);
+
+            packed.channels.push({
+                jointIndex: ch.jointIndex,
+                pathAndInterp: pathCode | isStep,
+                keyframeCount: n,
+                dataOffset,
+            });
+        }
+
+        // Build per-joint channel lookup: for each joint, (startIdx, count) within this clip's channels
+        // Stored in packed.jointChannelLookup as [clipIdx * maxJoints * 2 + joint * 2] = start, count
+        const clipChannelCount = sortedChannels.length;
+        let ci = 0;
+        for (let j = 0; j < jc; j++) {
+            const lookupStart = ci;
+            while (ci < clipChannelCount && sortedChannels[ci].jointIndex === j) ci++;
+            packed.jointChannelLookup.push(channelStart + lookupStart); // absolute channel index
+            packed.jointChannelLookup.push(ci - lookupStart); // count
+        }
+
+        packed.clips.push({
+            channelStart,
+            channelCount: clipChannelCount,
+            duration: clip.duration,
+            looping: 1,
+        });
+    }
+
+    return skinIndex;
 }
 

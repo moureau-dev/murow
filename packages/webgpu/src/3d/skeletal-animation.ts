@@ -32,6 +32,8 @@ export interface PlayOptions {
     speed?: number;
     /** Crossfade duration in seconds. 0 = instant switch (default). */
     crossfade?: number;
+    /** Called when the animation clip ends (reaches duration). Fires each loop for looping clips. */
+    onEnd?: () => void;
 }
 
 export interface SkeletalAnimState {
@@ -45,6 +47,7 @@ export interface SkeletalAnimState {
     prevSpeed: number;
     blendWeight: number;  // 0 = fully previous, 1 = fully current
     blendDuration: number;
+    onEnd: () => void;
 }
 
 export class SkeletalAnimation {
@@ -135,13 +138,17 @@ export class SkeletalAnimation {
         return this.clips.map(c => c.name);
     }
 
+    getClip(id: number): SkeletalClip | null {
+        return this.clips[id] ?? null;
+    }
+
     get clipCount(): number {
         return this.clips.length;
     }
 
     createState(clipIdOrName: number | string, speed: number = 1, playing: boolean = true): SkeletalAnimState {
         const clipId = typeof clipIdOrName === 'string' ? this.getClipId(clipIdOrName) : clipIdOrName;
-        return { clipId, time: 0, speed, playing, prevClipId: -1, prevTime: 0, prevSpeed: 1, blendWeight: 1, blendDuration: 0 };
+        return { clipId, time: 0, speed, playing, prevClipId: -1, prevTime: 0, prevSpeed: 1, blendWeight: 1, blendDuration: 0, onEnd: () => null };
     }
 
     play(state: SkeletalAnimState, clipIdOrName: number | string, opts?: PlayOptions): void {
@@ -161,6 +168,7 @@ export class SkeletalAnimation {
             state.blendDuration = 0;
         }
 
+        state.onEnd = opts?.onEnd ?? (() => null);
         state.clipId = newClipId;
         state.time = 0;
         state.playing = true;

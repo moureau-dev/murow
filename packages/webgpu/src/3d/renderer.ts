@@ -41,8 +41,9 @@ import {
     type SkinnedMeshDataLayout,
 } from './shader';
 import { nodeToMat4 } from '../core/math';
-import { parseSkin, parseAnimations, parsePrimitiveSkinAttributes, type SkinData, type AnimationClipData, type PrimitiveSkinAttributes } from './gltf-skin-parser';
+import { parseSkin, parseAnimations, parsePrimitiveSkinAttributes, createPackedAnimationData, packSkinAndAnimations, type SkinData, type AnimationClipData, type PrimitiveSkinAttributes, type PackedAnimationData } from './gltf-skin-parser';
 import { SkeletalAnimation, type SkeletalAnimState, type PlayOptions } from './skeletal-animation';
+import { SkeletalAnimComputeKernel } from './skeletal-animation-compute';
 
 // --- Dynamic offset constants ---
 const DYN_PREV_PX = 0, DYN_PREV_PY = 1, DYN_PREV_PZ = 2;
@@ -60,9 +61,9 @@ const SSTAT_CR = 3, SSTAT_CG = 4, SSTAT_CB = 5;
 const SSTAT_BONE_OFFSET = 6;
 
 // Default limits for skinned rendering
-const DEFAULT_MAX_SKINNED_INSTANCES = 700;
+const DEFAULT_MAX_SKINNED_INSTANCES = 5000;
 const DEFAULT_MAX_BONES_PER_SKIN = 128;
-const DEFAULT_MAX_TOTAL_BONES = DEFAULT_MAX_SKINNED_INSTANCES * DEFAULT_MAX_BONES_PER_SKIN;
+const DEFAULT_MAX_TOTAL_BONES = DEFAULT_MAX_SKINNED_INSTANCES * DEFAULT_MAX_BONES_PER_SKIN * 2; // 2x for world + final bone matrices
 
 export interface ModelData {
     positions: Float32Array;
@@ -186,11 +187,21 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private rawSkinnedTexturedPipeline!: GPURenderPipeline;
     private rawSkinnedBindGroup!: GPUBindGroup;
 
-    // Bone matrix buffer (shared across all skinned instances)
-    private boneMatrixData!: Float32Array;
+    // Bone matrix buffer — owned by compute kernel, shared with render pipeline
+    private boneMatrixData!: Float32Array; // CPU fallback / rest pose init
     private rawBoneMatrixBuffer!: GPUBuffer;
     private boneMatrixDirty = true;
     private maxTotalBones = DEFAULT_MAX_TOTAL_BONES;
+
+    // GPU animation compute
+    private packedAnimData: PackedAnimationData = createPackedAnimationData();
+    private animComputeKernel: SkeletalAnimComputeKernel | null = null;
+    private animComputeNeedsRebuild = false;
+    private gpuAnimInstanceStates: { clipId: number; time: number; skinIndex: number; boneOffset: number; prevClipId: number; prevTime: number; blendWeight: number; _pad: number }[] = [];
+    private gpuInstData!: Float32Array;
+    private gpuInstDV!: DataView;
+    private _debugDone = false;
+    private _pendingAnimCompute = false;
 
     // Per-instance skinned state
     private skinnedDynamicData!: Float32Array;
@@ -243,6 +254,11 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
         // Bone matrix buffer (CPU side)
         this.boneMatrixData = new Float32Array(this.maxTotalBones * 16);
+
+        // Pre-allocated buffer for GPU compute instance state upload (8 floats per instance)
+        const instBufSize = msi * 8;
+        this.gpuInstData = new Float32Array(instBufSize);
+        this.gpuInstDV = new DataView(this.gpuInstData.buffer);
     }
 
     async init(): Promise<void> {
@@ -889,6 +905,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 animation,
                 jointCount: skinData.jointCount,
             });
+
+            // Pack animation data for GPU compute
+            packSkinAndAnimations(this.packedAnimData, skinData, animClips, gltf.nodes);
+            this.animComputeNeedsRebuild = true;
         }
 
         // --- Load all primitives from all meshes ---
@@ -1152,8 +1172,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             animState = this.skinnedAnimStates[linkedSlot];
         } else {
             // Allocate new bone offset block
-            boneOffset = this.nextBoneOffset;
-            this.nextBoneOffset += jointCount;
+            // Allocate 2x: [world matrices | final bone matrices]
+            // boneOffset points to the final section (vertex shader reads from here)
+            boneOffset = this.nextBoneOffset + jointCount;
+            this.nextBoneOffset += jointCount * 2;
 
             // Write rest-pose bone matrices directly into boneMatrixData (zero-alloc)
             skinModel.animation.computeRestPose(this.boneMatrixData, boneOffset * 16);
@@ -1247,26 +1269,110 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private updatedBoneOffsets = new Uint8Array(DEFAULT_MAX_TOTAL_BONES);
 
     private updateAnimations(deltaTime: number): void {
-        // Track which bone offsets have been updated to avoid duplicate updates
-        // (linked instances share the same bone offset + anim state)
+        // Rebuild GPU compute kernel if new skinned models were loaded
+        if (this.animComputeNeedsRebuild && this.packedAnimData.clips.length > 0) {
+            this.animComputeKernel?.destroy();
+            this.animComputeKernel = new SkeletalAnimComputeKernel(
+                this.device, this.packedAnimData, this.maxSkinnedInstances, this.maxTotalBones,
+            );
+            this.rawBoneMatrixBuffer = this.animComputeKernel.boneMatrixBuffer;
+
+            const rawSkinnedBGL = this.root.unwrap(this.skinnedMeshLayout);
+            this.rawSkinnedBindGroup = this.device.createBindGroup({
+                layout: rawSkinnedBGL as GPUBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: { buffer: this.rawUniformBuffer } },
+                    { binding: 1, resource: { buffer: this.rawSkinnedDynamicBuffer } },
+                    { binding: 2, resource: { buffer: this.rawSkinnedStaticBuffer } },
+                    { binding: 3, resource: { buffer: this.rawSkinnedSlotIndexBuffer } },
+                    { binding: 4, resource: { buffer: this.rawBoneMatrixBuffer } },
+                ],
+            });
+            this.animComputeNeedsRebuild = false;
+        }
+
+        // Advance time on CPU + pack instance states for GPU
         this.updatedBoneOffsets.fill(0);
+        let count = 0;
+        const dv = this.gpuInstDV;
 
         for (let slot = 0; slot < this.maxSkinnedInstances; slot++) {
             const animState = this.skinnedAnimStates[slot];
-            if (!animState || !animState.playing) continue;
+            if (!animState) continue;
 
             const boneOffset = this.skinnedInstanceBoneOffsets[slot];
             if (this.updatedBoneOffsets[boneOffset]) continue;
             this.updatedBoneOffsets[boneOffset] = 1;
 
+            // Advance time on CPU (with looping)
+            if (animState.playing) {
+                const modelId = this.skinnedInstanceModelIds[slot];
+                const model = this.models[modelId];
+                const skinModel = model?.skinIndex >= 0 ? this.skinnedModels[model.skinIndex] : null;
+                if (skinModel) {
+                    animState.time += deltaTime * animState.speed;
+                    const clip = skinModel.animation.getClip(animState.clipId);
+                    if (clip && clip.duration > 0 && animState.time >= clip.duration) {
+                        animState.onEnd();
+                        if (clip.loop) {
+                            animState.time %= clip.duration;
+                        } else {
+                            animState.time = clip.duration - 0.0001;
+                            animState.playing = false;
+                        }
+                    }
+                }
+            }
+
+            // Advance crossfade
+            if (animState.prevClipId !== -1 && animState.blendDuration > 0) {
+                animState.blendWeight += deltaTime / animState.blendDuration;
+                if (animState.blendWeight >= 1) {
+                    animState.blendWeight = 1;
+                    animState.prevClipId = -1;
+                    animState.blendDuration = 0;
+                }
+                animState.prevTime += deltaTime * animState.prevSpeed;
+            }
+
             const modelId = this.skinnedInstanceModelIds[slot];
             const model = this.models[modelId];
-            if (!model || model.skinIndex === -1) continue;
+            const skinIdx = model?.skinIndex ?? 0;
 
-            const skinModel = this.skinnedModels[model.skinIndex];
-            skinModel.animation.update(animState, deltaTime, this.boneMatrixData, boneOffset * 16);
+            const off = count * 32;
+            dv.setInt32(off, animState.clipId, true);
+            dv.setFloat32(off + 4, animState.time, true);
+            dv.setUint32(off + 8, skinIdx, true);
+            dv.setUint32(off + 12, boneOffset, true);
+            dv.setInt32(off + 16, animState.prevClipId, true);
+            dv.setFloat32(off + 20, animState.prevTime, true);
+            dv.setFloat32(off + 24, animState.blendWeight, true);
+            dv.setFloat32(off + 28, 0, true);
+            count++;
         }
-        this.boneMatrixDirty = true;
+
+        if (count > 0) {
+            if (this.animComputeKernel) {
+                this.animComputeKernel.upload(this.gpuInstData.buffer, count, count * 32);
+                this._pendingAnimCompute = true;
+            } else {
+                // CPU fallback
+                this.updatedBoneOffsets.fill(0);
+                for (let slot = 0; slot < this.maxSkinnedInstances; slot++) {
+                    const animState = this.skinnedAnimStates[slot];
+                    if (!animState || !animState.playing) continue;
+                    const boneOffset = this.skinnedInstanceBoneOffsets[slot];
+                    if (this.updatedBoneOffsets[boneOffset]) continue;
+                    this.updatedBoneOffsets[boneOffset] = 1;
+                    const modelId = this.skinnedInstanceModelIds[slot];
+                    const model = this.models[modelId];
+                    if (!model || model.skinIndex === -1) continue;
+                    const skinModel = this.skinnedModels[model.skinIndex];
+                    skinModel.animation.update(animState, deltaTime, this.boneMatrixData, boneOffset * 16);
+                }
+                this.device.queue.writeBuffer(this.rawBoneMatrixBuffer, 0, this.boneMatrixData);
+            }
+        }
     }
 
     removeInstance(handle: MeshInstanceHandle): void {
@@ -1419,6 +1525,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             this.skinnedStaticDirty = false;
         }
 
+        // Upload bone matrices from CPU only if GPU compute is not active
         if (this.boneMatrixDirty) {
             this.device.queue.writeBuffer(
                 this.rawBoneMatrixBuffer, 0,
@@ -1458,9 +1565,16 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             );
         }
 
-        // Render pass with depth
+        // Compute + render in same command encoder (single submission)
         const textureView = this.context.getCurrentTexture().createView();
         const encoder = this.device.createCommandEncoder();
+
+        // Encode animation compute pass before render pass
+        if (this._pendingAnimCompute && this.animComputeKernel) {
+            this.animComputeKernel.encodeComputePass(encoder);
+            this._pendingAnimCompute = false;
+        }
+
         const pass = encoder.beginRenderPass({
             colorAttachments: [{
                 view: textureView,
