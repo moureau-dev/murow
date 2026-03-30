@@ -1408,7 +1408,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                     const skinModel = this.skinnedModels[model.skinIndex];
                     skinModel.animation.update(animState, deltaTime, this.boneMatrixData, boneOffset * 16);
                 }
-                this.device.queue.writeBuffer(this.rawBoneMatrixBuffer, 0, this.boneMatrixData);
+                this.device.queue.writeBuffer(this.rawBoneMatrixBuffer, 0, this.boneMatrixData as GPUAllowSharedBufferSource);
             }
         }
     }

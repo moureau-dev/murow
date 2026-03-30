@@ -48,7 +48,7 @@ export function buildAnimationKernel(
             const skinBase = inst.skinIndex * 10;
             const jc = skelI32[skinBase + 0];
             const parentOff = skelI32[skinBase + 1];
-            const topoOff = skelI32[skinBase + 2];
+            const topoOff: number = skelI32[skinBase + 2];
             const ibmOff = skelI32[skinBase + 3];
             const restOff = skelI32[skinBase + 4];
             const skelRootIdx = skelI32[skinBase + 5];
@@ -183,14 +183,14 @@ export function buildAnimationKernel(
                 const prevTime = inst.prevTime;
 
                 for (let pti = 0; pti < jc; pti = pti + 1) {
-                    const pj = skelI32[topoOff + pti];
+                    const pj: number = skelI32[(topoOff as unknown as number) + pti];
 
                     const ptrsBase = restOff + pj * 10;
                     let ptx = animF32[ptrsBase + 0]; let pty = animF32[ptrsBase + 1]; let ptz = animF32[ptrsBase + 2];
                     let pqx = animF32[ptrsBase + 3]; let pqy = animF32[ptrsBase + 4]; let pqz = animF32[ptrsBase + 5]; let pqw = animF32[ptrsBase + 6];
                     let psx = animF32[ptrsBase + 7]; let psy = animF32[ptrsBase + 8]; let psz = animF32[ptrsBase + 9];
 
-                    const pLookupIdx = skinLookupOff + inst.prevClipId * jc * 2 + pj * 2;
+                    const pLookupIdx = skinLookupOff + inst.prevClipId * jc * 2 + (pj as unknown as number) * 2;
                     const pChStart = skelI32[pLookupIdx];
                     const pChCount = skelI32[pLookupIdx + 1];
 
@@ -280,14 +280,18 @@ export function buildAnimationKernel(
 
                     // Blend: final = lerp(prevBone, currentBone, blendWeight)
                     // @ts-ignore
-                    const prevBoneMat = boneMatrices[worldOff + pj] * matrices[ibmOff + pj];
-                    const curBoneMat = boneMatrices[boneOff + pj];
+                    const prevBoneMat: d.Mat4x4f = boneMatrices[worldOff + pj] * matrices[ibmOff + pj];
+                    const curBoneMat: d.Mat4x4f = boneMatrices[boneOff + pj];
                     const w = inst.blendWeight;
                     const omw = 1.0 - w;
                     boneMatrices[boneOff + pj] = d.mat4x4f(
+                        // @ts-ignore
                         curBoneMat.columns[0] * w + prevBoneMat.columns[0] * omw,
+                        // @ts-ignore
                         curBoneMat.columns[1] * w + prevBoneMat.columns[1] * omw,
+                        // @ts-ignore
                         curBoneMat.columns[2] * w + prevBoneMat.columns[2] * omw,
+                        // @ts-ignore
                         curBoneMat.columns[3] * w + prevBoneMat.columns[3] * omw,
                     );
                 }
@@ -302,7 +306,7 @@ export function buildAnimationKernel(
     // Upload matrices via raw buffer (TypeGPU mat4x4f write format is complex)
     const matBuffer = kernel.getBuffer('matrices');
     const rawMatBuffer = root.unwrap(matBuffer) as GPUBuffer;
-    root.device.queue.writeBuffer(rawMatBuffer, 0, pb.matFloats);
+    root.device.queue.writeBuffer(rawMatBuffer, 0, pb.matFloats as GPUAllowSharedBufferSource);
 
     return { kernel, packedBuffers: pb };
 }
