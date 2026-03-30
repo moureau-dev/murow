@@ -62,9 +62,9 @@ const SSTAT_CR = 3, SSTAT_CG = 4, SSTAT_CB = 5;
 const SSTAT_BONE_OFFSET = 6;
 
 // Default limits for skinned rendering
-const DEFAULT_MAX_SKINNED_INSTANCES = 5000;
-const DEFAULT_MAX_BONES_PER_SKIN = 128;
-const DEFAULT_MAX_TOTAL_BONES = DEFAULT_MAX_SKINNED_INSTANCES * DEFAULT_MAX_BONES_PER_SKIN * 2; // 2x for world + final bone matrices
+const DEFAULT_MAX_SKINNED_INSTANCES = 4000;
+const DEFAULT_MAX_BONES_PER_SKIN = 64;
+const DEFAULT_MAX_TOTAL_BONES = DEFAULT_MAX_SKINNED_INSTANCES * DEFAULT_MAX_BONES_PER_SKIN * 2; // 2x for world + final bone matrices (~32MB)
 
 export interface ModelData {
     positions: Float32Array;
@@ -99,6 +99,8 @@ export interface GltfModel {
     readonly skinned: boolean;
     /** Animation clip names available on this model (empty if not skinned). */
     readonly animations: string[];
+    /** Source URL this model was loaded from. */
+    readonly src: string;
 }
 
 /** Handle to a spawned instance (single primitive or multi-part glTF). */
@@ -809,7 +811,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
      * instance.playAnimation?.('walk');
      * ```
      */
-    async loadGltf(url: string): Promise<GltfModel> {
+    async loadGltf(url: string, opts?: { animations?: string[] }): Promise<GltfModel> {
         const response = await fetch(url);
         const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
 
@@ -938,6 +940,11 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         if (skinIndex !== undefined && gltf.skins?.[skinIndex]) {
             skinData = parseSkin(gltf, skinIndex, getAccessorData);
             animClips = parseAnimations(gltf, skinData, getAccessorData);
+
+            // Filter animations if specified
+            if (opts?.animations) {
+                animClips = animClips.filter(clip => opts.animations.includes(clip.name));
+            }
 
             // Register the skeletal animation controller
             const animation = new SkeletalAnimation(skinData, animClips, gltf.nodes);
@@ -1088,6 +1095,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             totalVertexCount,
             skinned: handles.some(h => h.skinned),
             animations: animNames,
+            src: url,
         };
     }
 
