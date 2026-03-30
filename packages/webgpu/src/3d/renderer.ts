@@ -43,7 +43,8 @@ import {
 import { nodeToMat4 } from '../core/math';
 import { parseSkin, parseAnimations, parsePrimitiveSkinAttributes, createPackedAnimationData, packSkinAndAnimations, type SkinData, type AnimationClipData, type PrimitiveSkinAttributes, type PackedAnimationData } from './gltf-skin-parser';
 import { SkeletalAnimation, type SkeletalAnimState, type PlayOptions } from './skeletal-animation';
-import { SkeletalAnimComputeKernel } from './skeletal-animation-compute';
+import { buildAnimationKernel } from './skeletal-animation-compute/index';
+import type { ComputeKernel } from '../compute/compute-builder';
 
 // --- Dynamic offset constants ---
 const DYN_PREV_PX = 0, DYN_PREV_PY = 1, DYN_PREV_PZ = 2;
@@ -196,13 +197,15 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
     // GPU animation compute
     private packedAnimData: PackedAnimationData = createPackedAnimationData();
-    private animComputeKernel: SkeletalAnimComputeKernel | null = null;
+    private animComputeKernel: ComputeKernel | null = null;
     private animComputeNeedsRebuild = false;
+    private animClipTableOffset = 0;
+    private animChannelTableOffset = 0;
+    private animJointLookupOffset = 0;
     private gpuAnimInstanceStates: { clipId: number; time: number; skinIndex: number; boneOffset: number; prevClipId: number; prevTime: number; blendWeight: number; _pad: number }[] = [];
     private gpuInstData!: Float32Array;
     private gpuInstDV!: DataView;
     private _debugDone = false;
-    private _pendingAnimCompute = false;
 
     // Per-instance skinned state
     private skinnedDynamicData!: Float32Array;
@@ -1287,10 +1290,17 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         // Rebuild GPU compute kernel if new skinned models were loaded
         if (this.animComputeNeedsRebuild && this.packedAnimData.clips.length > 0) {
             this.animComputeKernel?.destroy();
-            this.animComputeKernel = new SkeletalAnimComputeKernel(
-                this.device, this.packedAnimData, this.maxSkinnedInstances, this.maxTotalBones,
+            const { kernel, packedBuffers } = buildAnimationKernel(
+                this.root, this.packedAnimData, this.maxSkinnedInstances, this.maxTotalBones,
             );
-            this.rawBoneMatrixBuffer = this.animComputeKernel.boneMatrixBuffer;
+            this.animComputeKernel = kernel;
+            this.animClipTableOffset = packedBuffers.clipTableOffset;
+            this.animChannelTableOffset = packedBuffers.channelTableOffset;
+            this.animJointLookupOffset = packedBuffers.jointLookupOffset;
+
+            // Get bone matrix buffer from the kernel and wire it into the skinned render bind group
+            const rawBoneBuffer = this.root.unwrap(kernel.getBuffer('boneMatrices')) as GPUBuffer;
+            this.rawBoneMatrixBuffer = rawBoneBuffer;
 
             const rawSkinnedBGL = this.root.unwrap(this.skinnedMeshLayout);
             this.rawSkinnedBindGroup = this.device.createBindGroup({
@@ -1300,7 +1310,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                     { binding: 1, resource: { buffer: this.rawSkinnedDynamicBuffer } },
                     { binding: 2, resource: { buffer: this.rawSkinnedStaticBuffer } },
                     { binding: 3, resource: { buffer: this.rawSkinnedSlotIndexBuffer } },
-                    { binding: 4, resource: { buffer: this.rawBoneMatrixBuffer } },
+                    { binding: 4, resource: { buffer: rawBoneBuffer } },
                 ],
             });
             this.animComputeNeedsRebuild = false;
@@ -1368,8 +1378,21 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
         if (count > 0) {
             if (this.animComputeKernel) {
-                this.animComputeKernel.upload(this.gpuInstData.buffer, count, count * 32);
-                this._pendingAnimCompute = true;
+                // Write uniforms (offsets are static, instanceCount changes per frame)
+                this.animComputeKernel.write('uniforms', {
+                    instanceCount: count,
+                    clipTableOffset: this.animClipTableOffset,
+                    channelTableOffset: this.animChannelTableOffset,
+                    jointLookupOffset: this.animJointLookupOffset,
+                });
+
+                // Write instance states via raw buffer (TypeGPU write expects full array)
+                const instBuf = this.animComputeKernel.getBuffer('instances');
+                const rawInstBuf = this.root.unwrap(instBuf) as GPUBuffer;
+                this.device.queue.writeBuffer(rawInstBuf, 0, this.gpuInstData.buffer, 0, count * 32);
+
+                // Dispatch
+                this.animComputeKernel.dispatch(count);
             } else {
                 // CPU fallback
                 this.updatedBoneOffsets.fill(0);
@@ -1602,12 +1625,6 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         // Compute + render in same command encoder (single submission)
         const textureView = this.context.getCurrentTexture().createView();
         const encoder = this.device.createCommandEncoder();
-
-        // Encode animation compute pass before render pass
-        if (this._pendingAnimCompute && this.animComputeKernel) {
-            this.animComputeKernel.encodeComputePass(encoder);
-            this._pendingAnimCompute = false;
-        }
 
         const pass = encoder.beginRenderPass({
             colorAttachments: [{
