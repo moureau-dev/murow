@@ -1,6 +1,11 @@
 # Murow
 
-A lightweight TypeScript game engine for server-authoritative multiplayer games.
+Monorepo for the murow game engine — a lightweight TypeScript framework for server-authoritative multiplayer games with WebGPU rendering.
+
+## Packages
+
+- **[murow](./packages/murow)** — Core game engine (ECS, networking, protocol, game loop)
+- **[murow/webgpu](./packages/webgpu)** — WebGPU 2D/3D renderer (bundled with murow)
 
 ## Installation
 
@@ -8,75 +13,108 @@ A lightweight TypeScript game engine for server-authoritative multiplayer games.
 npm install murow
 ```
 
-## Usage
+The WebGPU renderer is **included by default**:
 
 ```typescript
-import {
-  FixedTicker,
-  EventSystem,
-  BinaryCodec,
-  generateId,
-  lerp,
-  NavMesh,
-  PooledCodec,
-  IntentTracker,
-  Reconciliator
-} from 'murow';
-// or
-import { FixedTicker } from 'murow/core';
+import { GameLoop, World, defineComponent } from 'murow';
+import { WebGPU2DRenderer, WebGPU3DRenderer, d } from 'murow/webgpu';
 ```
 
-## Modules
+## Quick Examples
 
-### Entity Component System (ECS)
+<details>
+<summary><strong>3D glTF Models with Animation</strong></summary>
 
-High-performance ECS with **SoA (Structure of Arrays)** storage, bitmask queries, and zero-allocation hot paths:
-- `World`: Manages entities and components
-- `defineComponent`: Define typed components with binary schemas
-- `EntityHandle`: Fluent chainable entity API
+```typescript
+import { GameLoop } from 'murow';
+import { WebGPU3DRenderer } from 'murow/webgpu';
 
-See [ECS Documentation](./src/ecs/README.md) for full usage.
+const renderer = new WebGPU3DRenderer(canvas, { maxModels: 100 });
+await renderer.init();
 
-### Core Utilities
-- `FixedTicker`: Deterministic fixed-rate update loop
-- `EventSystem`: High-performance event handling
-- `BinaryCodec`: Schema-driven binary serialization
-- `generateId`: Cryptographically secure ID generation
-- `lerp`: Linear interpolation utility
-- `NavMesh`: Pathfinding with dynamic obstacles
-- `PooledCodec`: Object-pooled binary codec with array support (via `PooledCodec.array()`) for efficient snapshot encoding. Supports zero-copy encoding with `encodeInto()` for minimal allocations
-- `IntentTracker` & `Reconciliator`: Client-side prediction
+const model = await renderer.loadGltf('/character.glb', {
+  animations: ['Idle', 'Run']
+});
 
-### Protocol Layer
-Minimalist networking primitives:
-- `IntentRegistry`: Type-safe intent codec registry
-- `SnapshotCodec`: Binary encoding for state deltas
-- `Snapshot<T>`: Delta-based state updates
-- `applySnapshot()`: Deep merge snapshots into state
+const instance = renderer.addInstance({
+  model,
+  x: 0, y: 0, z: 0,
+  scaleX: 0.01, scaleY: 0.01, scaleZ: 0.01
+});
 
-Works harmoniously with core utilities (`FixedTicker`, `IntentTracker`, `Reconciliator`).
+instance.play?.('Idle', { loop: true });
 
-See [Protocol Layer Documentation](./src/protocol/README.md) for usage.
+renderer.camera.setPosition(3, 1, 3);
+renderer.camera.setTarget(0, 0, 0);
 
-### Network Layer
-Transport-agnostic client/server abstractions:
-- `ServerNetwork`: Multiplayer game server with per-peer snapshot registries
-- `ClientNetwork`: Game client with intent/snapshot handling
-- `TransportAdapter`: Pluggable transport interface
-- `BunWebSocketTransport`: Bun WebSocket implementation (reference)
+const loop = new GameLoop({ tickRate: 20, type: 'client' });
+loop.events.on('render', ({ alpha }) => renderer.render(alpha));
+loop.start();
+```
+</details>
 
-Key features:
-- **Per-peer snapshot registries** for fog of war and interest management
-- **Transport agnostic** - works with WebSocket, WebRTC, UDP, etc.
-- **Type-safe** protocol integration with `IntentRegistry` and `SnapshotRegistry`
+<details>
+<summary><strong>GPU Compute + Zero-Copy Rendering</strong></summary>
 
-See [Network Layer Documentation](./src/net/README.md) for usage and [examples/multiplayer-game.ts](./examples/multiplayer-game.ts) for a complete example.
+```typescript
+import { WebGPU2DRenderer, d, std } from 'murow/webgpu';
 
-## Building
+const renderer = new WebGPU2DRenderer(canvas);
+await renderer.init();
+
+const Particle = d.struct({
+  posX: d.f32, posY: d.f32,
+  velX: d.f32, velY: d.f32,
+  life: d.f32
+});
+
+// Physics runs on GPU
+const compute = renderer
+  .createCompute('physics', { workgroupSize: 256 })
+  .buffers({
+    particles: { storage: d.arrayOf(Particle, 10000), readwrite: true },
+    config: { uniform: d.struct({ deltaTime: d.f32, gravity: d.f32 }) }
+  })
+  .shader(({ particles, config }, { globalId }) => {
+    const p = particles[globalId.x];
+    p.velY = p.velY + config.gravity * config.deltaTime;
+    p.posY = p.posY + p.velY * config.deltaTime;
+  })
+  .build();
+
+// Render directly from compute buffer (zero-copy)
+const render = renderer
+  .createGeometry('particles', { maxInstances: 10000, geometry: 'quad' })
+  .instanceLayout({ dynamic: { posX: d.f32, posY: d.f32, velX: d.f32, velY: d.f32, life: d.f32 } })
+  .fromCompute(compute, 'particles')
+  .build();
+
+compute.dispatch(10000);
+render.render(); // GPU → GPU, no CPU overhead
+```
+
+Full example: [benchmarks/renderer/programs/gpu-particles.ts](./benchmarks/renderer/programs/gpu-particles.ts)
+</details>
+
+## Documentation
+
+- [Murow Core Package](./packages/murow/README.md) — ECS, networking, protocol, game loop
+- [WebGPU Renderer Package](./packages/webgpu/README.md) — 2D/3D rendering, compute shaders, TypeGPU
+
+## Development
 
 ```bash
-npm install
-npm run build
+# Install dependencies
+bun install
+
+# Build all packages
+bun run build
+
+# Run tests
+bun run test
+
+# Publish (runs tests + builds)
+bun run pub
 ```
 
 ## License
