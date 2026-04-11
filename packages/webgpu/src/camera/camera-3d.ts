@@ -14,6 +14,7 @@ export class Camera3D implements Camera3DState {
     near: number = 0.1;
     far: number = 1000;
     aspect: number = 1;
+    movement: 'local' | 'grounded' | 'global' = 'local';
 
     // Previous state for interpolation (stored before each tick)
     private _prevPosition: [number, number, number] = [0, 5, -10];
@@ -117,20 +118,22 @@ export class Camera3D implements Camera3DState {
     }
 
     /**
-     * Move the camera in local space. Zero allocations.
-     * @param right   Movement along the camera's right axis (positive = right)
-     * @param up      Movement along the camera's up axis (positive = up)
-     * @param forward Movement along the camera's forward axis (positive = toward target)
+     * Move the camera. Behaviour is determined by the `movement` property:
+     * - `'local'`    — along camera axes, pitch included (free-fly / spectator)
+     * - `'grounded'` — yaw-projected XZ + world Y (FPS)
+     * - `'global'`   — world axes directly (isometric / platformer)
      */
     move(right: number, up: number, forward: number): void {
-        // Ensure view matrix is current
+        if (this.movement === 'grounded') this._moveGrounded(right, up, forward);
+        else if (this.movement === 'global') this._moveGlobal(right, up, forward);
+        else this._moveLocal(right, up, forward);
+    }
+
+    private _moveLocal(right: number, up: number, forward: number): void {
         this.getViewMatrix();
+
         const m = this._viewMatrix;
 
-        // View matrix rows = camera axes (transposed from lookAt columns)
-        // Row 0 = right:   m[0], m[4], m[8]
-        // Row 1 = up:      m[1], m[5], m[9]
-        // Row 2 = -forward: m[2], m[6], m[10]
         const dx = m[0] * right + m[1] * up - m[2] * forward;
         const dy = m[4] * right + m[5] * up - m[6] * forward;
         const dz = m[8] * right + m[9] * up - m[10] * forward;
@@ -138,9 +141,35 @@ export class Camera3D implements Camera3DState {
         this.position[0] += dx;
         this.position[1] += dy;
         this.position[2] += dz;
+
         this.target[0] += dx;
         this.target[1] += dy;
         this.target[2] += dz;
+    }
+
+    private _moveGrounded(right: number, up: number, forward: number): void {
+        const yaw = Math.atan2(this.target[0] - this.position[0], this.target[2] - this.position[2]);
+
+        const dx = Math.sin(yaw) * forward + Math.cos(yaw) * right;
+        const dz = Math.cos(yaw) * forward - Math.sin(yaw) * right;
+
+        this.position[0] += dx;
+        this.position[1] += up;
+        this.position[2] += dz;
+
+        this.target[0] += dx;
+        this.target[1] += up;
+        this.target[2] += dz;
+    }
+
+    private _moveGlobal(right: number, up: number, forward: number): void {
+        this.position[0] += right;
+        this.position[1] += up;
+        this.position[2] += forward;
+
+        this.target[0] += right;
+        this.target[1] += up;
+        this.target[2] += forward;
     }
 
     /**
