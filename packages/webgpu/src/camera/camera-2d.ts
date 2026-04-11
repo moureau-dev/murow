@@ -41,6 +41,16 @@ export class Camera2D implements Camera2DState {
         this._height = height;
     }
 
+    setPosition(x: number, y: number): void {
+        this.x = x;
+        this.y = y;
+    }
+
+    move(x: number, y: number): void {
+        this.x += x;
+        this.y += y;
+    }
+
     /**
      * Smoothly move the camera toward a target position.
      * Call each tick. The camera lerps toward (targetX, targetY) by the given factor.

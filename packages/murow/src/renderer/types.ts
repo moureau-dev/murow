@@ -26,6 +26,8 @@ export interface Camera2DState {
     y: number;
     zoom: number;
     rotation: number;
+    setPosition(x: number, y: number): void;
+    move(x: number, y: number): void;
 }
 
 export interface Camera3DState {
@@ -36,6 +38,8 @@ export interface Camera3DState {
     near: number;
     far: number;
     aspect: number;
+    setPosition(x: number, y: number, z: number): void;
+    move(right: number, up: number, forward: number): void;
 }
 
 export interface SpritesheetSource {
