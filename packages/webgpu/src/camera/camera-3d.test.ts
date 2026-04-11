@@ -267,6 +267,87 @@ describe('Camera3D', () => {
         });
     });
 
+    describe('screenToRay', () => {
+        test('returns an object with origin and direction', () => {
+            const cam = new Camera3D();
+            cam.setAspect(800, 600);
+            cam.position = [0, 0, 0];
+            cam.target = [0, 0, 1];
+            const ray = cam.screenToRay(400, 300);
+            expect(Array.isArray(ray.origin)).toBe(true);
+            expect(Array.isArray(ray.direction)).toBe(true);
+        });
+
+        test('center of screen produces ray pointing toward target', () => {
+            const cam = new Camera3D();
+            cam.setAspect(800, 600);
+            cam.position = [0, 0, 0];
+            cam.target = [0, 0, 1];
+            cam.storePrevious();
+            cam.interpolate(1);
+            const ray = cam.screenToRay(400, 300);
+            // Direction should point along +Z
+            expect(ray.direction[0]).toBeCloseTo(0, 2);
+            expect(ray.direction[1]).toBeCloseTo(0, 2);
+            expect(ray.direction[2]).toBeCloseTo(1, 2);
+        });
+
+        test('ray origin is camera position', () => {
+            const cam = new Camera3D();
+            cam.setAspect(800, 600);
+            cam.setPosition(3, 1, 5);
+            cam.setTarget(3, 1, 6);
+            const ray = cam.screenToRay(400, 300);
+            expect(ray.origin[0]).toBeCloseTo(3);
+            expect(ray.origin[1]).toBeCloseTo(1);
+            expect(ray.origin[2]).toBeCloseTo(5);
+        });
+
+        test('returns pre-allocated instance (same reference each call)', () => {
+            const cam = new Camera3D();
+            cam.setAspect(800, 600);
+            cam.setTarget(0, 0, 1);
+            const r1 = cam.screenToRay(400, 300);
+            const r2 = cam.screenToRay(400, 300);
+            expect(r1).toBe(r2);
+        });
+
+        test('ray direction is normalized', () => {
+            const cam = new Camera3D();
+            cam.setAspect(800, 600);
+            cam.setTarget(0, 0, 1);
+            const ray = cam.screenToRay(100, 100);
+            const len = Math.sqrt(
+                ray.direction[0] ** 2 +
+                ray.direction[1] ** 2 +
+                ray.direction[2] ** 2
+            );
+            expect(len).toBeCloseTo(1);
+        });
+    });
+
+    describe('move — grounded', () => {
+        test('moving forward with pitch does not change Y when grounded', () => {
+            const cam = new Camera3D();
+            cam.movement = 'grounded';
+            cam.setPosition(0, 0, 0);
+            // look diagonally up along +Z
+            cam.setTarget(0, 1, 1);
+            const initialY = cam.position[1];
+            cam.move(0, 0, 1);
+            expect(cam.position[1]).toBeCloseTo(initialY);
+        });
+
+        test('up component still moves world Y when grounded', () => {
+            const cam = new Camera3D();
+            cam.movement = 'grounded';
+            cam.setPosition(0, 0, 0);
+            cam.setTarget(0, 0, 1);
+            cam.move(0, 2, 0);
+            expect(cam.position[1]).toBeCloseTo(2);
+        });
+    });
+
     describe('edge cases', () => {
         test('camera at origin looking at positive Z', () => {
             const cam = new Camera3D();

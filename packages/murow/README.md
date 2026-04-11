@@ -33,6 +33,7 @@ import { WebGPU2DRenderer } from 'murow/webgpu';
 - [`FreeList`](./src/core/free-list) — Slot allocator for reusable handles
 - [`SparseBatcher`](./src/core/sparse-batcher) — Layer/sheet bucketing for batched rendering
 - [`SimpleRNG`](./src/core/simple-rng) — Seedable deterministic random number generator
+- [`Ray2D` / `Ray3D`](./src/core/ray) — Zero-allocation ray intersection tests (segment, circle/sphere, AABB, plane, triangle)
 
 ### [ECS](./src/ecs) — Entity Component System
 High-performance ECS with **SoA (Structure of Arrays)** storage, bitmask queries, and zero-allocation hot paths:

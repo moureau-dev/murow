@@ -243,6 +243,79 @@ describe('Camera2D', () => {
         });
     });
 
+    describe('setPosition', () => {
+        test('sets x and y', () => {
+            const cam = new Camera2D(800, 600);
+            cam.setPosition(42, 99);
+            expect(cam.x).toBe(42);
+            expect(cam.y).toBe(99);
+        });
+    });
+
+    describe('move', () => {
+        test('translates by delta', () => {
+            const cam = new Camera2D(800, 600);
+            cam.setPosition(10, 20);
+            cam.move(5, -3);
+            expect(cam.x).toBe(15);
+            expect(cam.y).toBe(17);
+        });
+
+        test('accumulates across calls', () => {
+            const cam = new Camera2D(800, 600);
+            cam.move(1, 0);
+            cam.move(1, 0);
+            cam.move(1, 0);
+            expect(cam.x).toBeCloseTo(3);
+        });
+    });
+
+    describe('screenToWorld', () => {
+        test('center of screen maps to camera position', () => {
+            const cam = new Camera2D(800, 600);
+            cam.setPosition(0, 0);
+            const [wx, wy] = cam.screenToWorld(400, 300);
+            expect(wx).toBeCloseTo(0);
+            expect(wy).toBeCloseTo(0);
+        });
+
+        test('top-left corner maps to (-halfW, halfH) at zoom=1', () => {
+            const cam = new Camera2D(800, 600);
+            const [wx, wy] = cam.screenToWorld(0, 0);
+            expect(wx).toBeCloseTo(-400);
+            expect(wy).toBeCloseTo(300);
+        });
+
+        test('bottom-right corner maps to (halfW, -halfH) at zoom=1', () => {
+            const cam = new Camera2D(800, 600);
+            const [wx, wy] = cam.screenToWorld(800, 600);
+            expect(wx).toBeCloseTo(400);
+            expect(wy).toBeCloseTo(-300);
+        });
+
+        test('camera offset shifts world coordinates', () => {
+            const cam = new Camera2D(800, 600);
+            cam.setPosition(100, 50);
+            const [wx, wy] = cam.screenToWorld(400, 300);
+            expect(wx).toBeCloseTo(100);
+            expect(wy).toBeCloseTo(50);
+        });
+
+        test('zoom=2 halves the visible world range', () => {
+            const cam = new Camera2D(800, 600);
+            cam.zoom = 2;
+            const [wx] = cam.screenToWorld(0, 300);
+            expect(wx).toBeCloseTo(-200); // half of 400
+        });
+
+        test('returns pre-allocated tuple (same reference)', () => {
+            const cam = new Camera2D(800, 600);
+            const p1 = cam.screenToWorld(0, 0);
+            const p2 = cam.screenToWorld(100, 100);
+            expect(p1).toBe(p2);
+        });
+    });
+
     describe('edge cases', () => {
         test('very small viewport', () => {
             const cam = new Camera2D(1, 1);

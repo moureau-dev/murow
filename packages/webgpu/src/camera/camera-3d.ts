@@ -4,6 +4,7 @@
  * Supports prev/curr state for frame interpolation.
  */
  import { lerp } from "murow/core/lerp";
+ import { Ray3D } from "murow/core/ray";
  import type { Camera3DState } from 'murow/renderer/types';
 
 export class Camera3D implements Camera3DState {
@@ -27,6 +28,9 @@ export class Camera3D implements Camera3DState {
     private _viewMatrix = new Float32Array(16);
     private _projMatrix = new Float32Array(16);
     private _vpMatrix = new Float32Array(16);
+    private _ray = new Ray3D();
+    private _width = 1;
+    private _height = 1;
 
     /**
      * Store current position/target as previous. Call before each tick.
@@ -103,12 +107,40 @@ export class Camera3D implements Camera3DState {
 
     setAspect(width: number, height: number): void {
         this.aspect = width / height;
+        this._width = width;
+        this._height = height;
     }
 
     setPosition(x: number, y: number, z: number): void {
         this.position[0] = x;
         this.position[1] = y;
         this.position[2] = z;
+    }
+
+    /**
+     * Unproject a screen coordinate into a world-space ray.
+     * Requires `setAspect(width, height)` to have been called first.
+     * Returns a pre-allocated Ray3D — copy origin/direction if you need to store it.
+     */
+    screenToRay(screenX: number, screenY: number): Ray3D {
+        this.getViewMatrix();
+        const m = this._viewMatrix;
+
+        const ndcX = (2 * screenX / this._width) - 1;
+        const ndcY = 1 - (2 * screenY / this._height);
+        const t = Math.tan(this.fov * Math.PI / 180 * 0.5);
+
+        // Camera axes from view matrix rows
+        const rightX = m[0], rightY = m[4], rightZ = m[8];
+        const upX    = m[1], upY    = m[5], upZ    = m[9];
+        const fwdX   = -m[2], fwdY  = -m[6], fwdZ  = -m[10];
+
+        const dx = fwdX + rightX * ndcX * t * this.aspect + upX * ndcY * t;
+        const dy = fwdY + rightY * ndcX * t * this.aspect + upY * ndcY * t;
+        const dz = fwdZ + rightZ * ndcX * t * this.aspect + upZ * ndcY * t;
+
+        this._ray.set(this.position[0], this.position[1], this.position[2], dx, dy, dz);
+        return this._ray;
     }
 
     setTarget(x: number, y: number, z: number): void {

@@ -51,6 +51,31 @@ export class Camera2D implements Camera2DState {
         this.y += y;
     }
 
+    private _worldPoint: [number, number] = [0, 0];
+
+    /**
+     * Unproject a screen coordinate to a world-space position.
+     * Uses current (non-interpolated) camera state.
+     * Returns a pre-allocated tuple — copy if you need to store it.
+     */
+    screenToWorld(screenX: number, screenY: number): [number, number] {
+        const ndcX = (2 * screenX / this._width) - 1;
+        const ndcY = 1 - (2 * screenY / this._height);
+
+        // Inverse of the camera's scale+rotation transform.
+        // Camera maps world→clip: clipX = sx*cos*(wx-cx) - sy*sin*(wy-cy)
+        //                         clipY = sx*sin*(wx-cx) + sy*cos*(wy-cy)
+        // Solved for wx, wy:
+        const cos = this.rotation ? Math.cos(-this.rotation) : 1;
+        const sin = this.rotation ? Math.sin(-this.rotation) : 0;
+        const sx = this.zoom / (this._width * 0.5);
+        const sy = this.zoom / (this._height * 0.5);
+
+        this._worldPoint[0] = this.x + (ndcX * cos + ndcY * sin) / sx;
+        this._worldPoint[1] = this.y + (ndcY * cos - ndcX * sin) / sy;
+        return this._worldPoint;
+    }
+
     /**
      * Smoothly move the camera toward a target position.
      * Call each tick. The camera lerps toward (targetX, targetY) by the given factor.

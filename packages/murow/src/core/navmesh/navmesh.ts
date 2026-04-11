@@ -1,3 +1,5 @@
+import { Ray2D } from '../ray/ray-2d';
+
 type ObstacleId = number;
 
 export type Obstacle =
@@ -45,10 +47,10 @@ export interface NavMeshOptions<TWorkers extends boolean | 'auto' = false> {
  */
 type PathResult<TWorkers extends boolean | 'auto' | undefined> =
   TWorkers extends false | undefined
-    ? Vec2[]  // Sync only
-    : TWorkers extends true
-      ? Promise<Vec2[]>  // Always async
-      : Vec2[] | Promise<Vec2[]>;  // Auto: can be either
+  ? Vec2[]  // Sync only
+  : TWorkers extends true
+  ? Promise<Vec2[]>  // Always async
+  : Vec2[] | Promise<Vec2[]>;  // Auto: can be either
 
 export type ObstacleInput =
   | Omit<CircleObstacle, 'id'>
@@ -114,9 +116,9 @@ const toCell = (v: Vec2): Vec2 => ({
 /**
  * Converts grid cell coordinates to world coordinates (cell center).
  */
-const fromCell = (v: Vec2): Vec2 => ({ 
-  x: v.x + 0.5, 
-  y: v.y + 0.5 
+const fromCell = (v: Vec2): Vec2 => ({
+  x: v.x + 0.5,
+  y: v.y + 0.5
 });
 
 /**
@@ -154,8 +156,8 @@ const decodeCell = (n: number): Vec2 => ({
  */
 class BinaryHeap<T> {
   private heap: T[] = [];
-  
-  constructor(private scoreFn: (item: T) => number) {}
+
+  constructor(private scoreFn: (item: T) => number) { }
 
   push(item: T) {
     this.heap.push(item);
@@ -165,12 +167,12 @@ class BinaryHeap<T> {
   pop(): T | undefined {
     const result = this.heap[0];
     const end = this.heap.pop();
-    
+
     if (this.heap.length > 0 && end !== undefined) {
       this.heap[0] = end;
       this.sinkDown(0);
     }
-    
+
     return result;
   }
 
@@ -181,13 +183,13 @@ class BinaryHeap<T> {
   private bubbleUp(n: number) {
     const element = this.heap[n];
     const score = this.scoreFn(element);
-    
+
     while (n > 0) {
       const parentN = ((n + 1) >> 1) - 1;
       const parent = this.heap[parentN];
-      
+
       if (score >= this.scoreFn(parent)) break;
-      
+
       this.heap[parentN] = element;
       this.heap[n] = parent;
       n = parentN;
@@ -264,14 +266,14 @@ class SpatialHash {
    */
   add(id: ObstacleId, obstacle: Obstacle) {
     const cells = this.getCellsForObstacle(obstacle);
-    
+
     for (const cell of cells) {
       if (!this.grid.has(cell)) {
         this.grid.set(cell, new Set());
       }
       this.grid.get(cell)!.add(id);
     }
-    
+
     this.obstacleCells.set(id, cells);
   }
 
@@ -281,7 +283,7 @@ class SpatialHash {
   remove(id: ObstacleId) {
     const cells = this.obstacleCells.get(id);
     if (!cells) return;
-    
+
     for (const cell of cells) {
       const bucket = this.grid.get(cell);
       if (bucket) {
@@ -291,7 +293,7 @@ class SpatialHash {
         }
       }
     }
-    
+
     this.obstacleCells.delete(id);
   }
 
@@ -316,14 +318,14 @@ class SpatialHash {
    */
   private getCellsForObstacle(o: Obstacle): Set<number> {
     const cells = new Set<number>();
-    
+
     if (o.type === 'circle') {
       const r = o.radius;
       const minX = Math.floor((o.pos.x - r) / this.cellSize);
       const maxX = Math.floor((o.pos.x + r) / this.cellSize);
       const minY = Math.floor((o.pos.y - r) / this.cellSize);
       const maxY = Math.floor((o.pos.y + r) / this.cellSize);
-      
+
       for (let x = minX; x <= maxX; x++) {
         for (let y = minY; y <= maxY; y++) {
           cells.add(encodeCell(x, y));
@@ -335,12 +337,12 @@ class SpatialHash {
       const hw = o.size.x / 2;
       const hh = o.size.y / 2;
       const diagonal = Math.sqrt(hw * hw + hh * hh);
-      
+
       const minX = Math.floor((cx - diagonal) / this.cellSize);
       const maxX = Math.floor((cx + diagonal) / this.cellSize);
       const minY = Math.floor((cy - diagonal) / this.cellSize);
       const maxY = Math.floor((cy + diagonal) / this.cellSize);
-      
+
       for (let x = minX; x <= maxX; x++) {
         for (let y = minY; y <= maxY; y++) {
           cells.add(encodeCell(x, y));
@@ -352,14 +354,14 @@ class SpatialHash {
       const maxX = Math.floor(bounds.maxX / this.cellSize);
       const minY = Math.floor(bounds.minY / this.cellSize);
       const maxY = Math.floor(bounds.maxY / this.cellSize);
-      
+
       for (let x = minX; x <= maxX; x++) {
         for (let y = minY; y <= maxY; y++) {
           cells.add(encodeCell(x, y));
         }
       }
     }
-    
+
     return cells;
   }
 }
@@ -384,7 +386,7 @@ function pointInCircle(p: Vec2, c: CircleObstacle): boolean {
 function pointInRect(p: Vec2, r: RectObstacle): boolean {
   const cx = r.pos.x + r.size.x / 2;
   const cy = r.pos.y + r.size.y / 2;
-  
+
   if (r.rotation) {
     const cos = Math.cos(-r.rotation);
     const sin = Math.sin(-r.rotation);
@@ -392,11 +394,11 @@ function pointInRect(p: Vec2, r: RectObstacle): boolean {
     const dy = p.y - cy;
     const localX = dx * cos - dy * sin;
     const localY = dx * sin + dy * cos;
-    
-    return Math.abs(localX) <= r.size.x / 2 && 
-           Math.abs(localY) <= r.size.y / 2;
+
+    return Math.abs(localX) <= r.size.x / 2 &&
+      Math.abs(localY) <= r.size.y / 2;
   }
-  
+
   return (
     p.x >= r.pos.x &&
     p.y >= r.pos.y &&
@@ -460,30 +462,30 @@ function getPolygonBounds(poly: PolygonObstacle): {
 } {
   let minX = Infinity, minY = Infinity;
   let maxX = -Infinity, maxY = -Infinity;
-  
+
   const cos = poly.rotation ? Math.cos(poly.rotation) : 1;
   const sin = poly.rotation ? Math.sin(poly.rotation) : 0;
-  
+
   for (const p of poly.points) {
     let x = p.x;
     let y = p.y;
-    
+
     if (poly.rotation) {
       const tx = x * cos - y * sin;
       const ty = x * sin + y * cos;
       x = tx;
       y = ty;
     }
-    
+
     x += poly.pos.x;
     y += poly.pos.y;
-    
+
     minX = Math.min(minX, x);
     minY = Math.min(minY, y);
     maxX = Math.max(maxX, x);
     maxY = Math.max(maxY, y);
   }
-  
+
   return { minX, minY, maxX, maxY };
 }
 
@@ -515,16 +517,16 @@ class Obstacles {
   move(id: ObstacleId, pos: Vec2) {
     const o = this.items.get(id);
     if (!o) return;
-    
+
     // Remove from old position in spatial hash
     this.spatial.remove(id);
-    
+
     // Create updated obstacle
     const updated = {
       ...o,
       pos: { ...pos },
     };
-    
+
     this.items.set(id, updated as Obstacle);
     this.spatial.add(id, updated as Obstacle);
     this.dirty = true;
@@ -544,7 +546,7 @@ class Obstacles {
    */
   at(pos: Vec2): Obstacle | undefined {
     const candidates = this.spatial.query(pos);
-    
+
     for (const id of candidates) {
       const o = this.items.get(id);
       if (!o || o.solid === false) continue;
@@ -577,7 +579,7 @@ class Obstacles {
 class GridNav {
   private blocked = new Set<number>();
 
-  constructor(private obstacles: Obstacles) {}
+  constructor(private obstacles: Obstacles) { }
 
   /**
    * Rebuilds the entire blocked cell set.
@@ -593,7 +595,7 @@ class GridNav {
         const r = Math.ceil(o.radius);
         const cx = Math.floor(o.pos.x);
         const cy = Math.floor(o.pos.y);
-        
+
         for (let dx = -r; dx <= r; dx++) {
           for (let dy = -r; dy <= r; dy++) {
             const cellX = cx + dx;
@@ -610,12 +612,12 @@ class GridNav {
         const hw = o.size.x / 2;
         const hh = o.size.y / 2;
         const diagonal = Math.sqrt(hw * hw + hh * hh);
-        
+
         const minX = Math.floor(cx - diagonal);
         const maxX = Math.ceil(cx + diagonal);
         const minY = Math.floor(cy - diagonal);
         const maxY = Math.ceil(cy + diagonal);
-        
+
         for (let x = minX; x <= maxX; x++) {
           for (let y = minY; y <= maxY; y++) {
             const cellCenter = { x: x + 0.5, y: y + 0.5 };
@@ -630,7 +632,7 @@ class GridNav {
         const maxX = Math.ceil(bounds.maxX);
         const minY = Math.floor(bounds.minY);
         const maxY = Math.ceil(bounds.maxY);
-        
+
         for (let x = minX; x <= maxX; x++) {
           for (let y = minY; y <= maxY; y++) {
             const cellCenter = { x: x + 0.5, y: y + 0.5 };
@@ -653,6 +655,82 @@ class GridNav {
 }
 
 /* ---------------------------------- */
+/* Ray helpers                        */
+/* ---------------------------------- */
+
+/**
+ * Tests whether a Ray2D intersects a solid obstacle within distance maxDist.
+ * Used for analytic line-of-sight checks.
+ */
+function rayIntersectsObstacle(ray: Ray2D, obstacle: Obstacle, maxDistance: number): boolean {
+  if (obstacle.solid === false) return false;
+
+  if (obstacle.type === 'circle') {
+    const distance = ray.intersectsCircle(obstacle.pos.x, obstacle.pos.y, obstacle.radius);
+    return distance !== null && distance <= maxDistance;
+  }
+
+  if (obstacle.type === 'rect') {
+    if (!obstacle.rotation) {
+      const distance = ray.intersectsAABB(obstacle.pos.x, obstacle.pos.y, obstacle.pos.x + obstacle.size.x, obstacle.pos.y + obstacle.size.y);
+      return distance !== null && distance <= maxDistance;
+    }
+
+    // Rotated rect: test each of the 4 edges as a segment
+    const cx = obstacle.pos.x + obstacle.size.x / 2;
+    const cy = obstacle.pos.y + obstacle.size.y / 2;
+    const hw = obstacle.size.x / 2;
+    const hh = obstacle.size.y / 2;
+    const cos = Math.cos(obstacle.rotation);
+    const sin = Math.sin(obstacle.rotation);
+    const corners: [number, number][] = [
+      [cx + hw * cos - hh * sin, cy + hw * sin + hh * cos],
+      [cx - hw * cos - hh * sin, cy - hw * sin + hh * cos],
+      [cx - hw * cos + hh * sin, cy - hw * sin - hh * cos],
+      [cx + hw * cos + hh * sin, cy + hw * sin - hh * cos],
+    ];
+
+    for (let i = 0; i < 4; i++) {
+      const [ax, ay] = corners[i];
+      const [bx, by] = corners[(i + 1) % 4];
+      const distance = ray.intersectsSegment(ax, ay, bx, by);
+
+      if (distance !== null && distance <= maxDistance) return true;
+    }
+
+    return false;
+  }
+
+  if (obstacle.type === 'polygon') {
+    const pts = obstacle.points;
+    const cos = obstacle.rotation ? Math.cos(obstacle.rotation) : 1;
+    const sin = obstacle.rotation ? Math.sin(obstacle.rotation) : 0;
+
+    for (let i = 0; i < pts.length; i++) {
+      const j = (i + 1) % pts.length;
+      let xi = pts[i].x, yi = pts[i].y;
+      let xj = pts[j].x, yj = pts[j].y;
+
+      if (obstacle.rotation) {
+        const txi = xi * cos - yi * sin; yi = xi * sin + yi * cos; xi = txi;
+        const txj = xj * cos - yj * sin; yj = xj * sin + yj * cos; xj = txj;
+      }
+
+      xi += obstacle.pos.x; yi += obstacle.pos.y;
+      xj += obstacle.pos.x; yj += obstacle.pos.y;
+
+      const distance = ray.intersectsSegment(xi, yi, xj, yj);
+
+      if (distance !== null && distance <= maxDistance) return true;
+    }
+
+    return false;
+  }
+
+  return false;
+}
+
+/* ---------------------------------- */
 /* Graph Nav                          */
 /* ---------------------------------- */
 
@@ -661,46 +739,36 @@ class GridNav {
  * Not a true navmesh - use GridNav for production.
  */
 class GraphNav {
-  constructor(private obstacles: Obstacles) {}
+  constructor(private obstacles: Obstacles) { }
 
-  rebuild() {}
+  rebuild() { }
 
   findPath(from: Vec2, to: Vec2): Vec2[] {
-    // Uniform sampling along path for LOS check
-    const steps = Math.ceil(
-      Math.hypot(to.x - from.x, to.y - from.y) * 2
-    );
-    
-    let blocked = false;
-    
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const p = {
-        x: from.x + (to.x - from.x) * t,
-        y: from.y + (to.y - from.y) * t,
-      };
-      
-      if (this.obstacles.at(p)) {
-        blocked = true;
-        break;
+    const ddx = to.x - from.x;
+    const ddy = to.y - from.y;
+    const dist = Math.hypot(ddx, ddy);
+
+    if (dist > 0) {
+      const ray = new Ray2D();
+      ray.set(from.x, from.y, ddx, ddy);
+
+      for (const obstacle of this.obstacles.values) {
+        if (rayIntersectsObstacle(ray, obstacle, dist)) {
+          // Blocked — fallback to grid A*
+          const cellPath = aStar(
+            toCell(from),
+            toCell(to),
+            (x, y) => {
+              const p = { x: x + 0.5, y: y + 0.5 };
+              return !this.obstacles.at(p);
+            }
+          );
+          return cellPath.map(fromCell);
+        }
       }
     }
-    
-    if (!blocked) {
-      return [from, to];
-    }
-    
-    // Fallback to grid A*
-    const cellPath = aStar(
-      toCell(from), 
-      toCell(to), 
-      (x, y) => {
-        const p = { x: x + 0.5, y: y + 0.5 };
-        return !this.obstacles.at(p);
-      }
-    );
-    
-    return cellPath.map(fromCell);
+
+    return [from, to];
   }
 }
 

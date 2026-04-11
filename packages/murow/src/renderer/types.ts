@@ -3,6 +3,8 @@
  * These abstractions allow different rendering backends (WebGPU, PixiJS, Three.js)
  * to share the same API surface.
  */
+import type { Ray2D } from '../core/ray/ray-2d';
+import type { Ray3D } from '../core/ray/ray-3d';
 
 export type ClearColor = [r: number, g: number, b: number, a: number];
 
@@ -28,6 +30,7 @@ export interface Camera2DState {
     rotation: number;
     setPosition(x: number, y: number): void;
     move(x: number, y: number): void;
+    screenToWorld(screenX: number, screenY: number): [number, number];
 }
 
 export interface Camera3DState {
@@ -38,8 +41,10 @@ export interface Camera3DState {
     near: number;
     far: number;
     aspect: number;
+    movement: 'local' | 'grounded' | 'global';
     setPosition(x: number, y: number, z: number): void;
     move(right: number, up: number, forward: number): void;
+    screenToRay(screenX: number, screenY: number): Ray3D;
 }
 
 export interface SpritesheetSource {
