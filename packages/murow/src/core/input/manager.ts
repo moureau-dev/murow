@@ -133,8 +133,8 @@ export class InputManager {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        this.mouse.dx += x - this.mouse.x;
-        this.mouse.dy += y - this.mouse.y;
+        this.mouse.dx += e.movementX;
+        this.mouse.dy += e.movementY;
 
         this.mouse.x = x;
         this.mouse.y = y;
