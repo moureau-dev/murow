@@ -341,4 +341,41 @@ describe("NavMesh - Performance", () => {
     expect(duration).toBeLessThan(1000); // Should complete in under 1 second
     expect(path).toBeDefined();
   });
+
+  test("graph LOS — DDA spatial traversal benchmark", () => {
+    const rng = { state: 42, next() { this.state = (this.state * 1664525 + 1013904223) & 0x7FFFFFFF; return this.state / 0x7FFFFFFF; } };
+
+    // Obstacles live at x/y >= 1000 — paths stay in 0..100, never blocked
+    const scenarios: Array<{ obstacles: number; pathRange: number; label: string }> = [
+      { obstacles: 50,   pathRange: 20,  label: "50 obs,  short path (~20u)" },
+      { obstacles: 500,  pathRange: 20,  label: "500 obs, short path (~20u)" },
+      { obstacles: 500,  pathRange: 50,  label: "500 obs, long path  (~50u)" },
+      { obstacles: 2000, pathRange: 50,  label: "2k obs,  long path  (~50u)" },
+    ];
+
+    for (const { obstacles, pathRange, label } of scenarios) {
+      rng.state = 42;
+      const navmesh = new NavMesh("graph");
+
+      for (let i = 0; i < obstacles; i++) {
+        navmesh.addObstacle({
+          type: "circle",
+          pos: { x: 1000 + rng.next() * 500, y: 1000 + rng.next() * 500 },
+          radius: 0.5,
+        });
+      }
+
+      const QUERIES = 1000;
+      const start = performance.now();
+      for (let i = 0; i < QUERIES; i++) {
+        navmesh.findPath({
+          from: { x: rng.next() * pathRange,             y: rng.next() * pathRange },
+          to:   { x: pathRange + rng.next() * pathRange, y: pathRange + rng.next() * pathRange },
+        });
+      }
+      const ms = performance.now() - start;
+      console.log(`  ${label}: ${(ms / QUERIES).toFixed(4)}ms/query`);
+      expect(ms).toBeLessThan(500);
+    }
+  });
 });

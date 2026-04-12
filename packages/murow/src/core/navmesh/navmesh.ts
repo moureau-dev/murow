@@ -306,6 +306,43 @@ class SpatialHash {
   }
 
   /**
+   * Returns unique obstacle IDs in cells the ray traverses, up to maxDist.
+   * Uses DDA grid traversal — O(dist/cellSize + candidates) instead of O(n).
+   * Direction must be normalized.
+   */
+  queryRay(ox: number, oy: number, dx: number, dy: number, maxDist: number): Set<ObstacleId> {
+    const seen = new Set<ObstacleId>();
+    const cs = this.cellSize;
+
+    let cx = Math.floor(ox / cs);
+    let cy = Math.floor(oy / cs);
+
+    const stepX = dx >= 0 ? 1 : -1;
+    const stepY = dy >= 0 ? 1 : -1;
+
+    const tDeltaX = Math.abs(dx) < 1e-10 ? Infinity : cs / Math.abs(dx);
+    const tDeltaY = Math.abs(dy) < 1e-10 ? Infinity : cs / Math.abs(dy);
+
+    let tMaxX = Math.abs(dx) < 1e-10 ? Infinity
+      : dx > 0 ? ((cx + 1) * cs - ox) / dx : (ox - cx * cs) / -dx;
+    let tMaxY = Math.abs(dy) < 1e-10 ? Infinity
+      : dy > 0 ? ((cy + 1) * cs - oy) / dy : (oy - cy * cs) / -dy;
+
+    while (true) {
+      const bucket = this.grid.get(encodeCell(cx, cy));
+      if (bucket) for (const id of bucket) seen.add(id);
+
+      const nextT = tMaxX < tMaxY ? tMaxX : tMaxY;
+      if (nextT > maxDist) break;
+
+      if (tMaxX <= tMaxY) { tMaxX += tDeltaX; cx += stepX; }
+      else                { tMaxY += tDeltaY; cy += stepY; }
+    }
+
+    return seen;
+  }
+
+  /**
    * Clears the entire spatial hash.
    */
   clear() {
@@ -557,6 +594,22 @@ class Obstacles {
     }
   }
 
+  get(id: ObstacleId): Obstacle | undefined {
+    return this.items.get(id);
+  }
+
+  /**
+   * Returns obstacle IDs along a ray using DDA spatial hash traversal.
+   * O(dist + candidates) — direction must be normalized.
+   */
+  queryRay(ray: Ray2D, maxDist: number): Set<ObstacleId> {
+    return this.spatial.queryRay(
+      ray.origin[0], ray.origin[1],
+      ray.direction[0], ray.direction[1],
+      maxDist,
+    );
+  }
+
   get values(): Obstacle[] {
     if (!this.dirty) return this._cachedItems;
     this._cachedItems = [...this.items.values()];
@@ -752,8 +805,10 @@ class GraphNav {
       const ray = new Ray2D();
       ray.set(from.x, from.y, ddx, ddy);
 
-      for (const obstacle of this.obstacles.values) {
-        if (rayIntersectsObstacle(ray, obstacle, dist)) {
+      const candidates = this.obstacles.queryRay(ray, dist);
+      for (const id of candidates) {
+        const obstacle = this.obstacles.get(id);
+        if (obstacle && rayIntersectsObstacle(ray, obstacle, dist)) {
           // Blocked — fallback to grid A*
           const cellPath = aStar(
             toCell(from),

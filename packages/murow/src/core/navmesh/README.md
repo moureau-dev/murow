@@ -141,12 +141,24 @@ const nav = new NavMesh('grid', {
 
 ## Performance
 
-| Feature        | Cost                              |
-| -------------- | --------------------------------- |
-| Obstacle query | **O(1)** avg                      |
-| Grid rebuild   | O(n × area)                       |
-| Pathfinding    | O(bᵈ log n)                       |
-| Memory         | Minimal, no allocations per frame |
+| Feature              | Cost                                        |
+| -------------------- | ------------------------------------------- |
+| Obstacle point query | **O(1)** avg via spatial hash               |
+| Graph LOS check      | **O(dist + candidates)** via DDA traversal  |
+| Grid rebuild         | O(n × area)                                 |
+| Pathfinding          | O(bᵈ log n)                                 |
+| Memory               | Minimal, no allocations per frame           |
+
+Measured (Bun, Intel Core i5-2400, 16 GB DDR3):
+
+| Scenario                        | ms/query |
+| ------------------------------- | -------- |
+| 50 obstacles,  ~20u path        | 0.0046   |
+| 500 obstacles, ~20u path        | 0.0020   |
+| 500 obstacles, ~50u path        | 0.0031   |
+| 2000 obstacles, ~50u path       | 0.0030   |
+
+Graph LOS cost scales with **path length**, not obstacle count — DDA only visits cells the ray touches.
 
 Handles:
 
@@ -161,4 +173,4 @@ Handles:
 * Polygon points **must be local (0,0-based)**
 * Rotation is supported for rects & polygons
 * All math is deterministic
-* No dependencies
+* No external dependencies (uses `Ray2D` from `murow/core/ray` internally)
