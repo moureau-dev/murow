@@ -151,14 +151,24 @@ const nav = new NavMesh('grid', {
 
 Measured (Bun, Intel Core i5-2400, 16 GB DDR3):
 
-| Scenario                        | ms/query |
-| ------------------------------- | -------- |
-| 50 obstacles,  ~20u path        | 0.0046   |
-| 500 obstacles, ~20u path        | 0.0020   |
-| 500 obstacles, ~50u path        | 0.0031   |
-| 2000 obstacles, ~50u path       | 0.0030   |
+**Graph — LOS (DDA traversal):**
 
-Graph LOS cost scales with **path length**, not obstacle count — DDA only visits cells the ray touches.
+| Scenario             | ms/query |
+| -------------------- | -------- |
+| 50 obs,  ~20u path   | 0.0043   |
+| 500 obs, ~20u path   | 0.0017   |
+| 500 obs, ~50u path   | 0.0028   |
+| 2k obs,  ~50u path   | 0.0027   |
+
+Cost scales with **path length only** — obstacles outside the ray path are free.
+
+**Grid — A\* pathfinding (pre-allocated + path cache):**
+
+| Scenario              | ms/query |
+| --------------------- | -------- |
+| 10 obs,  10×10 area   | 0.01     |
+| 30 obs,  20×20 area   | 0.01     |
+| 100 obs, 30×30 area   | 0.01     |
 
 Handles:
 

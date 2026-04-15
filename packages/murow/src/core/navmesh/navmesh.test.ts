@@ -342,23 +342,22 @@ describe("NavMesh - Performance", () => {
     expect(path).toBeDefined();
   });
 
-  test("graph LOS — DDA spatial traversal benchmark", () => {
+  test("graph LOS — DDA spatial traversal", () => {
     const rng = { state: 42, next() { this.state = (this.state * 1664525 + 1013904223) & 0x7FFFFFFF; return this.state / 0x7FFFFFFF; } };
 
-    // Obstacles live at x/y >= 1000 — paths stay in 0..100, never blocked
     const scenarios: Array<{ obstacles: number; pathRange: number; label: string }> = [
-      { obstacles: 50,   pathRange: 20,  label: "50 obs,  short path (~20u)" },
-      { obstacles: 500,  pathRange: 20,  label: "500 obs, short path (~20u)" },
-      { obstacles: 500,  pathRange: 50,  label: "500 obs, long path  (~50u)" },
-      { obstacles: 2000, pathRange: 50,  label: "2k obs,  long path  (~50u)" },
+      { obstacles: 50,   pathRange: 20, label: "50 obs,  ~20u path" },
+      { obstacles: 500,  pathRange: 20, label: "500 obs, ~20u path" },
+      { obstacles: 500,  pathRange: 50, label: "500 obs, ~50u path" },
+      { obstacles: 2000, pathRange: 50, label: "2k obs,  ~50u path" },
     ];
 
+    console.log("\n  graph LOS (DDA):");
     for (const { obstacles, pathRange, label } of scenarios) {
       rng.state = 42;
-      const navmesh = new NavMesh("graph");
-
+      const nav = new NavMesh("graph");
       for (let i = 0; i < obstacles; i++) {
-        navmesh.addObstacle({
+        nav.addObstacle({
           type: "circle",
           pos: { x: 1000 + rng.next() * 500, y: 1000 + rng.next() * 500 },
           radius: 0.5,
@@ -366,16 +365,55 @@ describe("NavMesh - Performance", () => {
       }
 
       const QUERIES = 1000;
+      rng.state = 99;
       const start = performance.now();
       for (let i = 0; i < QUERIES; i++) {
-        navmesh.findPath({
+        nav.findPath({
           from: { x: rng.next() * pathRange,             y: rng.next() * pathRange },
           to:   { x: pathRange + rng.next() * pathRange, y: pathRange + rng.next() * pathRange },
         });
       }
       const ms = performance.now() - start;
-      console.log(`  ${label}: ${(ms / QUERIES).toFixed(4)}ms/query`);
+      console.log(`    ${label}: ${(ms / QUERIES).toFixed(4)}ms/query`);
       expect(ms).toBeLessThan(500);
+    }
+  });
+
+  test("grid A* — pathfinding benchmark", () => {
+    const rng = { state: 42, next() { this.state = (this.state * 1664525 + 1013904223) & 0x7FFFFFFF; return this.state / 0x7FFFFFFF; } };
+
+    const scenarios: Array<{ obstacles: number; range: number; label: string }> = [
+      { obstacles: 10,  range: 10, label: "10 obs,  10×10 area" },
+      { obstacles: 30,  range: 20, label: "30 obs,  20×20 area" },
+      { obstacles: 100, range: 30, label: "100 obs, 30×30 area" },
+    ];
+
+    console.log("\n  grid A*:");
+    for (const { obstacles, range, label } of scenarios) {
+      rng.state = 42;
+      const nav = new NavMesh("grid");
+      // Obstacles placed strictly in the interior — border cells always open,
+      // guaranteeing a path always exists (no unbounded A* search)
+      for (let i = 0; i < obstacles; i++) {
+        nav.addObstacle({
+          type: "circle",
+          pos: { x: 2 + rng.next() * (range - 4), y: 2 + rng.next() * (range - 4) },
+          radius: 0.4,
+        });
+      }
+
+      const QUERIES = 100;
+      const start = performance.now();
+      for (let i = 0; i < QUERIES; i++) {
+        // Corner-to-corner paths — always solvable via the open border
+        nav.findPath({
+          from: { x: 0, y: 0 },
+          to:   { x: range, y: range },
+        });
+      }
+      const ms = performance.now() - start;
+      console.log(`    ${label}: ${(ms / QUERIES).toFixed(2)}ms/query`);
+      expect(ms).toBeLessThan(5000);
     }
   });
 });

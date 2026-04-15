@@ -121,13 +121,6 @@ const fromCell = (v: Vec2): Vec2 => ({
   y: v.y + 0.5
 });
 
-/**
- * Generates unique sequential IDs for obstacles.
- */
-const genId = (() => {
-  let i = 1;
-  return () => i++;
-})();
 
 /**
  * Encodes grid coordinates as a single integer for use as Map/Set keys.
@@ -178,6 +171,10 @@ class BinaryHeap<T> {
 
   get size(): number {
     return this.heap.length;
+  }
+
+  clear(): void {
+    this.heap.length = 0;
   }
 
   private bubbleUp(n: number) {
@@ -246,7 +243,7 @@ class BinaryHeap<T> {
 class SpatialHash {
   private cellSize: number;
   private grid = new Map<number, Set<ObstacleId>>();
-  private obstacleCells = new Map<ObstacleId, Set<number>>();
+  private obstacleCells = new Map<ObstacleId, number[]>();
 
   constructor(cellSize = 1) {
     this.cellSize = cellSize;
@@ -353,8 +350,8 @@ class SpatialHash {
   /**
    * Determines which cells an obstacle overlaps.
    */
-  private getCellsForObstacle(o: Obstacle): Set<number> {
-    const cells = new Set<number>();
+  private getCellsForObstacle(o: Obstacle): number[] {
+    const cells: number[] = [];
 
     if (o.type === 'circle') {
       const r = o.radius;
@@ -365,7 +362,7 @@ class SpatialHash {
 
       for (let x = minX; x <= maxX; x++) {
         for (let y = minY; y <= maxY; y++) {
-          cells.add(encodeCell(x, y));
+          cells.push(encodeCell(x, y));
         }
       }
     } else if (o.type === 'rect') {
@@ -382,7 +379,7 @@ class SpatialHash {
 
       for (let x = minX; x <= maxX; x++) {
         for (let y = minY; y <= maxY; y++) {
-          cells.add(encodeCell(x, y));
+          cells.push(encodeCell(x, y));
         }
       }
     } else if (o.type === 'polygon') {
@@ -394,7 +391,7 @@ class SpatialHash {
 
       for (let x = minX; x <= maxX; x++) {
         for (let y = minY; y <= maxY; y++) {
-          cells.add(encodeCell(x, y));
+          cells.push(encodeCell(x, y));
         }
       }
     }
@@ -538,11 +535,12 @@ class Obstacles {
   private items = new Map<ObstacleId, Obstacle>();
   private spatial = new SpatialHash(1); // Match grid cell size
   private _cachedItems: Obstacle[] = [];
+  private nextId = 1;
   dirty = true;
   version = 0;
 
   add(obstacle: ObstacleInput): ObstacleId {
-    const id = genId();
+    const id = this.nextId++;
     const newObstacle = { ...obstacle, id } as Obstacle;
     this.items.set(id, newObstacle);
     this.spatial.add(id, newObstacle);
@@ -619,6 +617,81 @@ class Obstacles {
 }
 
 /* ---------------------------------- */
+/* A* Engine                          */
+/* ---------------------------------- */
+
+/**
+ * Reusable A* engine — pre-allocated state cleared between runs.
+ * Zero allocations per search (no new Map/Set/BinaryHeap per call).
+ * Mirrors World's pre-allocated query buffer pattern.
+ */
+class AStarEngine {
+  private cameFrom = new Map<number, number>();
+  private g        = new Map<number, number>();
+  private closed   = new Set<number>();
+  private openSet  = new Set<number>();
+  private open:     BinaryHeap<number>;
+  goalX = 0;
+  goalY = 0;
+
+  constructor() {
+    this.open = new BinaryHeap<number>((nodeKey) => {
+      const pos = decodeCell(nodeKey);
+      return (this.g.get(nodeKey) ?? 0) + Math.abs(pos.x - this.goalX) + Math.abs(pos.y - this.goalY);
+    });
+  }
+
+  run(start: Vec2, goal: Vec2, walkable: (x: number, y: number) => boolean): Vec2[] {
+    this.goalX = goal.x;
+    this.goalY = goal.y;
+
+    this.cameFrom.clear();
+    this.g.clear();
+    this.closed.clear();
+    this.openSet.clear();
+    this.open.clear();
+
+    const startKey = encodeCell(start.x, start.y);
+    this.g.set(startKey, 0);
+    this.open.push(startKey);
+    this.openSet.add(startKey);
+
+    while (this.open.size > 0) {
+      const currentKey = this.open.pop()!;
+      this.openSet.delete(currentKey);
+      const current = decodeCell(currentKey);
+
+      if (current.x === goal.x && current.y === goal.y) {
+        return reconstruct(this.cameFrom, current);
+      }
+
+      this.closed.add(currentKey);
+
+      for (const d of dirs) {
+        const nx = current.x + d.x;
+        const ny = current.y + d.y;
+        if (!walkable(nx, ny)) continue;
+
+        const nk = encodeCell(nx, ny);
+        if (this.closed.has(nk)) continue;
+
+        const ng = this.g.get(currentKey)! + 1;
+        if (ng < (this.g.get(nk) ?? Infinity)) {
+          this.g.set(nk, ng);
+          this.cameFrom.set(nk, currentKey);
+          if (!this.openSet.has(nk)) {
+            this.open.push(nk);
+            this.openSet.add(nk);
+          }
+        }
+      }
+    }
+
+    return [];
+  }
+}
+
+/* ---------------------------------- */
 /* Grid Nav                           */
 /* ---------------------------------- */
 
@@ -631,6 +704,12 @@ class Obstacles {
  */
 class GridNav {
   private blocked = new Set<number>();
+  private astar   = new AStarEngine();
+
+  // Path cache — keyed by encoded from|to cells, invalidated by obstacle version.
+  // Mirrors World's archetypeVersion + queryResultBuffers pattern.
+  private pathCache        = new Map<string, Vec2[]>();
+  private pathCacheVersion = -1;
 
   constructor(private obstacles: Obstacles) { }
 
@@ -699,11 +778,22 @@ class GridNav {
   }
 
   findPath(from: Vec2, to: Vec2): Vec2[] {
-    return aStar(
-      toCell(from),
-      toCell(to),
-      (x, y) => !this.blocked.has(encodeCell(x, y))
-    ).map(fromCell);
+    const fc = toCell(from);
+    const tc = toCell(to);
+    const cacheKey = `${encodeCell(fc.x, fc.y)}|${encodeCell(tc.x, tc.y)}`;
+
+    // Invalidate cache when obstacles changed (same pattern as World.archetypeVersion)
+    if (this.obstacles.version !== this.pathCacheVersion) {
+      this.pathCache.clear();
+      this.pathCacheVersion = this.obstacles.version;
+    }
+
+    const cached = this.pathCache.get(cacheKey);
+    if (cached) return cached;
+
+    const path = this.astar.run(fc, tc, (x, y) => !this.blocked.has(encodeCell(x, y))).map(fromCell);
+    this.pathCache.set(cacheKey, path);
+    return path;
   }
 }
 
@@ -789,9 +879,12 @@ function rayIntersectsObstacle(ray: Ray2D, obstacle: Obstacle, maxDistance: numb
 
 /**
  * Line-of-sight navigation with grid fallback.
+ * Uses DDA spatial traversal — O(dist + candidates) per query.
  * Not a true navmesh - use GridNav for production.
  */
 class GraphNav {
+  private astar = new AStarEngine();
+
   constructor(private obstacles: Obstacles) { }
 
   rebuild() { }
@@ -810,15 +903,11 @@ class GraphNav {
         const obstacle = this.obstacles.get(id);
         if (obstacle && rayIntersectsObstacle(ray, obstacle, dist)) {
           // Blocked — fallback to grid A*
-          const cellPath = aStar(
+          return this.astar.run(
             toCell(from),
             toCell(to),
-            (x, y) => {
-              const p = { x: x + 0.5, y: y + 0.5 };
-              return !this.obstacles.at(p);
-            }
-          );
-          return cellPath.map(fromCell);
+            (x, y) => !this.obstacles.at({ x: x + 0.5, y: y + 0.5 }),
+          ).map(fromCell);
         }
       }
     }
@@ -874,7 +963,7 @@ export class NavMesh<TWorkers extends boolean | 'auto' = false> {
   private grid?: GridNav;
   private graph?: GraphNav;
   private lastVersion = -1;
-  obstacles: Obstacles;
+  private obstacles: Obstacles;
 
   // Worker support
   private options: Required<NavMeshOptions<TWorkers>>;
@@ -1007,9 +1096,8 @@ export class NavMesh<TWorkers extends boolean | 'auto' = false> {
 
     // Sync path (no workers)
     this.rebuild();
-    return (this.type === 'grid'
-      ? this.grid!.findPath(from, to)
-      : this.graph!.findPath(from, to)) as PathResult<TWorkers>;
+    if (this.type === 'grid') return this.grid!.findPath(from, to) as PathResult<TWorkers>;
+    return this.graph!.findPath(from, to) as PathResult<TWorkers>;
   }
 
   /**
@@ -1024,9 +1112,8 @@ export class NavMesh<TWorkers extends boolean | 'auto' = false> {
     if (!this.workerPool) {
       // Fallback to sync if workers failed to init
       this.rebuild();
-      return this.type === 'grid'
-        ? this.grid!.findPath(from, to)
-        : this.graph!.findPath(from, to);
+      if (this.type === 'grid') return this.grid!.findPath(from, to);
+      return this.graph!.findPath(from, to);
     }
 
     return this.workerPool.findPath(from, to);
@@ -1076,80 +1163,6 @@ export class NavMesh<TWorkers extends boolean | 'auto' = false> {
   }
 }
 
-/* ---------------------------------- */
-/* A*                                 */
-/* ---------------------------------- */
-
-/**
- * A* pathfinding with binary heap and proper open set tracking.
- * 
- * Optimizations:
- * - Binary heap: O(log n) operations
- * - Open set tracking: prevents duplicate nodes
- * - Integer cell encoding: eliminates string allocation
- * - Closed set: avoids reprocessing
- * 
- * Performance: Handles 10k+ node searches efficiently.
- * Time: O(b^d * log n) where b = branching, d = depth, n = nodes.
- */
-function aStar(
-  start: Vec2,
-  goal: Vec2,
-  walkable: (x: number, y: number) => boolean
-): Vec2[] {
-  const cameFrom = new Map<number, number>();
-  const g = new Map<number, number>();
-  const closed = new Set<number>();
-  const openSet = new Set<number>();
-
-  const key = (p: Vec2): number => encodeCell(p.x, p.y);
-  const h = (a: Vec2, b: Vec2): number =>
-    Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-
-  const open = new BinaryHeap<number>((nodeKey) => {
-    const pos = decodeCell(nodeKey);
-    return g.get(nodeKey)! + h(pos, goal);
-  });
-
-  const startKey = key(start);
-  g.set(startKey, 0);
-  open.push(startKey);
-  openSet.add(startKey);
-
-  while (open.size > 0) {
-    const currentKey = open.pop()!;
-    openSet.delete(currentKey);
-    const current = decodeCell(currentKey);
-
-    if (current.x === goal.x && current.y === goal.y) {
-      return reconstruct(cameFrom, current);
-    }
-
-    closed.add(currentKey);
-
-    for (const d of dirs) {
-      const n = { x: current.x + d.x, y: current.y + d.y };
-      if (!walkable(n.x, n.y)) continue;
-
-      const nk = key(n);
-      if (closed.has(nk)) continue;
-
-      const ng = g.get(currentKey)! + 1;
-
-      if (ng < (g.get(nk) ?? Infinity)) {
-        g.set(nk, ng);
-        cameFrom.set(nk, currentKey);
-
-        if (!openSet.has(nk)) {
-          open.push(nk);
-          openSet.add(nk);
-        }
-      }
-    }
-  }
-
-  return [];
-}
 
 /**
  * Reconstructs path from A* came-from map.
