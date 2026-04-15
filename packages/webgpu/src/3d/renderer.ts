@@ -61,11 +61,6 @@ const SSTAT_SX = 0, SSTAT_SY = 1, SSTAT_SZ = 2;
 const SSTAT_CR = 3, SSTAT_CG = 4, SSTAT_CB = 5;
 const SSTAT_BONE_OFFSET = 6;
 
-// Default limits for skinned rendering
-const DEFAULT_MAX_SKINNED_INSTANCES = 4000;
-const DEFAULT_MAX_BONES_PER_SKIN = 64;
-const DEFAULT_MAX_TOTAL_BONES = DEFAULT_MAX_SKINNED_INSTANCES * DEFAULT_MAX_BONES_PER_SKIN * 2; // 2x for world + final bone matrices (~32MB)
-
 export interface ModelData {
     positions: Float32Array;
     normals?: Float32Array;
@@ -119,6 +114,11 @@ export interface MeshInstanceOptions {
     rotX?: number; rotY?: number; rotZ?: number;
     scaleX?: number; scaleY?: number; scaleZ?: number;
     color?: [number, number, number];
+}
+
+export interface WebGPU3DRendererOptions extends Renderer3DOptions {
+    maxSkinnedInstances?: number;
+    maxBonesPerSkin?: number;
 }
 
 export class WebGPU3DRenderer extends Base3DRenderer {
@@ -195,7 +195,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private boneMatrixData!: Float32Array; // CPU fallback / rest pose init
     private rawBoneMatrixBuffer!: GPUBuffer;
     private boneMatrixDirty = true;
-    private maxTotalBones = DEFAULT_MAX_TOTAL_BONES;
+    private readonly maxTotalBones: number;
 
     // GPU animation compute
     private packedAnimData: PackedAnimationData = createPackedAnimationData();
@@ -219,7 +219,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private skinnedInstanceBoneOffsets!: Uint32Array;
     private skinnedAnimStates: (SkeletalAnimState | null)[] = [];
     private nextBoneOffset = 0;
-    private maxSkinnedInstances = DEFAULT_MAX_SKINNED_INSTANCES;
+    private readonly maxSkinnedInstances: number;
+    private readonly maxBonesPerSkin: number;
 
     // Raw skinned GPU buffers
     private rawSkinnedDynamicBuffer!: GPUBuffer;
@@ -234,9 +235,14 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private uniformData = new Float32Array(24); // mat4x4 (16) + alpha (1) + lightDir (3) + padding (4)
     private lastRenderTime = 0;
 
-    constructor(canvas: HTMLCanvasElement, options: Renderer3DOptions) {
+    constructor(canvas: HTMLCanvasElement, options: WebGPU3DRendererOptions) {
         super(canvas, options);
         this.camera = new Camera3D();
+
+        this.maxSkinnedInstances = options.maxSkinnedInstances ?? 5000;
+        this.maxBonesPerSkin = options.maxBonesPerSkin ?? 64;
+        this.maxTotalBones = this.maxSkinnedInstances * this.maxBonesPerSkin * 2;
+        this.updatedBoneOffsets = new Uint8Array(this.maxTotalBones);
 
         // Non-skinned instance buffers
         this.freeList = new FreeList(options.maxModels);
@@ -1329,7 +1335,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
      * Update skeletal animations for all skinned instances. Call once per tick.
      */
     // Pre-allocated dedup tracker for updateAnimations — indexed by bone offset, not slot (zero-GC)
-    private updatedBoneOffsets = new Uint8Array(DEFAULT_MAX_TOTAL_BONES);
+    private updatedBoneOffsets!: Uint8Array;
 
     private updateAnimations(deltaTime: number): void {
         // Rebuild GPU compute kernel if new skinned models were loaded
