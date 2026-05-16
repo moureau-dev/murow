@@ -1,6 +1,6 @@
 {
   "name": "murow",
-  "version": "0.0.70",
+  "version": "0.0.71",
   "description": "A lightweight TypeScript game engine for server-authoritative multiplayer games",
   "types": "dist/types/index.d.ts",
   "type": "module",
@@ -49,7 +49,7 @@
       "default": "./dist/esm/core/index.js"
     },
     "./core/*": {
-      "types": "./dist/types/core/*.d.ts",
+      "types": "./dist/types/core/*/index.d.ts",
       "import": "./dist/esm/core/*/index.js",
       "require": "./dist/cjs/core/*/index.js"
     },
@@ -61,8 +61,8 @@
     },
     "./ecs/*": {
       "types": "./dist/types/ecs/*.d.ts",
-      "import": "./dist/esm/ecs/*/index.js",
-      "require": "./dist/cjs/ecs/*/index.js"
+      "import": "./dist/esm/ecs/*.js",
+      "require": "./dist/cjs/ecs/*.js"
     },
     "./game": {
       "types": "./dist/types/game/index.d.ts",
@@ -72,8 +72,8 @@
     },
     "./game/*": {
       "types": "./dist/types/game/*.d.ts",
-      "import": "./dist/esm/game/*/index.js",
-      "require": "./dist/cjs/game/*/index.js"
+      "import": "./dist/esm/game/*.js",
+      "require": "./dist/cjs/game/*.js"
     },
     "./net": {
       "types": "./dist/types/net/index.d.ts",
@@ -83,8 +83,8 @@
     },
     "./net/*": {
       "types": "./dist/types/net/*.d.ts",
-      "import": "./dist/esm/net/*/index.js",
-      "require": "./dist/cjs/net/*/index.js"
+      "import": "./dist/esm/net/*.js",
+      "require": "./dist/cjs/net/*.js"
     },
     "./protocol": {
       "types": "./dist/types/protocol/index.d.ts",
@@ -94,8 +94,8 @@
     },
     "./protocol/*": {
       "types": "./dist/types/protocol/*.d.ts",
-      "import": "./dist/esm/protocol/*/index.js",
-      "require": "./dist/cjs/protocol/*/index.js"
+      "import": "./dist/esm/protocol/*.js",
+      "require": "./dist/cjs/protocol/*.js"
     },
     "./renderer": {
       "types": "./dist/types/renderer/index.d.ts",
@@ -105,8 +105,8 @@
     },
     "./renderer/*": {
       "types": "./dist/types/renderer/*.d.ts",
-      "import": "./dist/esm/renderer/index.js",
-      "require": "./dist/cjs/renderer/index.js"
+      "import": "./dist/esm/renderer/*.js",
+      "require": "./dist/cjs/renderer/*.js"
     },
     "./webgpu": {
       "types": "./dist/webgpu/types/index.d.ts",
