@@ -1,6 +1,6 @@
 import { GameLoop } from 'murow';
-import { WebGPU2DRenderer, d, std } from '@murow/webgpu';
-import type { Program } from '../index';
+import { WebGPU2DRenderer, d, std } from 'murow/webgpu';
+import type { Program } from '..';
 
 const MAX_STARS = 1_000;
 
@@ -59,9 +59,9 @@ export const starfield: Program = {
                 },
                 fragment: {
                     fn(input) {
-                        const dist = std.length(input.localUV);
+                        const dist = std.length(input.localUV as number);
                         const glow = std.pow(std.saturate(1.0 - dist), 3.0);
-                        const c = glow * input.brightness;
+                        const c = glow * (input.brightness as number);
                         return d.vec4f(c * 0.9, c * 0.95, c, glow);
                     },
                 },

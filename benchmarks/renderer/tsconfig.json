@@ -6,7 +6,13 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["@webgpu/types"]
+    "types": ["@webgpu/types"],
+    "baseUrl": ".",
+    "paths": {
+      "murow": ["../../packages/murow/src/", "../../packages/murow/dist/types/"],
+      "murow/webgpu": ["../../packages/webgpu/src/"],
+      "murow/*": ["../../packages/murow/src/*", "../../packages/murow/dist/types/*"],
+    }
   },
   "include": ["*.ts", "programs/**/*.ts"]
 }

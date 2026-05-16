@@ -2,7 +2,7 @@ import { GameLoop } from 'murow';
 import { WebGPU2DRenderer, d, std } from 'murow/webgpu';
 import type { Program } from '../index';
 
-const MAX_PARTICLES = 1_000_000;
+const MAX_PARTICLES = 1_0_000;
 
 const Particle = d.struct({
     posX: d.f32,
@@ -103,11 +103,11 @@ export const gpuParticles: Program = {
                 },
                 fragment: {
                     fn({ localUV, vLife, vHue }) {
-                        const dist = std.length(localUV);
+                        const dist = std.length(localUV as number);
                         const glow = std.pow(std.saturate(1.0 - dist), 2.0);
-                        const fade = std.saturate(vLife * 0.5);
+                        const fade = std.saturate((vLife as number) * 0.5);
 
-                        const h = vHue * 6.0;
+                        const h = (vHue as number) * 6.0;
                         const r = std.saturate(std.abs(h - 3.0) - 1.0);
                         const g = std.saturate(2.0 - std.abs(h - 2.0));
                         const b = std.saturate(2.0 - std.abs(h - 4.0));
