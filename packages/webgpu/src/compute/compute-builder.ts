@@ -24,10 +24,9 @@
  */
 import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer, TgpuBindGroupLayout, TgpuBindGroup, TgpuComputePipeline } from 'typegpu';
-import * as d from 'typegpu/data';
 import type { AnyWgslData, AnyData } from 'typegpu/data';
-import * as std from 'typegpu/std';
 import { attachShaderMetadata } from '../shaders/runtime-transpile';
+import { d, std } from '../shaders/typegpu';
 
 // =============================================================================
 // Types
@@ -298,7 +297,7 @@ export class ComputeBuilder<
                 externals[name] = (bound as Record<string, unknown>)[name];
             }
             return externals;
-        }, true);
+        }, true, { d, std });
 
         const computeIn: Record<string, unknown> = {
             globalId: d.builtin.globalInvocationId,

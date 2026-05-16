@@ -4,9 +4,9 @@
  * Re-exports TypeGPU's data module as `d` for user-facing shader authoring.
  */
 
-// TypeGPU re-exports
-export * as d from 'typegpu/data';
-export * as std from 'typegpu/std';
+// TypeGPU re-exports — bundler-safe wraps (see ./shaders/typegpu.ts).
+export { d, std } from './shaders/typegpu';
+
 
 // 2D Renderer
 export { WebGPU2DRenderer } from './2d/renderer';

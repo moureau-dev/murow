@@ -1,12 +1,12 @@
 import {
     ClientNetwork,
     generateId,
+    InputSnapshot,
     lerp,
     Reconciliator,
-    createDriver,
-} from "../../src";
+} from "murow";
 
-import { BrowserWebSocketClientTransport } from "../../src/net/adapters/browser-websocket";
+import { BrowserWebSocketClientTransport } from "murow/net/adapters/browser-websocket";
 import {
     Simulation,
     Intents,
@@ -30,22 +30,26 @@ export class GameClient {
     ctx: CanvasRenderingContext2D;
 
     network!: ClientNetwork<GameStateUpdate>;
-    simulation: Simulation;
+    simulation: Simulation<'client'>;
 
     myId: string | null = null;
     connected = false;
 
     keys: Record<string, boolean> = {};
     lastSnapshotTick = 0;
+    lastPeerSnapshotTicks: Map<string, number> = new Map(); // Track last snapshot tick per peer
 
     reconciler: Reconciliator<Intents.Move, GameStateUpdate>;
-    previousPositions: Map<string, { x: number; y: number }> = new Map();
-    snapshotTimestamps: Map<string, number> = new Map();
+
+    // Snapshot buffer for entity interpolation (render in the past for smoothness)
+    snapshotBuffer: Array<{ serverTime: number; receiveTime: number; state: GameStateUpdate }> = [];
+    readonly RENDER_DELAY = 0; // Render 200ms behind (ensures we always have snapshots to interpolate)
 
     // Error smoothing for own player
     positionError = { x: 0, y: 0 };
-    readonly errorSmoothingFactor = 0.05; // Increased for faster smoothing
+    readonly errorSmoothingFactor = 0.1; // Smooth out prediction errors quickly
     positionBeforeReconciliation = { x: 0, y: 0 };
+    readonly maxCorrectionPerFrame = 10; // Max pixels to correct per frame (prevents snapping)
 
     // Interpolation for own player
     myPreviousPosition = { x: 0, y: 0 };
@@ -56,10 +60,10 @@ export class GameClient {
         this.canvas = document.getElementById("gameCanvas") as HTMLCanvasElement;
         this.ctx = this.canvas.getContext("2d")!;
 
-        this.simulation = new Simulation();
+        this.simulation = new Simulation('client');
 
         // Hook into pre-tick to store position before tick processing
-        this.simulation.events.on('pre-tick', () => {
+        this.simulation.loop.events.on('pre-tick', () => {
             // Store position and timestamp before tick for interpolation
             const myPlayer = this.simulation.players.get(this.myId!);
             if (myPlayer) {
@@ -71,7 +75,9 @@ export class GameClient {
         });
 
         // Hook into tick event to apply input and send intents
-        this.simulation.events.on('tick', ({ tick }) => this.tick(tick));
+        this.simulation.loop.events.on('tick', ({ tick, deltaTime, input }) => this.tick(tick, deltaTime, input));
+
+        this.simulation.loop.events.on('render', ({ alpha }) => this.render(alpha))
 
         // Temporary variables for reconciliation
         let tempServerX = 0;
@@ -120,11 +126,19 @@ export class GameClient {
                 const errorMagnitude = Math.hypot(errorX, errorY);
 
                 if (errorMagnitude > 0.5) {
-                    this.positionError.x = errorX;
-                    this.positionError.y = errorY;
+                    // Cap the maximum error to prevent large snaps during lag spikes
+                    const maxError = 50; // Max 50px error accumulation
+                    if (errorMagnitude > maxError) {
+                        const scale = maxError / errorMagnitude;
+                        this.positionError.x = errorX * scale;
+                        this.positionError.y = errorY * scale;
+                    } else {
+                        this.positionError.x = errorX;
+                        this.positionError.y = errorY;
+                    }
 
-                    if (errorMagnitude > 5) {
-                        console.warn(`Prediction error: ${errorMagnitude.toFixed(2)}px`);
+                    if (errorMagnitude > 20) {
+                        console.warn(`Prediction error: ${errorMagnitude.toFixed(2)}px (capped if >50px)`);
                     }
                 }
 
@@ -144,9 +158,11 @@ export class GameClient {
     connect() {
         const transport = new BrowserWebSocketClientTransport(`ws://mococa:${WS_PORT}`);
 
+        const intentRegistry = createIntentRegistry();
+
         this.network = new ClientNetwork({
             transport,
-            intentRegistry: createIntentRegistry(),
+            intentRegistry,
             snapshotRegistry: createSnapshotRegistry(),
             rpcRegistry: createRpcRegistry(),
             config: {
@@ -154,7 +170,7 @@ export class GameClient {
                 heartbeatInterval: 0,
                 maxSendQueueSize: 1024 * 1024, // 1 MB
                 maxMessagesPerSecond: 0,
-                lagSimulation: 0,
+                lagSimulation: { min: 0, max: 400 }, // for testing
             },
         });
 
@@ -184,6 +200,26 @@ export class GameClient {
 
         this.network.onSnapshot("gameState", (snapshot) => {
             if (!snapshot.updates) return;
+
+            // Reject old snapshots that arrive out of order (due to variable network lag)
+            if (snapshot.tick < this.lastSnapshotTick) {
+                console.log(`Rejecting old snapshot: tick ${snapshot.tick} (last: ${this.lastSnapshotTick})`);
+                return;
+            }
+            this.lastSnapshotTick = snapshot.tick;
+
+            const now = performance.now();
+
+            // Add snapshot to buffer with both server time (tick-based) and receive time
+            this.snapshotBuffer.push({
+                serverTime: snapshot.tick * (1000 / 12), // Convert tick to milliseconds (12Hz = 83.33ms per tick)
+                receiveTime: now,
+                state: snapshot.updates as GameStateUpdate,
+            });
+
+            // Keep only last 1 second of snapshots
+            const cutoff = now - 1000;
+            this.snapshotBuffer = this.snapshotBuffer.filter(s => s.receiveTime > cutoff);
 
             this.reconciler.onSnapshot({
                 tick: snapshot.tick,
@@ -223,25 +259,28 @@ export class GameClient {
     ================================ */
 
     start() {
-        const driver = createDriver('client', (dt: number) => {
-            this.simulation.update(dt);
-            this.render();
-        });
-
-        driver.start();
+        this.simulation.loop.start();
     }
 
-    tick(tick: number) {
+    tick(tick: number, deltaTime: number, input: InputSnapshot) {
         if (!this.connected || !this.myId) return;
-
-        const input = this.readInput();
+        const moveKeys = ['ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight'];
+        let vx = 0, vy = 0;
+        for (const key of moveKeys) {
+            if (input.keys[key]?.down) {
+                if (key === 'ArrowUp') vy = -1;
+                if (key === 'ArrowLeft') vx = -1;
+                if (key === 'ArrowRight') vx = 1;
+                if (key === 'ArrowDown') vy = 1;
+            }
+        }
 
         // Create intent
         const intent: Intents.Move = {
             kind: Intents.Move.kind,
             tick,
-            vx: input.vx,
-            vy: input.vy,
+            vx,
+            vy,
         };
 
         // Send intent to server and track locally
@@ -250,7 +289,7 @@ export class GameClient {
 
         // Apply client-side prediction (must match replay logic)
         this.simulation.applyVelocity(this.myId, intent);
-        this.simulation.step();
+        this.simulation.step(deltaTime);
     }
 
     /* ================================
@@ -258,8 +297,6 @@ export class GameClient {
     ================================ */
 
     loadSnapshot(state: GameStateUpdate) {
-        const now = performance.now();
-
         for (const p of state) {
             let player = this.simulation.players.get(p.id);
 
@@ -275,11 +312,8 @@ export class GameClient {
                     player.y = p.y;
                 }
             } else {
-                // Store previous position before updating (for interpolation)
-                this.previousPositions.set(p.id, { x: player.x, y: player.y });
-                this.snapshotTimestamps.set(p.id, now);
-
-                // Update position from authoritative server state
+                // For peers: update from authoritative server state
+                // Rendering will handle interpolation using snapshot buffer
                 player.x = p.x;
                 player.y = p.y;
             }
@@ -313,7 +347,7 @@ export class GameClient {
         }
     }
 
-    renderPlayers() {
+    renderPlayers(alpha: number) {
         const now = performance.now();
 
         for (const [playerId, player] of this.simulation.players) {
@@ -321,11 +355,11 @@ export class GameClient {
             let y = player.y;
 
             if (playerId === this.myId) {
-                // Only interpolate if we have a valid previous position from a tick
+                // Own player: client-side prediction with interpolation and error correction
                 if (this.shouldInterpolate) {
                     // Interpolate base position between ticks
-                    x = lerp(this.myPreviousPosition.x, player.x, this.simulation.ticker.alpha);
-                    y = lerp(this.myPreviousPosition.y, player.y, this.simulation.ticker.alpha);
+                    x = lerp(this.myPreviousPosition.x, player.x, alpha);
+                    y = lerp(this.myPreviousPosition.y, player.y, alpha);
                 } else {
                     // No interpolation - use current position directly
                     x = player.x;
@@ -344,17 +378,46 @@ export class GameClient {
                 if (Math.abs(this.positionError.x) < 0.01) this.positionError.x = 0;
                 if (Math.abs(this.positionError.y) < 0.01) this.positionError.y = 0;
             } else {
-                // Interpolate other players based on snapshot arrival time
-                const prev = this.previousPositions.get(playerId);
-                const timestamp = this.snapshotTimestamps.get(playerId);
+                // Other players: time-delayed entity interpolation
+                if (this.snapshotBuffer.length >= 2) {
+                    // Find the newest snapshot that's old enough (arrived at least RENDER_DELAY ms ago)
+                    let renderSnapshot = null;
+                    let nextSnapshot = null;
 
-                if (prev && timestamp) {
-                    const elapsed = now - timestamp;
-                    const interval = this.simulation.ticker.intervalMs;
-                    const alpha = Math.min(elapsed / interval, 1.0);
+                    for (let i = this.snapshotBuffer.length - 1; i >= 0; i--) {
+                        if (now - this.snapshotBuffer[i].receiveTime >= this.RENDER_DELAY) {
+                            renderSnapshot = this.snapshotBuffer[i];
+                            // Find the next newer snapshot for interpolation
+                            if (i + 1 < this.snapshotBuffer.length) {
+                                nextSnapshot = this.snapshotBuffer[i + 1];
+                            }
+                            break;
+                        }
+                    }
 
-                    x = lerp(prev.x, player.x, alpha);
-                    y = lerp(prev.y, player.y, alpha);
+                    if (renderSnapshot && nextSnapshot) {
+                        // Interpolate between these two snapshots
+                        const fromPlayer = renderSnapshot.state.find(p => p.id === playerId);
+                        const toPlayer = nextSnapshot.state.find(p => p.id === playerId);
+
+                        if (fromPlayer && toPlayer) {
+                            // How far are we into the interval between these two snapshots?
+                            const elapsed = now - renderSnapshot.receiveTime - this.RENDER_DELAY;
+                            const interval = nextSnapshot.receiveTime - renderSnapshot.receiveTime;
+                            const alpha = Math.min(elapsed / interval, 1.0);
+
+                            x = lerp(fromPlayer.x, toPlayer.x, alpha);
+                            y = lerp(fromPlayer.y, toPlayer.y, alpha);
+                        }
+                    } else if (renderSnapshot) {
+                        // Only have one snapshot old enough, use it directly
+                        const snapPlayer = renderSnapshot.state.find(p => p.id === playerId);
+                        if (snapPlayer) {
+                            x = snapPlayer.x;
+                            y = snapPlayer.y;
+                        }
+                    }
+                    // else: no snapshots old enough yet, use fallback (reconciled position)
                 }
             }
 
@@ -382,12 +445,12 @@ export class GameClient {
         this.ctx.textAlign = 'left';
         this.ctx.fillText(`Players: ${this.simulation.players.size}`, 10, 20);
         this.ctx.fillText(`My ID: ${this.myId ? this.myId.substring(0, 12) : 'none'}`, 10, 40);
-        this.ctx.fillText(`Tick: ${this.simulation.ticker.tickCount}`, 10, 60);
+        this.ctx.fillText(`Tick: ${this.simulation.loop.ticker.tickCount}`, 10, 60);
     }
 
-    render() {
+    render(alpha: number) {
         this.renderGrid();
-        this.renderPlayers();
+        this.renderPlayers(alpha);
         this.renderDebugInfo();
     }
 }

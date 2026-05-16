@@ -24,12 +24,11 @@
  */
 import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer, TgpuRenderPipeline, TgpuBindGroup, TgpuBindGroupLayout, TgpuVertexFn, TgpuFragmentFn } from 'typegpu';
-import * as d from 'typegpu/data';
 import type { AnyWgslData, AnyData } from 'typegpu/data';
+import { d, std } from '../shaders/typegpu';
 import type { BuiltInGeometry, GeometryData } from './built-in';
 import { resolveBuiltInGeometry } from './built-in';
 import { FreeList } from 'murow/core/free-list';
-import * as std from 'typegpu/std';
 import { attachShaderMetadata } from '../shaders/runtime-transpile';
 import type { ComputeKernel } from '../compute/compute-builder';
 
@@ -909,10 +908,12 @@ export class GeometryBuilder<
                 };
             };
 
-            // Attach runtime metadata — parses function source with Acorn + tinyest-for-wgsl
-            // Vertex fn has (ctx, input) — strip the first param, its destructured names become externals
-            attachShaderMetadata(decl.vertex.fn, resolveExternals({}), true);
-            attachShaderMetadata(decl.fragment.fn, resolveExternals({}));
+            // Attach runtime metadata — parses function source with Acorn + tinyest-for-wgsl.
+            // Vertex fn has (ctx, input) — strip the first param, its destructured names become externals.
+            // Pass `{ d, std }` as namespace aliases so bundler-renamed identifiers (e.g. `d10`, `std7`)
+            // are auto-detected by member-access matching and aliased to the right namespace object.
+            attachShaderMetadata(decl.vertex.fn, resolveExternals({}), true, { d, std });
+            attachShaderMetadata(decl.fragment.fn, resolveExternals({}), false, { d, std });
 
             this._vertexFn = tgpu.vertexFn({
                 in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },

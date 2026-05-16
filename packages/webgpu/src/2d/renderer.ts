@@ -197,11 +197,30 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     }
 
     private setupResizeObserver(): void {
+        const supportsDevicePixelBox = (() => {
+            try {
+                // Throws on unsupported browsers (e.g. iOS Safari)
+                const ro = new ResizeObserver(() => {});
+                ro.observe(document.body, { box: 'device-pixel-content-box' });
+                ro.disconnect();
+                return true;
+            } catch {
+                return false;
+            }
+        })();
+
         this.resizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
-                const box = entry.devicePixelContentBoxSize?.[0] ?? entry.contentBoxSize[0];
-                const w = box.inlineSize;
-                const h = box.blockSize;
+                let w: number, h: number;
+                if (supportsDevicePixelBox && entry.devicePixelContentBoxSize?.[0]) {
+                    w = entry.devicePixelContentBoxSize[0].inlineSize;
+                    h = entry.devicePixelContentBoxSize[0].blockSize;
+                } else {
+                    const box = entry.contentBoxSize[0];
+                    const dpr = devicePixelRatio;
+                    w = Math.round(box.inlineSize * dpr);
+                    h = Math.round(box.blockSize * dpr);
+                }
                 if (w === this._width && h === this._height) continue;
                 this._width = w;
                 this._height = h;
@@ -223,7 +242,7 @@ export class WebGPU2DRenderer extends Base2DRenderer {
                 }
             }
         });
-        this.resizeObserver.observe(this.canvas, { box: 'device-pixel-content-box' });
+        this.resizeObserver.observe(this.canvas, supportsDevicePixelBox ? { box: 'device-pixel-content-box' } : undefined);
     }
 
     /**

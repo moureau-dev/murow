@@ -9,8 +9,11 @@
  * - const for non-reassigned values
  * - 6 buffers (under 8 binding limit)
  */
-import * as d from 'typegpu/data';
-import * as std from 'typegpu/std';
+// Use bundler-safe wraps so `d.X` / `std.X` accesses inside the shader
+// function body survive Rollup's namespace-member inlining (see
+// ../../shaders/typegpu.ts).
+import type * as _d from 'typegpu/data';
+import { d, std } from '../../shaders/typegpu';
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { AnimComputeUniforms, InstanceAnimStateGPU } from '../../core/types';
 import type { TgpuRoot } from 'typegpu';
@@ -52,17 +55,9 @@ export function buildAnimationKernel(
             const ibmOff = skelI32[skinBase + 3];
             const restOff = skelI32[skinBase + 4];
             const skelRootIdx = skelI32[skinBase + 5];
-            const skinClipOffset = skelI32[skinBase + 6];
             const skinLookupOff = skelI32[skinBase + 7];
             const boneOff = d.i32(inst.boneOffset);
             const worldOff = boneOff - jc;
-
-            // Read clip entry
-            const globalClipId = inst.clipId + skinClipOffset;
-            // @ts-ignore
-            const clipBase = globalClipId * 4 + d.i32(uniforms.clipTableOffset);
-            const channelStart = skelI32[clipBase + 0];
-            const channelCount = skelI32[clipBase + 1];
 
             const time = inst.time;
 
@@ -177,9 +172,6 @@ export function buildAnimationKernel(
 
             // --- Crossfade blending ---
             if (inst.prevClipId >= 0 && inst.blendWeight < 1.0) {
-                const globalPrevClipId = inst.prevClipId + skinClipOffset;
-                // @ts-ignore
-                const prevClipBase = globalPrevClipId * 4 + d.i32(uniforms.clipTableOffset);
                 const prevTime = inst.prevTime;
 
                 for (let pti = 0; pti < jc; pti = pti + 1) {
@@ -280,8 +272,8 @@ export function buildAnimationKernel(
 
                     // Blend: final = lerp(prevBone, currentBone, blendWeight)
                     // @ts-ignore
-                    const prevBoneMat: d.Mat4x4f = boneMatrices[worldOff + pj] * matrices[ibmOff + pj];
-                    const curBoneMat: d.Mat4x4f = boneMatrices[boneOff + pj];
+                    const prevBoneMat: _d.Mat4x4f = boneMatrices[worldOff + pj] * matrices[ibmOff + pj];
+                    const curBoneMat: _d.Mat4x4f = boneMatrices[boneOff + pj];
                     const w = inst.blendWeight;
                     const omw = 1.0 - w;
                     boneMatrices[boneOff + pj] = d.mat4x4f(

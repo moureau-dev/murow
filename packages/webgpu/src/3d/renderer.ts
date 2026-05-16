@@ -9,8 +9,8 @@
  */
 import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer } from 'typegpu';
-import * as d from 'typegpu/data';
 import { Base3DRenderer } from 'murow/renderer/base-3d-renderer';
+import { d } from '../shaders/typegpu';
 import type { Renderer3DOptions } from 'murow/renderer/types';
 import { FreeList } from 'murow/core/free-list';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
@@ -445,11 +445,29 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     }
 
     private setupResizeObserver(): void {
+        const supportsDevicePixelBox = (() => {
+            try {
+                const ro = new ResizeObserver(() => {});
+                ro.observe(document.body, { box: 'device-pixel-content-box' });
+                ro.disconnect();
+                return true;
+            } catch {
+                return false;
+            }
+        })();
+
         this.resizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
-                const box = entry.devicePixelContentBoxSize?.[0] ?? entry.contentBoxSize[0];
-                const w = box.inlineSize;
-                const h = box.blockSize;
+                let w: number, h: number;
+                if (supportsDevicePixelBox && entry.devicePixelContentBoxSize?.[0]) {
+                    w = entry.devicePixelContentBoxSize[0].inlineSize;
+                    h = entry.devicePixelContentBoxSize[0].blockSize;
+                } else {
+                    const box = entry.contentBoxSize[0];
+                    const dpr = devicePixelRatio;
+                    w = Math.round(box.inlineSize * dpr);
+                    h = Math.round(box.blockSize * dpr);
+                }
                 if (w === this._width && h === this._height) continue;
                 this._width = w;
                 this._height = h;
@@ -479,7 +497,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 }
             }
         });
-        this.resizeObserver.observe(this.canvas, { box: 'device-pixel-content-box' });
+        this.resizeObserver.observe(this.canvas, supportsDevicePixelBox ? { box: 'device-pixel-content-box' } : undefined);
     }
 
     /**

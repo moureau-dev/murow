@@ -7,8 +7,10 @@ import {
     EventSystem,
     PooledCodec,
     defineRPC,
-    RpcRegistry
-} from "../../src";
+    RpcRegistry,
+    GameLoop,
+    GameLoopType
+} from "murow";
 
 /* ================================
    Constants
@@ -17,7 +19,7 @@ export const WORLD_WIDTH = 800;
 export const WORLD_HEIGHT = 600;
 export const PLAYER_SIZE = 20;
 export const PLAYER_SPEED = 200;
-export const TICK_RATE = 15;
+export const TICK_RATE = 16;
 export const WS_PORT = 3007;
 
 /* ================================
@@ -85,29 +87,15 @@ export type GameStateUpdate = Array<{
 /* ================================
    Simulation
 ================================ */
-export class Simulation {
-    readonly ticker: FixedTicker;
+export class Simulation<T extends GameLoopType> {
     readonly players = new Map<string, Player>();
-    readonly events: EventSystem<[
-        ['pre-tick', { tick: number }],
-        ['tick', { tick: number }],
-        ['post-tick', { tick: number }],
-    ]> = new EventSystem({ events: ['pre-tick', 'tick', 'post-tick'] });
+    readonly loop: GameLoop<T>;
 
-    constructor() {
-        this.ticker = new FixedTicker({
-            rate: TICK_RATE,
-            onTick: (_, tick = 0) => {
-                this.events.emit('pre-tick', { tick });
-                this.events.emit('tick', { tick });
-                this.events.emit('post-tick', { tick });
-            },
+    constructor(type: T) {
+        this.loop = new GameLoop<T>({
+            type,
+            tickRate: TICK_RATE
         });
-    }
-
-    /** Update ticker at the provided rate with a delta time */
-    update(delta: number) {
-        this.ticker.tick(delta);
     }
 
     /** Spawn a new player */
@@ -149,9 +137,7 @@ export class Simulation {
     }
 
     /** Advance simulation by 1 tick */
-    step() {
-        const dt = 1 / TICK_RATE;
-
+    step(dt = 1 / TICK_RATE) {
         for (const p of this.players.values()) {
             p.x += p.vx * dt;
             p.y += p.vy * dt;

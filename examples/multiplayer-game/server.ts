@@ -1,6 +1,5 @@
-import { ServerNetwork } from "../../src/net/server";
-import { BunWebSocketServerTransport } from "../../src/net/adapters/bun-websocket";
-import { createDriver } from "../../src/core/loop";
+import { ServerNetwork, BunWebSocketServerTransport, createDriver } from "murow";
+
 import {
     Simulation,
     createIntentRegistry,
@@ -15,39 +14,52 @@ import {
 const HTTP_PORT = 3008;
 
 class GameServer {
-    simulation: Simulation;
+    simulation: Simulation<'server-timeout'>;
     network: ServerNetwork<any, GameStateUpdate>;
     private playerIds: Map<string, string> = new Map(); // Map peerId to playerId
     private pendingIntents: Map<string, Intents.Move[]> = new Map(); // Buffer intents per peer
 
     constructor() {
-        this.simulation = new Simulation();
+        this.simulation = new Simulation('server-timeout');
 
         // Pre-tick: Apply all buffered intents before stepping
-        this.simulation.events.on('pre-tick', () => {
+        this.simulation.loop.events.on('pre-tick', () => {
             for (const [peerId, intents] of this.pendingIntents) {
                 const playerId = this.playerIds.get(peerId);
                 if (!playerId) continue;
 
-                // Use the latest intent's velocity (handles multiple inputs per tick)
-                const latestIntent = intents[intents.length - 1];
-                this.simulation.applyVelocity(playerId, latestIntent);
+                if (intents.length === 0) continue;
+
+                // Use the intent with the HIGHEST tick number (not the latest to arrive)
+                // This handles out-of-order packet arrival correctly
+                const highestTickIntent = intents.reduce((highest, current) =>
+                    current.tick > highest.tick ? current : highest
+                );
+
+                // Debug: log if we received multiple intents
+                if (intents.length > 1) {
+                    const ticks = intents.map(i => i.tick).sort((a, b) => a - b);
+                    console.log(`Peer ${peerId.substring(0, 8)}: buffered ${intents.length} intents with ticks [${ticks}], using highest: ${highestTickIntent.tick}`);
+                }
+
+                this.simulation.applyVelocity(playerId, highestTickIntent);
             }
             this.pendingIntents.clear();
         });
 
         // Tick: Step the simulation
-        this.simulation.events.on('tick', ({ tick }) => {
-            this.simulation.step();
+        this.simulation.loop.events.on('tick', ({ deltaTime }) => {
+            this.simulation.step(deltaTime);
         });
 
-        this.simulation.events.on('post-tick', ({ tick }) => {
+        this.simulation.loop.events.on('post-tick', ({ tick }) => {
             // Send snapshots to all peers (only if game state changed)
             const gameState = this.simulation.getSnapshot();
             let peersToUpdate = 0;
 
             for (const peerId of this.network.getPeerIds()) {
-                const confirmedClientTick = this.network.getConfirmedClientTick(peerId);
+                // Get the last confirmed tick for Move intents (used for reconciliation)
+                const confirmedClientTick = this.network.getConfirmedClientTick(peerId, Intents.Move.kind);
 
                 // sendSnapshotToPeerIfChanged automatically detects changes using hash comparison
                 if (this.network.sendSnapshotToPeerIfChanged(peerId, 'gameState', {
@@ -101,7 +113,7 @@ class GameServer {
             this.simulation.remove(playerId);
             this.playerIds.delete(peerId);
             this.pendingIntents.delete(peerId);
-            // Note: ServerNetwork automatically cleans up internal state
+            // Note: ServerNetwork automatically cleans up internal state (including lastProcessedClientTick)
         });
 
         // Handle spawn RPC
@@ -144,6 +156,33 @@ class GameServer {
                 this.pendingIntents.set(peerId, []);
             }
             this.pendingIntents.get(peerId)!.push(intent);
+        }, (peerId, intent) => { // intent validation
+            // drop intents from non-spawned players
+            if (!this.playerIds.has(peerId)) return false;
+
+            // drop invalid intents
+            if (typeof intent.vx !== 'number' || typeof intent.vy !== 'number') return false;
+            if (Math.abs(intent.vx) > 1 || Math.abs(intent.vy) > 1) return false;
+            if (intent.tick < 0) return false;
+
+            // Use a sliding window for tick validation
+            // This smooths the server simulation by dropping very stale/future intents
+            const lastConfirmedTick = this.network.getConfirmedClientTick(peerId, intent.kind);
+            const backwardTolerance = 8; // Allow up to 8 ticks behind (~666ms at 12Hz)
+            const forwardTolerance = 3;   // Allow up to 3 ticks ahead (~250ms at 12Hz)
+
+            // Reject intents that are too old
+            if (intent.tick < lastConfirmedTick - backwardTolerance) {
+                return false;
+            }
+
+            // Reject intents that are too far in the future
+            if (intent.tick > lastConfirmedTick + forwardTolerance) {
+                return false;
+            }
+
+            // Accept the intent - network layer will automatically update lastProcessedClientTick for this intent kind
+            return true;
         });
     }
 
@@ -157,11 +196,7 @@ class GameServer {
         this.startHttpServer();
 
         // Game loop using server driver
-        const driver = createDriver('server-timeout', (dt: number) => {
-            this.simulation.update(dt);
-        });
-
-        driver.start();
+        this.simulation.loop.start();
     }
 
     startHttpServer() {
