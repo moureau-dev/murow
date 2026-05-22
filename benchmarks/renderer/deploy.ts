@@ -1,9 +1,9 @@
 import { Basebox } from "@moureau/basebox";
 
-const { BASEBOX_ANON_KEY, BASEBOX_SECRET_KEY } = process.env;
+const { BASEBOX_ANON_KEY, BASEBOX_SECRET_KEY, BASEBOX_DOMAIN } = process.env;
 
 const dist = "./dist";
-const domain = "murow-renderer-benchmark.basebox.site";
+const domain = BASEBOX_DOMAIN!;
 const publicKey = BASEBOX_ANON_KEY!;
 const apiKey = BASEBOX_SECRET_KEY!;
 
