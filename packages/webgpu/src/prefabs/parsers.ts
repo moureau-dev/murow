@@ -21,11 +21,20 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
         const jointCount = parsed.skin?.data.jointCount ?? 0;
         let totalVertexCount = 0;
         for (const p of parsed.primitives) totalVertexCount += p.positions.length / 3;
+
+        // Build both views over the animation set declared on the spec.
+        // - `animations`: record keyed by name (for `prefab.animations.Run`)
+        // - `animationList`: tuple of literals (for iteration / `rng.pick`)
+        const declared = spec.animations ? [...spec.animations] : (parsed.skin?.animClips.map(c => c.name) ?? []);
+        const animations: Record<string, string> = {};
+        for (const name of declared) animations[name] = name;
+
         return {
             type: 'gltf',
             id: spec.id,
             parsed,
-            animations: parsed.skin?.animClips.map(c => c.name) ?? [],
+            animations: animations as any,
+            animationList: declared as any,
             skinnedPartCount,
             jointCount,
             totalVertexCount,

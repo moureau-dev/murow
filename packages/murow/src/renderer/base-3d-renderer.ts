@@ -11,6 +11,9 @@ export abstract class Base3DRenderer extends BaseRenderer<Renderer3DOptions> {
 
     constructor(canvas: HTMLCanvasElement, options: Renderer3DOptions) {
         super(canvas, options);
-        this.maxModels = options.maxModels;
+        // Subclasses are expected to fill `options.maxModels` (possibly by deriving
+        // it from a prefab bucket) before calling super. Default to a generous slot
+        // count so plain `new Renderer({ ... })` without a bucket still works.
+        this.maxModels = options.maxModels ?? 32;
     }
 }

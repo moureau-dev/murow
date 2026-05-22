@@ -59,7 +59,7 @@ export * from './core/constants';
 export { DynamicSprite, StaticSprite, SpriteUniforms, DynamicInstance3D, StaticInstance3D, DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms } from './core/types';
 
 // Prefab bucket
-export { createPrefabBucket } from './prefabs';
+export { PrefabBucket } from './prefabs';
 export type {
     PrefabBucket2D,
     PrefabBucket3D,
@@ -67,6 +67,7 @@ export type {
     Prefab2DSpec,
     Prefab3D,
     Prefab3DSpec,
+    PrefabFor,
     GltfPrefab,
     GltfSpec,
     GridPrefab,

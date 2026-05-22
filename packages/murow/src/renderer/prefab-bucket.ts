@@ -3,7 +3,7 @@
  *
  * Construct with `'2d'` or `'3d'` to pick the spec/prefab universe. The mode
  * narrows what `add()` will accept (2D buckets can't hold GLTFs, 3D buckets
- * can't hold spritesheets) and what `get()` returns.
+ * can't hold spritesheets).
  *
  * Lifecycle:
  *   1. `add()` / `addAll()` collect specs (sync, no I/O)
@@ -11,8 +11,9 @@
  *   3. `get()` returns parsed prefabs by id; the bucket is now frozen
  *
  * Typed ids: with `const` generics, `bucket.get('typo')` is a compile-time
- * error once the bucket has been populated. The string ids you `add()`
- * become a literal union, autocompleted by your editor.
+ * error once the bucket has been populated. The id-to-spec mapping is
+ * threaded through generics so subclasses can narrow `get()`'s return type
+ * to the specific prefab variant for that id (not just the union).
  *
  * Concrete spec/prefab unions and the spec→prefab parsing live in
  * the webgpu package, so this base stays renderer-agnostic.
@@ -45,7 +46,7 @@ export class PrefabBucket<
     M extends PrefabMode = PrefabMode,
     Spec extends PrefabSpecBase = PrefabSpecBase,
     Prefab extends PrefabBase = PrefabBase,
-    Ids extends string = never,
+    Specs extends Record<string, Spec> = {},
 > {
     readonly mode: M;
     private parsers: PrefabParserMap<Spec, Prefab>;
@@ -59,21 +60,23 @@ export class PrefabBucket<
     }
 
     /** Add a single spec. Throws if id is a duplicate or if the bucket is already loaded. */
-    add<const S extends Spec>(spec: S): PrefabBucket<M, Spec, Prefab, Ids | S['id']> {
+    add<const S extends Spec>(
+        spec: S,
+    ): PrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }> {
         if (this.prefabs) throw new Error(`PrefabBucket: cannot add after load() — bucket is frozen`);
         if (this.pendingIds.has(spec.id)) throw new Error(`PrefabBucket: duplicate id '${spec.id}'`);
         this.pending.push(spec);
         this.pendingIds.add(spec.id);
-        return this as unknown as PrefabBucket<M, Spec, Prefab, Ids | S['id']>;
+        return this as unknown as PrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }>;
     }
 
     /**
      * Add multiple specs. Validates the whole batch (ids unique, not loaded) before
      * committing, so the bucket never lands in a half-applied state.
      */
-    addAll<const Specs extends readonly Spec[]>(
-        specs: Specs,
-    ): PrefabBucket<M, Spec, Prefab, Ids | Specs[number]['id']> {
+    addAll<const Ss extends readonly Spec[]>(
+        specs: Ss,
+    ): PrefabBucket<M, Spec, Prefab, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }> {
         if (this.prefabs) throw new Error(`PrefabBucket: cannot add after load() — bucket is frozen`);
         const seen = new Set<string>();
         for (const s of specs) {
@@ -86,7 +89,7 @@ export class PrefabBucket<
             this.pending.push(s);
             this.pendingIds.add(s.id);
         }
-        return this as unknown as PrefabBucket<M, Spec, Prefab, Ids | Specs[number]['id']>;
+        return this as unknown as PrefabBucket<M, Spec, Prefab, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }>;
     }
 
     /** Load all pending specs in parallel. Idempotent if already loaded. */
@@ -104,12 +107,16 @@ export class PrefabBucket<
         this.pendingIds.clear();
     }
 
-    /** Returns the parsed prefab by id. Throws if bucket isn't loaded or id is unknown. */
-    get(id: Ids): Prefab {
+    /**
+     * Returns the parsed prefab by id. The default return type is the prefab
+     * union; subclasses may pass a second generic `R` to narrow the return
+     * type per-id (e.g. mapping `Specs[K]` to its concrete prefab variant).
+     */
+    get<K extends keyof Specs & string, R extends Prefab = Prefab>(id: K): R {
         if (!this.prefabs) throw new Error(`PrefabBucket: get('${id}') called before load()`);
         const prefab = this.prefabs.get(id);
         if (!prefab) throw new Error(`PrefabBucket: unknown prefab id '${id}'`);
-        return prefab;
+        return prefab as R;
     }
 
     /** True once `load()` has resolved. */

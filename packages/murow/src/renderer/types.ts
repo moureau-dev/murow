@@ -19,7 +19,11 @@ export interface Renderer2DOptions extends RendererOptions {
 }
 
 export interface Renderer3DOptions extends RendererOptions {
-    maxModels: number;
+    /**
+     * Non-skinned instance budget. Optional when a prefab bucket is provided —
+     * the renderer will derive a sensible default from the bucket.
+     */
+    maxModels?: number;
     enableLighting?: boolean;
 }
 

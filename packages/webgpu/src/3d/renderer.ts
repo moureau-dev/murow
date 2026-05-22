@@ -300,29 +300,48 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private readonly _prefabs: PrefabBucket3D | null;
 
     constructor(canvas: HTMLCanvasElement, options: WebGPU3DRendererOptions) {
-        super(canvas, options);
+        // Resolve maxModels from the bucket before delegating to super:
+        // default to `bucket.size + slack` so non-skinned prefabs (grids, primitives)
+        // always have room without the user having to count them by hand.
+        const resolvedMaxModels = options.maxModels
+            ?? (options.prefabs ? options.prefabs.size + 16 : 32);
+        super(canvas, { ...options, maxModels: resolvedMaxModels });
         this.camera = new Camera3D();
 
         this._prefabs = options.prefabs ?? null;
 
-        // Derive sizing from the bucket when present; explicit options win.
+        // Derive skinned-budget sizing from the bucket when present; explicit options win.
+        //
+        // The auto-sized formula is `maxInstances × parts × bonesPerSkin × 128 bytes` which
+        // explodes for rigs with many parts/joints (a 14-part, 70-bone prefab at 2000 instances
+        // would need ~478 MB, past WebGPU's default 256 MB buffer cap). In practice characters
+        // are spawned in a mix and the bone buffer is a *shared pool*, not per-instance, so we
+        // cap both at sensible defaults. Pass explicit `maxSkinnedInstances`/`maxBonesPerSkin`
+        // to override when your scene actually needs more.
+        const SKINNED_PARTS_PER_INSTANCE_DEFAULT_CAP = 3;
+        const BONES_PER_SKIN_DEFAULT_CAP = 32;
+
         const bucketStats = this._prefabs ? computeBucketStats(this._prefabs) : null;
-        const maxInstances = options.maxInstances ?? options.maxModels;
+        const maxInstances = options.maxInstances ?? resolvedMaxModels;
 
         this.maxSkinnedInstances = options.maxSkinnedInstances
-            ?? (bucketStats ? maxInstances * Math.max(1, bucketStats.maxSkinnedParts) : 5000);
+            ?? (bucketStats
+                ? maxInstances * Math.max(1, Math.min(bucketStats.maxSkinnedParts, SKINNED_PARTS_PER_INSTANCE_DEFAULT_CAP))
+                : 5000);
         this.maxBonesPerSkin = options.maxBonesPerSkin
-            ?? (bucketStats ? Math.max(1, bucketStats.maxJointCount) : 64);
+            ?? (bucketStats
+                ? Math.max(1, Math.min(bucketStats.maxJointCount, BONES_PER_SKIN_DEFAULT_CAP))
+                : 64);
         this.maxTotalBones = this.maxSkinnedInstances * this.maxBonesPerSkin * 2;
         this.updatedBoneOffsets = new Uint8Array(this.maxTotalBones);
 
         // Non-skinned instance buffers
-        this.freeList = new FreeList(options.maxModels);
-        this.batcher = new SparseBatcher(options.maxModels);
-        this.dynamicData = new Float32Array(options.maxModels * DYNAMIC_MESH_FLOATS);
-        this.staticData = new Float32Array(options.maxModels * STATIC_MESH_FLOATS);
-        this.slotIndexData = new Uint32Array(options.maxModels);
-        this.instanceModelIds = new Uint8Array(options.maxModels);
+        this.freeList = new FreeList(resolvedMaxModels);
+        this.batcher = new SparseBatcher(resolvedMaxModels);
+        this.dynamicData = new Float32Array(resolvedMaxModels * DYNAMIC_MESH_FLOATS);
+        this.staticData = new Float32Array(resolvedMaxModels * STATIC_MESH_FLOATS);
+        this.slotIndexData = new Uint32Array(resolvedMaxModels);
+        this.instanceModelIds = new Uint8Array(resolvedMaxModels);
 
         // Skinned instance buffers
         const msi = this.maxSkinnedInstances;

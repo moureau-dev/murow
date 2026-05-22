@@ -32,11 +32,36 @@ export interface GridSpec {
 
 export type Prefab3DSpec = GltfSpec | GridSpec;
 
-export interface GltfPrefab {
+/**
+ * Map a spec's `animations` tuple to a record-keyed-by-name. Used to type
+ * `GltfPrefab.animations` so `prefab.animations.Run` is a string literal
+ * (and `prefab.animations.Typo` is a compile-time error).
+ *
+ * If the spec doesn't declare `animations`, the prefab gets the open-ended
+ * `Record<string, string>` (whatever the loader finds at runtime).
+ */
+export type AnimationsRecord<A> =
+    A extends readonly string[]
+        ? { readonly [K in A[number]]: K }
+        : Record<string, string>;
+
+/**
+ * GltfPrefab — generic over its source spec so the spec's literal `animations`
+ * tuple and `id` are preserved through `bucket.get('annie').animations`.
+ */
+export interface GltfPrefab<S extends GltfSpec = GltfSpec> {
     readonly type: 'gltf';
-    readonly id: string;
+    readonly id: S['id'];
     readonly parsed: ParsedGltf;
-    readonly animations: readonly string[];
+    /**
+     * Animations declared on the spec, indexed by name.
+     * `prefab.animations.Run` returns `'Run'` (typed as the literal).
+     */
+    readonly animations: AnimationsRecord<S['animations']>;
+    /** All animation names declared on the spec, as a literal-typed tuple. */
+    readonly animationList: S['animations'] extends readonly string[]
+        ? S['animations']
+        : readonly string[];
     readonly skinnedPartCount: number;
     readonly jointCount: number;
     /** Total vertices across all primitives. */
@@ -79,3 +104,18 @@ export interface SpritesheetPrefab {
 }
 
 export type Prefab2D = SpritesheetPrefab;
+
+// ============================================================================
+// Spec → prefab mapping
+// ============================================================================
+
+/**
+ * Maps a spec variant to its concrete parsed prefab variant. Used by the
+ * bucket's `get()` so `bucket.get('minion')` returns `GltfPrefab` directly,
+ * not the discriminated union.
+ */
+export type PrefabFor<S> =
+    S extends GltfSpec ? GltfPrefab<S> :
+    S extends GridSpec ? GridPrefab :
+    S extends SpritesheetSpec ? SpritesheetPrefab :
+    never;
