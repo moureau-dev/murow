@@ -19,6 +19,19 @@
         #stats { font-size: 13px; color: #8f8; }
         canvas {
             display: block; width: 100vw; height: 100vh;
+            touch-action: none;
+        }
+        #error-overlay {
+            display: none; position: fixed; inset: 0; z-index: 20;
+            align-items: center; justify-content: center;
+            pointer-events: none;
+        }
+        #error-overlay.visible { display: flex; }
+        #error-box {
+            background: rgba(0,0,0,0.85); color: #f88; font-family: monospace;
+            font-size: 13px; padding: 20px 24px; border: 1px solid #f44;
+            border-radius: 6px; max-width: 80vw; white-space: pre-wrap;
+            word-break: break-word;
         }
     </style>
 </head>
@@ -29,6 +42,7 @@
         <span id="stats"></span>
     </div>
     <canvas id="canvas"></canvas>
+    <div id="error-overlay"><div id="error-box"></div></div>
     <script type="module" src="./index.ts"></script>
 </body>
 </html>

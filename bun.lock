@@ -30,7 +30,7 @@
         "murow": "workspace:*",
       },
       "devDependencies": {
-        "@moureau/basebox": "latest",
+        "@moureau/basebox": "0.0.35",
         "@vitejs/plugin-basic-ssl": "^2.3.0",
         "typescript": "^5.0.0",
         "unplugin-typegpu": "^0.10.2",
@@ -113,7 +113,7 @@
     },
     "packages/murow": {
       "name": "murow",
-      "version": "0.0.70",
+      "version": "0.0.71",
       "devDependencies": {
         "@types/bun": "^1.1.16",
         "esbuild": "^0.19.0",
@@ -205,7 +205,7 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
-    "@moureau/basebox": ["@moureau/basebox@0.0.34", "", { "peerDependencies": { "typescript": "^5" } }, "sha512-PkOK5iwBQOcZil6HrriyPTUv2YMhaQoN4VnIr7XwE4Hikhple/zgO0PKkqzjvODm1gReH3I0SNFWWTnkJ3S/MA=="],
+    "@moureau/basebox": ["@moureau/basebox@0.0.35", "", { "peerDependencies": { "typescript": "^5" } }, "sha512-Z26UfJcLYnJNhidLnUYe78L5V0Qhj//r/ArSrxo2uJTf7jK/yI8Tyjbdjf+3FfsgWyMvq5waHnWjqniXXpnyuA=="],
 
     "@murow/benchmarks": ["@murow/benchmarks@workspace:benchmarks"],
 
