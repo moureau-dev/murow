@@ -78,8 +78,8 @@ class WebGPU3DWrapper {
         this.gpu.camera.far = 3000;
 
         // Load Suzanne from Khronos glTF samples
-        const suzanneModel = await this.gpu.loadGltf(
-            'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Suzanne/glTF/Suzanne.gltf',
+        const [suzanneModel] = await this.gpu.loadGltf(
+          'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Suzanne/glTF/Suzanne.gltf',
         );
 
         return { suzanneModel };
