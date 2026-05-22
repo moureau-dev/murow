@@ -39,6 +39,6 @@ jobs:
         run: bun run test --bail
 
       - name: Publish to npm
-        run: npm publish
+        run: cd packages/murow && npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
