@@ -1,8 +1,12 @@
-import { GameLoop } from 'murow';
+import { GameLoop, SimpleRNG } from 'murow';
 import { WebGPU2DRenderer, d, std } from 'murow/webgpu';
-import type { Program } from '../index';
+import type { Control, ControlValues, Program, ProgramHandle } from '../index';
 
-const MAX_PARTICLES = 1_0_000;
+const DEFAULT_PARTICLES = 10_000;
+
+const controls: Control[] = [
+    { kind: 'number', key: 'particles', label: 'Particles', min: 100, max: 500_000, step: 1000, default: DEFAULT_PARTICLES, restart: true },
+];
 
 const Particle = d.struct({
     posX: d.f32,
@@ -21,8 +25,11 @@ const Config = d.struct({
 
 export const gpuParticles: Program = {
     name: 'GPU Particles',
+    controls,
 
-    async init(canvas: HTMLCanvasElement, stats: HTMLElement) {
+    async init(canvas: HTMLCanvasElement, stats: HTMLElement, values: ControlValues): Promise<ProgramHandle> {
+        const maxParticles = Math.max(1, Math.floor(values.particles ?? DEFAULT_PARTICLES));
+
         const renderer = new WebGPU2DRenderer(canvas, {
             maxSprites: 1,
             clearColor: [0.02, 0.02, 0.05, 1],
@@ -30,11 +37,13 @@ export const gpuParticles: Program = {
         });
         await renderer.init();
 
+        const rng = new SimpleRNG(0xBEEF);
+
         // --- Compute: update particles on GPU ---
         const compute = renderer
             .createCompute('particle-physics', { workgroupSize: 256 })
             .buffers({
-                particles: { storage: d.arrayOf(Particle, MAX_PARTICLES), readwrite: true },
+                particles: { storage: d.arrayOf(Particle, maxParticles), readwrite: true },
                 config: { uniform: Config },
             })
             .shader(({ particles, config }, { globalId }) => {
@@ -61,7 +70,7 @@ export const gpuParticles: Program = {
 
         // --- Render: zero-copy from compute buffer ---
         const render = renderer
-            .createGeometry('particle-vis', { maxInstances: MAX_PARTICLES, geometry: 'quad' })
+            .createGeometry('particle-vis', { maxInstances: maxParticles, geometry: 'quad' })
             .instanceLayout({
                 dynamic: { posX: d.f32, posY: d.f32, velX: d.f32, velY: d.f32, life: d.f32 },
                 static: {},
@@ -120,13 +129,13 @@ export const gpuParticles: Program = {
 
         // Initialize particles
         const initData: Array<{ posX: number; posY: number; velX: number; velY: number; life: number }> = [];
-        for (let i = 0; i < MAX_PARTICLES; i++) {
+        for (let i = 0; i < maxParticles; i++) {
             initData.push({
-                posX: Math.random(),
-                posY: Math.random(),
-                velX: (Math.random() - 0.5) * 0.5,
-                velY: (Math.random() - 0.5) * 0.5,
-                life: 5.0 + Math.random() * 10.0,
+                posX: rng.rand(),
+                posY: rng.rand(),
+                velX: (rng.rand() - 0.5) * 0.5,
+                velY: (rng.rand() - 0.5) * 0.5,
+                life: 5.0 + rng.rand() * 10.0,
             });
         }
         compute.write('particles', initData);
@@ -144,15 +153,15 @@ export const gpuParticles: Program = {
 
         loop.events.on('render', ({ deltaTime }) => {
             // Compute + render — zero CPU involvement
-            compute.write('config', { deltaTime, gravity: 0.3, bounceEnergy: 0.8, count: MAX_PARTICLES });
-            compute.dispatch(MAX_PARTICLES);
+            compute.write('config', { deltaTime, gravity: 0.3, bounceEnergy: 0.8, count: maxParticles });
+            compute.dispatch(maxParticles);
             render.render();
 
             frameCount++;
             const now = performance.now();
             if (now - lastFpsTime >= 1000) {
                 const fps = frameCount / ((now - lastFpsTime) / 1000);
-                stats.textContent = `FPS: ${fps.toFixed(0)} | Particles: ${MAX_PARTICLES.toLocaleString()} (zero-copy GPU)`;
+                stats.textContent = `FPS: ${fps.toFixed(0)} | Particles: ${maxParticles.toLocaleString()} (zero-copy GPU)`;
                 frameCount = 0;
                 lastFpsTime = now;
             }
@@ -160,10 +169,12 @@ export const gpuParticles: Program = {
 
         loop.start();
 
-        return () => {
-            loop.stop();
-            compute.destroy();
-            render.destroy();
+        return {
+            destroy() {
+                loop.stop();
+                compute.destroy();
+                render.destroy();
+            },
         };
     },
 };

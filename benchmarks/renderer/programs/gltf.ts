@@ -1,7 +1,19 @@
 import { GameLoop, SimpleRNG } from 'murow';
 import { GltfModel, InstanceHandle, WebGPU3DRenderer } from 'murow/webgpu';
 
-import type { Program } from '..';
+import type { Control, ControlValues, Program, ProgramHandle } from '..';
+
+const DEFAULT_FOV = 70;
+const DEFAULT_NEAR = 0.01;
+const DEFAULT_FAR = 12;
+const DEFAULT_INSTANCES = 2000;
+
+const controls: Control[] = [
+    { kind: 'number', key: 'instances', label: 'Instances', min: 1, max: 12_000, step: 100, default: DEFAULT_INSTANCES, restart: true },
+    { kind: 'number', key: 'fov', label: 'FOV', min: 10, max: 170, step: 1, default: DEFAULT_FOV },
+    { kind: 'number', key: 'near', label: 'Near', min: 0.001, max: 5, step: 0.01, default: DEFAULT_NEAR },
+    { kind: 'number', key: 'far', label: 'Far', min: 1, max: 1000, step: 1, default: DEFAULT_FAR },
+];
 
 interface Prefab {
     model: string;
@@ -14,17 +26,17 @@ interface Prefab {
 
 const prefabs: Prefab[] = [];
 
-const INSTANCES = 2000;
-
 export const gltf: Program = {
     name: '3D glTF',
+    controls,
 
-    async init(canvas: HTMLCanvasElement, stats: HTMLElement) {
+    async init(canvas: HTMLCanvasElement, stats: HTMLElement, values: ControlValues): Promise<ProgramHandle> {
+        const instances = Math.max(1, Math.floor(values.instances ?? DEFAULT_INSTANCES));
         const renderer = new WebGPU3DRenderer(canvas, {
           maxModels: prefabs.length + 10,
           clearColor: [0.15, 0.15, 0.2, 1],
           autoResize: true,
-          maxSkinnedInstances: 12000,
+          maxSkinnedInstances: Math.max(12000, instances),
         });
 
         await renderer.init();
@@ -57,7 +69,7 @@ export const gltf: Program = {
             next();
         };
 
-        for (let i = 0; i < INSTANCES; i++) {
+        for (let i = 0; i < instances; i++) {
             const index = rng.int(0, prefabs.length - 1);
             const model = models[index];
             const prefab = prefabs.find(({ model: m }) => m === model.src);
@@ -89,9 +101,9 @@ export const gltf: Program = {
         renderer.camera.movement = 'local';
         renderer.camera.setPosition(3, 0.5, 3);
         renderer.camera.setTarget(3, 0.5, 2);
-        renderer.camera.fov = 70;
-        renderer.camera.near = 0.01;
-        renderer.camera.far = 12;
+        renderer.camera.fov = values.fov ?? DEFAULT_FOV;
+        renderer.camera.near = values.near ?? DEFAULT_NEAR;
+        renderer.camera.far = values.far ?? DEFAULT_FAR;
 
         // Pointer lock for FPS mouse look
         let locked = false;
@@ -122,7 +134,7 @@ export const gltf: Program = {
             if (tick % loop.ticker.rate !== 0) return;
 
             const totalVertexCount = models.reduce((acc, curr) => acc + curr.totalVertexCount, 0);
-            stats.textContent = `FPS: ${loop.fps} | Vertices: ${totalVertexCount} | Instantiations: ${INSTANCES} (${INSTANCES * totalVertexCount} vertexes)`;
+            stats.textContent = `FPS: ${loop.fps} | Vertices: ${totalVertexCount} | Instantiations: ${instances} (${instances * totalVertexCount} vertexes)`;
         });
 
         // camera mouselook — desktop uses pointer lock for unbounded motion;
@@ -168,15 +180,16 @@ export const gltf: Program = {
 
         loop.start();
 
-        return () => {
-            loop.stop();
-            renderer.destroy();
-            canvas.removeEventListener('click', () => {
-                if (!locked) canvas.requestPointerLock();
-            });
-            document.removeEventListener('pointerlockchange', () => {
-                locked = document.pointerLockElement === canvas;
-            });
+        return {
+            onControlChange(key, value) {
+                if (key === 'fov') renderer.camera.fov = value;
+                else if (key === 'near') renderer.camera.near = value;
+                else if (key === 'far') renderer.camera.far = value;
+            },
+            destroy() {
+                loop.stop();
+                renderer.destroy();
+            },
         };
     },
 };

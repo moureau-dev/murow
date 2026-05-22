@@ -17,6 +17,28 @@
             padding: 4px 8px; font-family: monospace; font-size: 14px;
         }
         #stats { font-size: 13px; color: #8f8; }
+        #program-controls {
+            position: fixed; top: 48px; right: 12px; z-index: 10;
+            background: rgba(0,0,0,0.8); border: 1px solid #333;
+            padding: 10px 12px; display: none; flex-direction: column; gap: 6px;
+            font-size: 12px; min-width: 220px;
+        }
+        #program-controls .control-row {
+            display: grid; grid-template-columns: 1fr 80px 60px; gap: 6px; align-items: center;
+        }
+        #program-controls label { color: #ccc; }
+        #program-controls input[type=number] {
+            background: #1a1a1a; color: #eee; border: 1px solid #444;
+            padding: 2px 4px; font-family: monospace; font-size: 12px; width: 100%;
+        }
+        #program-controls .control-value { color: #8f8; text-align: right; }
+        #program-controls button {
+            background: #333; color: #eee; border: 1px solid #555;
+            padding: 4px 8px; font-family: monospace; font-size: 12px; cursor: pointer;
+            margin-top: 4px;
+        }
+        #program-controls button:disabled { opacity: 0.5; cursor: not-allowed; }
+        #program-controls button:not(:disabled):hover { background: #444; }
         canvas {
             display: block; width: 100vw; height: 100vh;
             touch-action: none;
@@ -41,6 +63,7 @@
         <select id="program-select"></select>
         <span id="stats"></span>
     </div>
+    <div id="program-controls"></div>
     <canvas id="canvas"></canvas>
     <div id="error-overlay"><div id="error-box"></div></div>
     <script type="module" src="./index.ts"></script>

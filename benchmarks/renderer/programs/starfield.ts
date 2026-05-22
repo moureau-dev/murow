@@ -1,13 +1,23 @@
-import { GameLoop } from 'murow';
+import { GameLoop, SimpleRNG } from 'murow';
 import { WebGPU2DRenderer, d, std } from 'murow/webgpu';
-import type { Program } from '..';
+import type { Control, ControlValues, Program, ProgramHandle } from '..';
 
-const MAX_STARS = 1_000;
+const DEFAULT_MAX_STARS = 1_000;
+const DEFAULT_SPEED = 1.0;
+
+const controls: Control[] = [
+    { kind: 'number', key: 'maxStars', label: 'Max stars', min: 1, max: 50_000, step: 100, default: DEFAULT_MAX_STARS, restart: true },
+    { kind: 'number', key: 'speed', label: 'Speed', min: 0, max: 10, step: 0.1, default: DEFAULT_SPEED },
+];
 
 export const starfield: Program = {
     name: 'Starfield',
+    controls,
 
-    async init(canvas: HTMLCanvasElement, stats: HTMLElement) {
+    async init(canvas: HTMLCanvasElement, stats: HTMLElement, values: ControlValues): Promise<ProgramHandle> {
+        const maxStars = Math.max(1, Math.floor(values.maxStars ?? DEFAULT_MAX_STARS));
+        let speedMultiplier = values.speed ?? DEFAULT_SPEED;
+
         const renderer = new WebGPU2DRenderer(canvas, {
             maxSprites: 1,
             clearColor: [0, 0, 0.02, 1],
@@ -15,13 +25,15 @@ export const starfield: Program = {
         });
         await renderer.init();
 
+        const rng = new SimpleRNG(0xC0FFEE);
+
         const geom = renderer
-            .createGeometry('starfield', { maxInstances: MAX_STARS, geometry: 'quad' })
+            .createGeometry('starfield', { maxInstances: maxStars, geometry: 'quad' })
             .instanceLayout({
                 dynamic: { position: d.vec2f },
                 static: { speed: d.f32, phase: d.f32 },
             })
-            .uniforms({ time: d.f32, resolution: d.vec2f })
+            .uniforms({ time: d.f32, resolution: d.vec2f, speedMultiplier: d.f32 })
             .shaders({
                 vertex: {
                     out: { brightness: d.f32, localUV: d.vec2f },
@@ -29,7 +41,7 @@ export const starfield: Program = {
                         const starPos = dynamic[input.instanceIndex].position;
                         const speed = statics[input.instanceIndex].speed;
                         const phase = statics[input.instanceIndex].phase;
-                        const time = uniforms.time;
+                        const time = uniforms.time * uniforms.speedMultiplier;
                         const resX = uniforms.resolution.x;
                         const resY = uniforms.resolution.y;
 
@@ -69,17 +81,18 @@ export const starfield: Program = {
             .build();
 
         // Initialize stars
-        for (let i = 0; i < MAX_STARS; i++) {
+        for (let i = 0; i < maxStars; i++) {
             geom.addInstance({
-                position: [Math.random(), Math.random()],
-                speed: 0.5 + Math.random(),
-                phase: Math.random() * Math.PI * 2,
+                position: [rng.rand(), rng.rand()],
+                speed: 0.5 + rng.rand(),
+                phase: rng.rand() * Math.PI * 2,
             });
         }
 
         geom.updateUniforms({
             time: 0,
             resolution: [canvas.width, canvas.height],
+            speedMultiplier,
         });
 
         let frameCount = 0;
@@ -91,14 +104,14 @@ export const starfield: Program = {
         loop.events.on('render', ({ deltaTime }) => {
             time += deltaTime;
 
-            geom.updateUniforms({ time });
+            geom.updateUniforms({ time, speedMultiplier });
             geom.render();
 
             frameCount++;
             const now = performance.now();
             if (now - lastFpsTime >= 1000) {
                 const fps = frameCount / ((now - lastFpsTime) / 1000);
-                stats.textContent = `FPS: ${fps.toFixed(0)} | Stars: ${MAX_STARS.toLocaleString()}`;
+                stats.textContent = `FPS: ${fps.toFixed(0)} | Stars: ${maxStars.toLocaleString()}`;
                 frameCount = 0;
                 lastFpsTime = now;
             }
@@ -110,9 +123,14 @@ export const starfield: Program = {
 
         loop.start();
 
-        return () => {
-            loop.stop();
-            geom.destroy();
+        return {
+            onControlChange(key, value) {
+                if (key === 'speed') speedMultiplier = value;
+            },
+            destroy() {
+                loop.stop();
+                geom.destroy();
+            },
         };
     },
 };
