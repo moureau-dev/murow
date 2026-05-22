@@ -1,6 +1,6 @@
 import { test, expect, describe } from 'bun:test';
-import { Ray2D } from './Ray2D';
-import { Ray3D } from './Ray3D';
+import { Ray2D } from './ray-2d';
+import { Ray3D } from './ray-3d';
 
 // ─── Ray2D ───────────────────────────────────────────────────────────────────
 
