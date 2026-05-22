@@ -1275,7 +1275,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private updatedBoneOffsets!: Uint8Array;
 
     private updateAnimations(deltaTime: number): void {
-        // Rebuild GPU compute kernel if new skinned models were loaded
+        // Rebuild GPU compute kernel if new skinned models were loaded.
+        // Note: the kernel only builds when at least one clip exists. Skinned
+        // models with zero clips will still render via the CPU bone-matrix
+        // upload at line ~1555 (writing rest poses from boneMatrixData).
         if (this.animComputeNeedsRebuild && this.packedAnimData.clips.length > 0) {
             this.animComputeKernel?.destroy();
             const { kernel, packedBuffers } = buildAnimationKernel(
@@ -1301,6 +1304,18 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                     { binding: 4, resource: { buffer: rawBoneBuffer } },
                 ],
             });
+
+            // Seed the new (kernel-owned) bone buffer with the rest-pose data
+            // that's been accumulating in boneMatrixData via addSkinnedInstance.
+            // Skinned models with zero clips never get touched by the compute
+            // dispatch, so without this seeding their bones stay at zero in the
+            // freshly-allocated kernel buffer and they render collapsed to origin.
+            this.device.queue.writeBuffer(
+                this.rawBoneMatrixBuffer, 0,
+                this.boneMatrixData.buffer, this.boneMatrixData.byteOffset, this.boneMatrixData.byteLength,
+            );
+            this.boneMatrixDirty = false;
+
             this.animComputeNeedsRebuild = false;
         }
 

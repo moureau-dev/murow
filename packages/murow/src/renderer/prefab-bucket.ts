@@ -21,14 +21,25 @@
 
 export type PrefabMode = '2d' | '3d';
 
+/**
+ * `T | (string & {})` — accept a literal `T` (for autocomplete) but don't
+ * collapse to plain `string`. Lets callers pass any string while still getting
+ * suggestions for the known set.
+ */
+export type StringOr<T extends string> = T | (string & {});
+
 export interface PrefabSpecBase {
     readonly type: string;
     readonly id: string;
+    /** Optional user-defined sidecar data carried through to the parsed prefab. */
+    readonly metadata?: Record<string, unknown>;
 }
 
 export interface PrefabBase {
     readonly type: string;
     readonly id: string;
+    /** User-defined sidecar data passed through from the spec. */
+    readonly metadata?: Record<string, unknown>;
 }
 
 /**
@@ -111,8 +122,10 @@ export class PrefabBucket<
      * Returns the parsed prefab by id. The default return type is the prefab
      * union; subclasses may pass a second generic `R` to narrow the return
      * type per-id (e.g. mapping `Specs[K]` to its concrete prefab variant).
+     *
+     * Accepts any string at runtime but offers autocomplete for the known ids.
      */
-    get<K extends keyof Specs & string, R extends Prefab = Prefab>(id: K): R {
+    get<K extends keyof Specs & string, R extends Prefab = Prefab>(id: StringOr<K>): R {
         if (!this.prefabs) throw new Error(`PrefabBucket: get('${id}') called before load()`);
         const prefab = this.prefabs.get(id);
         if (!prefab) throw new Error(`PrefabBucket: unknown prefab id '${id}'`);
@@ -131,5 +144,24 @@ export class PrefabBucket<
     entries(): Prefab[] {
         if (!this.prefabs) throw new Error(`PrefabBucket: entries() called before load()`);
         return Array.from(this.prefabs.values());
+    }
+
+    /**
+     * Return all parsed prefabs whose `type` matches the given discriminator.
+     * The default return type is the prefab union narrowed structurally;
+     * subclasses may pass a second generic `R` to narrow further per-type.
+     *
+     * Accepts any string at runtime; offers autocomplete for the known types.
+     */
+    getAllByType<
+        T extends Prefab['type'] & string,
+        R extends Prefab = Extract<Prefab, { type: T }>,
+    >(type: StringOr<T>): R[] {
+        if (!this.prefabs) throw new Error(`PrefabBucket: getAllByType('${type}') called before load()`);
+        const out: R[] = [];
+        for (const p of this.prefabs.values()) {
+            if (p.type === type) out.push(p as R);
+        }
+        return out;
     }
 }

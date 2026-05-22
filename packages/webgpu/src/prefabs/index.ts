@@ -17,7 +17,7 @@
  * ```
  */
 
-import { PrefabBucket as BasePrefabBucket } from 'murow/renderer';
+import { PrefabBucket as BasePrefabBucket, type StringOr } from 'murow/renderer';
 import { parsers2d, parsers3d } from './parsers';
 import type {
     Prefab2D,
@@ -62,12 +62,14 @@ export class PrefabBucket<
     /**
      * Return the parsed prefab variant for this id. Narrow type — `get('minion')`
      * returns `GltfPrefab` (with `.animations`, `.jointCount`), not the union.
+     *
+     * Accepts any string at runtime but autocompletes known ids.
      */
     get<
         K extends keyof Specs & string,
         R extends PrefabUnionForMode<M> = PrefabFor<Specs[K]> & PrefabUnionForMode<M>,
-    >(id: K): R {
-        return super.get<K, R>(id);
+    >(id: StringOr<K>): R {
+        return super.get<K, R>(id as K);
     }
 }
 

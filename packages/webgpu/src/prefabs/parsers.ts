@@ -16,29 +16,43 @@ import type {
 export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
     gltf: async (spec) => {
         if (spec.type !== 'gltf') throw new Error('gltf parser given non-gltf spec');
-        const parsed = await parseGltf(spec.url, spec.animations ? { animations: [...spec.animations] } : undefined);
+
+        // Spec semantics for `animations`:
+        //   - omitted          → load all clips, animationList = discovered names
+        //   - []               → load zero clips, no animationList (static skinned model)
+        //   - ['Run', 'Idle']  → load only those, animationList = ['Run', 'Idle'] (literal)
+        const parsed = await parseGltf(
+            spec.url,
+            spec.animations !== undefined ? { animations: [...spec.animations] } : undefined,
+        );
         const skinnedPartCount = parsed.primitives.filter(p => p.skinned).length;
         const jointCount = parsed.skin?.data.jointCount ?? 0;
         let totalVertexCount = 0;
         for (const p of parsed.primitives) totalVertexCount += p.positions.length / 3;
 
-        // Build both views over the animation set declared on the spec.
-        // - `animations`: record keyed by name (for `prefab.animations.Run`)
-        // - `animationList`: tuple of literals (for iteration / `rng.pick`)
-        const declared = spec.animations ? [...spec.animations] : (parsed.skin?.animClips.map(c => c.name) ?? []);
-        const animations: Record<string, string> = {};
-        for (const name of declared) animations[name] = name;
-
-        return {
+        const base: any = {
             type: 'gltf',
             id: spec.id,
             parsed,
-            animations: animations as any,
-            animationList: declared as any,
             skinnedPartCount,
             jointCount,
             totalVertexCount,
+            metadata: spec.metadata,
         };
+
+        // Animation views — present only when the spec declared a non-empty list,
+        // OR when the spec omitted animations (we use the GLB's actual clip names).
+        const declared = spec.animations !== undefined
+            ? [...spec.animations]
+            : (parsed.skin?.animClips.map(c => c.name) ?? []);
+        if (declared.length > 0) {
+            const record: Record<string, string> = {};
+            for (const name of declared) record[name] = name;
+            base.animations = record;
+            base.animationList = declared;
+        }
+
+        return base;
     },
     grid: (spec) => {
         if (spec.type !== 'grid') throw new Error('grid parser given non-grid spec');
@@ -48,6 +62,7 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             size: spec.size,
             step: spec.step,
             lineWidth: spec.lineWidth,
+            metadata: spec.metadata as any,
         };
     },
 };
@@ -68,6 +83,7 @@ export const parsers2d: PrefabParserMap<Prefab2DSpec, Prefab2D> = {
             frameCount: parsed.uvs.length,
             width: parsed.width,
             height: parsed.height,
+            metadata: spec.metadata as any,
         };
     },
 };

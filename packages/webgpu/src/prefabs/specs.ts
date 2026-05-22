@@ -10,24 +10,42 @@
 import type { ParsedGltf } from '../3d/gltf-parser';
 import type { ParsedSpritesheet } from '../spritesheet/spritesheet-parser';
 
+/**
+ * Extracts the spec's `metadata` literal type.
+ * - Required field → exact literal type (e.g. `{ scale: 0.5 }`)
+ * - Optional field → field type | undefined (e.g. `{ scale: number } | undefined`)
+ * - Absent → `undefined`
+ */
+type MetadataOf<S> =
+    S extends { readonly metadata: infer M } ? M :
+    S extends { readonly metadata?: infer M } ? M | undefined :
+    undefined;
+
 // ============================================================================
 // 3D
 // ============================================================================
 
 export interface GltfSpec {
     readonly type: 'gltf';
+    /** Unique identifier for the prefab. */
     readonly id: string;
+    /** URL to the .gltf or .glb file. */
     readonly url: string;
-    /** Optional whitelist of animation clip names to keep. Defaults to all. */
+    /** Optional whitelist of animation clip names to keep. Defaults to all. Filter them here and get type-safety and more performance. */
     readonly animations?: readonly string[];
+    /** Optional user-defined sidecar data (scale, speed, gameplay hints, etc). */
+    readonly metadata?: Record<string, unknown>;
 }
 
 export interface GridSpec {
     readonly type: 'grid';
+    /** Unique identifier for the prefab. */
     readonly id: string;
     readonly size: number;
     readonly step: number;
     readonly lineWidth: number;
+    /** Optional user-defined sidecar data (scale, speed, gameplay hints, etc). */
+    readonly metadata?: Record<string, unknown>;
 }
 
 export type Prefab3DSpec = GltfSpec | GridSpec;
@@ -36,44 +54,54 @@ export type Prefab3DSpec = GltfSpec | GridSpec;
  * Map a spec's `animations` tuple to a record-keyed-by-name. Used to type
  * `GltfPrefab.animations` so `prefab.animations.Run` is a string literal
  * (and `prefab.animations.Typo` is a compile-time error).
- *
- * If the spec doesn't declare `animations`, the prefab gets the open-ended
- * `Record<string, string>` (whatever the loader finds at runtime).
  */
-export type AnimationsRecord<A> =
-    A extends readonly string[]
-        ? { readonly [K in A[number]]: K }
-        : Record<string, string>;
+export type AnimationsRecord<A extends readonly string[]> = {
+    readonly [K in A[number]]: K;
+};
 
 /**
  * GltfPrefab — generic over its source spec so the spec's literal `animations`
- * tuple and `id` are preserved through `bucket.get('annie').animations`.
+ * tuple, `id`, and `metadata` are preserved through `bucket.get('annie')`.
+ *
+ * Animation fields (`animations`, `animationList`) reflect what the spec declared:
+ *   - Spec with `animations: ['Run', 'Idle1']` → narrow record `{ Run, Idle1 }` and tuple
+ *   - Spec with `animations?` (default) → wide record/array
+ *   - Spec without `animations` field at all → fields absent
  */
-export interface GltfPrefab<S extends GltfSpec = GltfSpec> {
+export type GltfPrefab<S extends GltfSpec = GltfSpec> = {
     readonly type: 'gltf';
     readonly id: S['id'];
     readonly parsed: ParsedGltf;
-    /**
-     * Animations declared on the spec, indexed by name.
-     * `prefab.animations.Run` returns `'Run'` (typed as the literal).
-     */
-    readonly animations: AnimationsRecord<S['animations']>;
-    /** All animation names declared on the spec, as a literal-typed tuple. */
-    readonly animationList: S['animations'] extends readonly string[]
-        ? S['animations']
-        : readonly string[];
     readonly skinnedPartCount: number;
     readonly jointCount: number;
     /** Total vertices across all primitives. */
     readonly totalVertexCount: number;
-}
+    /** Passed through from the spec. */
+    readonly metadata: MetadataOf<S>;
+} & (
+    // 1. Spec has a non-empty animations tuple → narrow record + tuple
+    S extends { animations: readonly [string, ...string[]] }
+        ? {
+            readonly animations: AnimationsRecord<S['animations']>;
+            readonly animationList: S['animations'];
+        }
+    // 2. Spec has `animations?` (declared optional) → wide record + array
+    : S extends { animations?: readonly string[] | undefined }
+        ? {
+            readonly animations?: Record<string, string>;
+            readonly animationList?: readonly string[];
+        }
+    // 3. Spec has no animations field → fields absent
+    : {}
+);
 
-export interface GridPrefab {
+export interface GridPrefab<S extends GridSpec = GridSpec> {
     readonly type: 'grid';
-    readonly id: string;
+    readonly id: S['id'];
     readonly size: number;
     readonly step: number;
     readonly lineWidth: number;
+    readonly metadata: MetadataOf<S>;
 }
 
 export type Prefab3D = GltfPrefab | GridPrefab;
@@ -90,17 +118,19 @@ export interface SpritesheetSpec {
     readonly frameHeight?: number;
     /** URL to a texture-packer JSON file. Mutually exclusive with frameWidth/frameHeight. */
     readonly data?: string;
+    readonly metadata?: Record<string, unknown>;
 }
 
 export type Prefab2DSpec = SpritesheetSpec;
 
-export interface SpritesheetPrefab {
+export interface SpritesheetPrefab<S extends SpritesheetSpec = SpritesheetSpec> {
     readonly type: 'spritesheet';
-    readonly id: string;
+    readonly id: S['id'];
     readonly parsed: ParsedSpritesheet;
     readonly frameCount: number;
     readonly width: number;
     readonly height: number;
+    readonly metadata: MetadataOf<S>;
 }
 
 export type Prefab2D = SpritesheetPrefab;
@@ -116,6 +146,6 @@ export type Prefab2D = SpritesheetPrefab;
  */
 export type PrefabFor<S> =
     S extends GltfSpec ? GltfPrefab<S> :
-    S extends GridSpec ? GridPrefab :
-    S extends SpritesheetSpec ? SpritesheetPrefab :
+    S extends GridSpec ? GridPrefab<S> :
+    S extends SpritesheetSpec ? SpritesheetPrefab<S> :
     never;

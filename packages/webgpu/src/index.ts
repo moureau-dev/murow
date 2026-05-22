@@ -61,6 +61,7 @@ export { DynamicSprite, StaticSprite, SpriteUniforms, DynamicInstance3D, StaticI
 
 // Prefab bucket
 export { PrefabBucket } from './prefabs';
+export type { StringOr } from 'murow/renderer';
 export type {
     PrefabBucket2D,
     PrefabBucket3D,
