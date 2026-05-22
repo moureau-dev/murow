@@ -30,6 +30,9 @@ export class InputManager {
         scrollY: 0,
     };
 
+    private lastClientX: number | null = null;
+    private lastClientY: number | null = null;
+
     private prevMouse = {
         left: false,
         right: false,
@@ -133,8 +136,17 @@ export class InputManager {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        this.mouse.dx += e.movementX;
-        this.mouse.dy += e.movementY;
+        const locked = typeof document !== 'undefined' && document.pointerLockElement === e.target;
+        if (locked) {
+            this.mouse.dx += e.movementX;
+            this.mouse.dy += e.movementY;
+        } else if (this.lastClientX !== null && this.lastClientY !== null) {
+            this.mouse.dx += e.clientX - this.lastClientX;
+            this.mouse.dy += e.clientY - this.lastClientY;
+        }
+
+        this.lastClientX = e.clientX;
+        this.lastClientY = e.clientY;
 
         this.mouse.x = x;
         this.mouse.y = y;
@@ -150,6 +162,9 @@ export class InputManager {
         if (e.button === 0) this.mouse.left = false;
         if (e.button === 1) this.mouse.middle = false;
         if (e.button === 2) this.mouse.right = false;
+
+        this.lastClientX = null;
+        this.lastClientY = null;
     }
 
     private onMouseWheel(e: WheelEvent) {

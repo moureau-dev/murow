@@ -18,9 +18,10 @@ export class BrowserInputSource implements InputEventSource {
         this.keyboardTarget.addEventListener('keydown', h.keydown);
         this.keyboardTarget.addEventListener('keyup', h.keyup);
 
-        this.mouseTarget.addEventListener('mousemove', h.mousemove);
-        this.mouseTarget.addEventListener('mousedown', h.mousedown);
-        this.mouseTarget.addEventListener('mouseup', h.mouseup);
+        this.mouseTarget.addEventListener('pointermove', h.mousemove);
+        this.mouseTarget.addEventListener('pointerdown', h.mousedown);
+        this.mouseTarget.addEventListener('pointerup', h.mouseup);
+        this.mouseTarget.addEventListener('pointercancel', h.mouseup);
         this.mouseTarget.addEventListener('wheel', h.wheel);
     }
 
@@ -31,9 +32,10 @@ export class BrowserInputSource implements InputEventSource {
         this.keyboardTarget.removeEventListener('keydown', h.keydown);
         this.keyboardTarget.removeEventListener('keyup', h.keyup);
 
-        this.mouseTarget.removeEventListener('mousemove', h.mousemove);
-        this.mouseTarget.removeEventListener('mousedown', h.mousedown);
-        this.mouseTarget.removeEventListener('mouseup', h.mouseup);
+        this.mouseTarget.removeEventListener('pointermove', h.mousemove);
+        this.mouseTarget.removeEventListener('pointerdown', h.mousedown);
+        this.mouseTarget.removeEventListener('pointerup', h.mouseup);
+        this.mouseTarget.removeEventListener('pointercancel', h.mouseup);
         this.mouseTarget.removeEventListener('wheel', h.wheel);
     }
 }
