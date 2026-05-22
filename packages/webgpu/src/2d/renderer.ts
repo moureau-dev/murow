@@ -56,12 +56,9 @@ import {
 } from './shader';
 import {
     Spritesheet,
-    loadImage,
     createTextureFromBitmap,
-    computeGridUVs,
-    computeTexturePackerUVs,
-    type TexturePackerData,
 } from '../spritesheet/spritesheet';
+import { parseSpritesheet, type ParsedSpritesheet } from '../spritesheet/spritesheet-parser';
 import { GeometryBuilder, type GeometryOptions } from '../geometry/geometry-builder';
 import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder';
 
@@ -254,27 +251,25 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     }
 
     async loadSpritesheet(source: SpritesheetSource): Promise<SpritesheetHandle> {
-        const bitmap = await loadImage(source.image);
-        const { texture, view } = createTextureFromBitmap(this._device, bitmap);
+        const parsed = await parseSpritesheet(source);
+        return this.uploadParsedSpritesheet(parsed);
+    }
+
+    /**
+     * Upload a previously-parsed spritesheet to the GPU. Returns a SpritesheetHandle.
+     * Splitting parse (CPU) from upload (GPU) lets callers parse spritesheets in parallel
+     * before a renderer exists.
+     */
+    uploadParsedSpritesheet(parsed: ParsedSpritesheet): SpritesheetHandle {
+        const { texture, view } = createTextureFromBitmap(this._device, parsed.bitmap);
 
         const sampler = this._device.createSampler({
             magFilter: 'nearest',
             minFilter: 'nearest',
         });
 
-        let uvs;
-        if (source.data) {
-            const resp = await fetch(source.data);
-            const json: TexturePackerData = await resp.json();
-            uvs = computeTexturePackerUVs(json);
-        } else if (source.frameWidth && source.frameHeight) {
-            uvs = computeGridUVs(bitmap.width, bitmap.height, source.frameWidth, source.frameHeight);
-        } else {
-            uvs = [{ minX: 0, minY: 0, maxX: 1, maxY: 1 }];
-        }
-
         const id = this.nextSheetId++;
-        const sheet = new Spritesheet(id, texture, view, sampler, uvs, bitmap.width, bitmap.height);
+        const sheet = new Spritesheet(id, texture, view, sampler, parsed.uvs, parsed.width, parsed.height);
         this.sheets.set(id, sheet);
 
         const bindGroup = this._device.createBindGroup({

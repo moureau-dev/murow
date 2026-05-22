@@ -17,7 +17,6 @@
  * ```
  */
 import type { SkinData, AnimationClipData, AnimationChannel } from './gltf-skin-parser';
-import { getNodeTRS } from './gltf-skin-parser';
 import { trsToMat4, mat4Mul } from '../core/math';
 
 export interface SkeletalClip {
@@ -75,7 +74,7 @@ export class SkeletalAnimation {
     // Pre-stored as 16 floats so it can be used with mat4Mul offset API
     private readonly skelRootMat: Float32Array; // 16 floats, identity if no non-joint ancestors
 
-    constructor(skinData: SkinData, clips: AnimationClipData[], gltfNodes: any[]) {
+    constructor(skinData: SkinData, clips: AnimationClipData[]) {
         this.skinData = skinData;
         const jc = skinData.jointCount;
 
@@ -83,13 +82,9 @@ export class SkeletalAnimation {
         this.worldMatrices = new Float32Array(jc * 16);
         this.blendScratch = new Float32Array(jc * 16);
 
-        // Extract rest pose TRS for each joint node
-        this.originalRestPoseTRS = new Float32Array(jc * 10);
+        // Rest pose TRS — pre-extracted by parseSkin
+        this.originalRestPoseTRS = new Float32Array(skinData.restPoseTRS);
         this.currentTRS = new Float32Array(jc * 10);
-        for (let j = 0; j < jc; j++) {
-            const nodeTRS = getNodeTRS(gltfNodes[skinData.jointNodeIndices[j]]);
-            this.originalRestPoseTRS.set(nodeTRS, j * 10);
-        }
 
         // Skeleton root matrix (non-joint ancestors like armature scale)
         this.skelRootMat = new Float32Array(16);

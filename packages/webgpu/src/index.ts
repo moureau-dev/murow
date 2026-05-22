@@ -20,6 +20,8 @@ export type { MorphClip, MorphState, MorphClipConfig } from './3d/morph-animatio
 export { SkeletalAnimation } from './3d/skeletal-animation';
 export type { SkeletalClip, SkeletalAnimState, PlayOptions } from './3d/skeletal-animation';
 export type { SkinData, AnimationClipData, AnimationChannel } from './3d/gltf-skin-parser';
+export { parseGltf } from './3d/gltf-parser';
+export type { ParsedGltf, ParsedGltfPrimitive } from './3d/gltf-parser';
 
 // Camera
 export { Camera2D } from './camera/camera-2d';
@@ -34,6 +36,8 @@ export type { BuiltInGeometry, GeometryData } from './geometry/built-in';
 // Spritesheet
 export { Spritesheet, computeGridUVs, computeTexturePackerUVs, loadImage, createTextureFromBitmap } from './spritesheet/spritesheet';
 export type { SpritesheetConfig, TexturePackerData } from './spritesheet/spritesheet';
+export { parseSpritesheet } from './spritesheet/spritesheet-parser';
+export type { ParsedSpritesheet } from './spritesheet/spritesheet-parser';
 
 // Particle
 export { ParticleEmitter } from './particle/emitter';
@@ -53,3 +57,20 @@ export { rotate2d, worldToClip2d, worldToClip3d, remap, scaleRotate2d, inverseLe
 // Core
 export * from './core/constants';
 export { DynamicSprite, StaticSprite, SpriteUniforms, DynamicInstance3D, StaticInstance3D, DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms } from './core/types';
+
+// Prefab bucket
+export { createPrefabBucket } from './prefabs';
+export type {
+    PrefabBucket2D,
+    PrefabBucket3D,
+    Prefab2D,
+    Prefab2DSpec,
+    Prefab3D,
+    Prefab3DSpec,
+    GltfPrefab,
+    GltfSpec,
+    GridPrefab,
+    GridSpec,
+    SpritesheetPrefab,
+    SpritesheetSpec,
+} from './prefabs';

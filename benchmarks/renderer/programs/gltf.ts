@@ -1,5 +1,5 @@
 import { GameLoop, SimpleRNG } from 'murow';
-import { GltfModel, InstanceHandle, WebGPU3DRenderer } from 'murow/webgpu';
+import { InstanceHandle, WebGPU3DRenderer, createPrefabBucket, type GltfPrefab, type PrefabBucket3D } from 'murow/webgpu';
 
 import type { Control, ControlValues, Program, ProgramHandle } from '..';
 
@@ -15,16 +15,17 @@ const controls: Control[] = [
     { kind: 'number', key: 'far', label: 'Far', min: 1, max: 1000, step: 1, default: DEFAULT_FAR },
 ];
 
-interface Prefab {
-    model: string;
-    data: {
-        speed?: number;
-        scale: number;
-        animations: string[];
-    };
+interface PrefabConfig {
+    id: PrefabId;
+    url: string;
+    speed?: number;
+    scale: number;
+    animations: string[];
 }
 
-const prefabs: Prefab[] = [];
+type PrefabId = ''
+
+const prefabConfigs: PrefabConfig[] = [];
 
 export const gltf: Program = {
     name: '3D glTF',
@@ -32,37 +33,46 @@ export const gltf: Program = {
 
     async init(canvas: HTMLCanvasElement, stats: HTMLElement, values: ControlValues): Promise<ProgramHandle> {
         const instances = Math.max(1, Math.floor(values.instances ?? DEFAULT_INSTANCES));
+
+        // Declare all prefabs upfront. Load fetches + parses everything in parallel.
+        // Cast pins the typed-id union (`bucket.get` would otherwise be `never`-typed
+        // because the loop hides literals from the compiler).
+        const bucket = createPrefabBucket('3d') as PrefabBucket3D<PrefabId>;
+        for (const cfg of prefabConfigs) {
+            bucket.add({ type: 'gltf', id: cfg.id, url: cfg.url, animations: cfg.animations });
+        }
+        bucket.add({ type: 'grid', id: 'floor', size: 20, step: 0.33, lineWidth: 0.001 });
+        await bucket.load();
+
+        // Renderer self-sizes from the bucket: maxSkinnedInstances = instances * maxSkinnedPartsPerPrefab,
+        // maxBonesPerSkin = max jointCount across prefabs. No more magic numbers.
         const renderer = new WebGPU3DRenderer(canvas, {
-          maxModels: prefabs.length + 10,
-          clearColor: [0.15, 0.15, 0.2, 1],
-          autoResize: true,
-          maxSkinnedInstances: Math.max(12000, instances),
+            maxModels: prefabConfigs.length + 10,
+            clearColor: [0.15, 0.15, 0.2, 1],
+            autoResize: true,
+            prefabs: bucket,
+            maxInstances: instances,
         });
 
         await renderer.init();
 
         const rng = new SimpleRNG(1212121);
 
-        // Load models with animations
-        const models = await Promise.all(prefabs.map(({ model, data }) =>
-            renderer.loadGltf(model, { animations: data.animations })
-        ));
-
-        const playRandom = (prefab: typeof prefabs[number], instance: InstanceHandle, model: GltfModel) => {
+        const playRandom = (cfg: PrefabConfig, instance: InstanceHandle, prefab: GltfPrefab) => {
             const next = (animationName?: string) => {
-                const randomAnimation = rng.pick(prefab.data.animations as unknown as string[]);
+                const randomAnimation = rng.pick(cfg.animations);
                 const name = rng.rand() > 0.5 ? animationName ?? randomAnimation : randomAnimation;
 
                 try {
                     instance.play?.(name, {
                         loop: true,
-                        speed: prefab?.data.speed,
+                        speed: cfg.speed,
                         crossfade: 0.15,
                         onEnd: () => next(animationName) // schedule next animation without growing call stack
                     });
                 } catch (err) {
                     console.error(err);
-                    console.error(`Available animations: `, model.animations)
+                    console.error(`Available animations: `, prefab.animations);
                 }
             };
 
@@ -70,32 +80,24 @@ export const gltf: Program = {
         };
 
         for (let i = 0; i < instances; i++) {
-            const index = rng.int(0, prefabs.length - 1);
-            const model = models[index];
-            const prefab = prefabs.find(({ model: m }) => m === model.src);
-            if (!prefab) continue;
+            const cfg = rng.pick(prefabConfigs);
+            const prefab = bucket.get(cfg.id) as GltfPrefab;
 
             const instance = renderer.addInstance({
-                model,
+                model: prefab,
                 x: rng.rand() * 20,
                 y: 0,
                 z: rng.rand() * 20,
-                scaleX: prefab.data.scale,
-                scaleY: prefab.data.scale,
-                scaleZ: prefab.data.scale,
+                scaleX: cfg.scale,
+                scaleY: cfg.scale,
+                scaleZ: cfg.scale,
             });
 
-            playRandom(prefab, instance, model);
+            playRandom(cfg, instance, prefab);
         }
 
         // Grid floor
-        const gridModel = renderer.createGrid({
-            size: 20,
-            step: 0.33,
-            lineWidth: 0.001,
-        });
-
-        renderer.addInstance({ model: gridModel, color: [0.25, 0.25, 0.3] });
+        renderer.addInstance({ model: bucket.get('floor'), color: [0.25, 0.25, 0.3] });
 
         // FPS/Fly camera
         renderer.camera.movement = 'local';
@@ -133,13 +135,14 @@ export const gltf: Program = {
         loop.events.on('tick', ({ tick }) => {
             if (tick % loop.ticker.rate !== 0) return;
 
-            const totalVertexCount = models.reduce((acc, curr) => acc + curr.totalVertexCount, 0);
+            let totalVertexCount = 0;
+            for (const cfg of prefabConfigs) {
+                totalVertexCount += (bucket.get(cfg.id) as GltfPrefab).totalVertexCount;
+            }
             stats.textContent = `FPS: ${loop.fps} | Vertices: ${totalVertexCount} | Instantiations: ${instances} (${instances * totalVertexCount} vertexes)`;
         });
 
-        // camera mouselook — desktop uses pointer lock for unbounded motion;
-        // on touch devices (where lock isn't available) we drive the camera
-        // while the primary pointer is held down.
+        // camera mouselook
         loop.events.on('tick', ({ input }) => {
             const driveLook = locked || input.mouse.left.down;
             if (driveLook) {
@@ -148,7 +151,6 @@ export const gltf: Program = {
                 pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
             }
 
-            // target from yaw/pitch
             const pos = renderer.camera.position;
             const lookX = Math.sin(yaw) * Math.cos(pitch);
             const lookY = Math.sin(pitch);
@@ -172,7 +174,6 @@ export const gltf: Program = {
                 renderer.camera.move(right, up, forward);
             }
         });
-
 
         loop.events.on('render', ({ alpha }) => {
             renderer.render(alpha);

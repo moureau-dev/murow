@@ -18,6 +18,8 @@ export interface SkinData {
     parentJointIndices: Int16Array;
     /** World matrix of the skeleton root (non-joint ancestors of root joints). Column-major mat4, 16 floats. Null if identity. */
     skeletonRootMatrix: Float32Array | null;
+    /** Rest-pose TRS for each joint, packed as [tx, ty, tz, qx, qy, qz, qw, sx, sy, sz]. jointCount * 10 floats. */
+    restPoseTRS: Float32Array;
 }
 
 export interface AnimationChannel {
@@ -127,12 +129,20 @@ export function parseSkin(
         break; // only need one root joint's ancestors
     }
 
+    // Pre-extract rest-pose TRS for each joint so downstream consumers don't need raw gltf.nodes
+    const restPoseTRS = new Float32Array(jointCount * 10);
+    for (let j = 0; j < jointCount; j++) {
+        const trs = getNodeTRS(gltf.nodes[joints[j]]);
+        restPoseTRS.set(trs, j * 10);
+    }
+
     return {
         jointCount,
         jointNodeIndices,
         inverseBindMatrices,
         parentJointIndices,
         skeletonRootMatrix,
+        restPoseTRS,
     };
 }
 
@@ -326,7 +336,6 @@ export function packSkinAndAnimations(
     packed: PackedAnimationData,
     skinData: SkinData,
     clips: AnimationClipData[],
-    gltfNodes: any[],
 ): number {
     const skinIndex = packed.skins.length;
     const jc = skinData.jointCount;
@@ -359,10 +368,9 @@ export function packSkinAndAnimations(
         packed.ibmData.push(skinData.inverseBindMatrices[i]);
     }
 
-    // Rest pose TRS
+    // Rest pose TRS (pre-extracted into skinData by parseSkin)
     for (let j = 0; j < jc; j++) {
-        const trs = getNodeTRS(gltfNodes[skinData.jointNodeIndices[j]]);
-        for (let k = 0; k < 10; k++) packed.restTRS.push(trs[k]);
+        for (let k = 0; k < 10; k++) packed.restTRS.push(skinData.restPoseTRS[j * 10 + k]);
     }
 
     // Skeleton root matrix

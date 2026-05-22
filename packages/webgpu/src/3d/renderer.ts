@@ -40,8 +40,9 @@ import {
     type MeshDataLayout,
     type SkinnedMeshDataLayout,
 } from './shader';
-import { nodeToMat4 } from '../core/math';
-import { parseSkin, parseAnimations, parsePrimitiveSkinAttributes, createPackedAnimationData, packSkinAndAnimations, type SkinData, type AnimationClipData, type PrimitiveSkinAttributes, type PackedAnimationData } from './gltf-skin-parser';
+import { createPackedAnimationData, packSkinAndAnimations, type PrimitiveSkinAttributes, type PackedAnimationData } from './gltf-skin-parser';
+import { parseGltf, type ParsedGltf } from './gltf-parser';
+import type { PrefabBucket3D, Prefab3D } from '../prefabs';
 import { SkeletalAnimation, type SkeletalAnimState, type PlayOptions } from './skeletal-animation';
 import { buildAnimationKernel } from './skeletal-animation-compute/index';
 import type { ComputeKernel } from '../compute/compute-builder';
@@ -98,6 +99,46 @@ export interface GltfModel {
     readonly src: string;
 }
 
+/**
+ * Per-prefab GPU handle, populated by the renderer at `init()` time when a
+ * PrefabBucket is supplied. Held in a WeakMap so prefab objects stay clean
+ * (no symbol-keyed properties leaking into autocomplete / serialization).
+ */
+const prefabHandles = new WeakMap<Prefab3D, ModelHandle | GltfModel>();
+
+/** True iff value is a Prefab3D (returned from `bucket.get(...)`). */
+function isPrefab3D(value: ModelHandle | GltfModel | Prefab3D): value is Prefab3D {
+    return (value as Prefab3D).type === 'gltf' || (value as Prefab3D).type === 'grid';
+}
+
+/**
+ * Look up the GPU handle attached to a prefab by its renderer. Used by
+ * `addInstance({ model: bucket.get('foo') })` to resolve the prefab back to
+ * the renderer's internal handle. Throws if the prefab hasn't been uploaded yet.
+ */
+function resolvePrefabHandle(prefab: Prefab3D): ModelHandle | GltfModel {
+    const h = prefabHandles.get(prefab);
+    if (!h) {
+        throw new Error(
+            `Prefab '${prefab.id}' has no GPU handle — has the renderer's init() been called with this bucket?`,
+        );
+    }
+    return h;
+}
+
+/** Compute auto-sizing stats from a loaded prefab bucket. */
+function computeBucketStats(bucket: PrefabBucket3D): { maxSkinnedParts: number; maxJointCount: number } {
+    let maxSkinnedParts = 0;
+    let maxJointCount = 0;
+    for (const prefab of bucket.entries()) {
+        if (prefab.type === 'gltf') {
+            if (prefab.skinnedPartCount > maxSkinnedParts) maxSkinnedParts = prefab.skinnedPartCount;
+            if (prefab.jointCount > maxJointCount) maxJointCount = prefab.jointCount;
+        }
+    }
+    return { maxSkinnedParts, maxJointCount };
+}
+
 /** Handle to a spawned instance (single primitive or multi-part glTF). */
 export interface InstanceHandle {
     setPosition(x: number, y: number, z: number): void;
@@ -109,7 +150,12 @@ export interface InstanceHandle {
 }
 
 export interface MeshInstanceOptions {
-    model: ModelHandle | GltfModel;
+    /**
+     * The model to instance. Either a renderer-internal handle (from `loadGltf`,
+     * `loadModel`, `createGrid`) or a prefab fetched from a `PrefabBucket3D` —
+     * `bucket.get('my-id')`.
+     */
+    model: ModelHandle | GltfModel | Prefab3D;
     x?: number; y?: number; z?: number;
     rotX?: number; rotY?: number; rotZ?: number;
     scaleX?: number; scaleY?: number; scaleZ?: number;
@@ -119,6 +165,22 @@ export interface MeshInstanceOptions {
 export interface WebGPU3DRendererOptions extends Renderer3DOptions {
     maxSkinnedInstances?: number;
     maxBonesPerSkin?: number;
+    /**
+     * Pre-loaded prefab bucket. When provided, the renderer self-sizes its
+     * skinned-instance + bone buffers from the bucket's prefab stats, and
+     * uploads each prefab to the GPU during `init()`. The bucket must have
+     * `load()` resolved before being passed in.
+     *
+     * `maxSkinnedInstances` defaults to `maxInstances * maxSkinnedPartsPerPrefab`.
+     * `maxBonesPerSkin` defaults to the maximum joint count across all prefabs.
+     */
+    prefabs?: PrefabBucket3D;
+    /**
+     * How many instances you intend to spawn. Used together with `prefabs` to
+     * size the skinned-instance budget. Ignored if `maxSkinnedInstances` is set
+     * explicitly. Defaults to `maxModels` when only `prefabs` is provided.
+     */
+    maxInstances?: number;
 }
 
 export class WebGPU3DRenderer extends Base3DRenderer {
@@ -235,12 +297,22 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private uniformData = new Float32Array(24); // mat4x4 (16) + alpha (1) + lightDir (3) + padding (4)
     private lastRenderTime = 0;
 
+    private readonly _prefabs: PrefabBucket3D | null;
+
     constructor(canvas: HTMLCanvasElement, options: WebGPU3DRendererOptions) {
         super(canvas, options);
         this.camera = new Camera3D();
 
-        this.maxSkinnedInstances = options.maxSkinnedInstances ?? 5000;
-        this.maxBonesPerSkin = options.maxBonesPerSkin ?? 64;
+        this._prefabs = options.prefabs ?? null;
+
+        // Derive sizing from the bucket when present; explicit options win.
+        const bucketStats = this._prefabs ? computeBucketStats(this._prefabs) : null;
+        const maxInstances = options.maxInstances ?? options.maxModels;
+
+        this.maxSkinnedInstances = options.maxSkinnedInstances
+            ?? (bucketStats ? maxInstances * Math.max(1, bucketStats.maxSkinnedParts) : 5000);
+        this.maxBonesPerSkin = options.maxBonesPerSkin
+            ?? (bucketStats ? Math.max(1, bucketStats.maxJointCount) : 64);
         this.maxTotalBones = this.maxSkinnedInstances * this.maxBonesPerSkin * 2;
         this.updatedBoneOffsets = new Uint8Array(this.maxTotalBones);
 
@@ -440,8 +512,32 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             ],
         });
 
+        if (this._prefabs) {
+            this.uploadPrefabBucket(this._prefabs);
+        }
+
         this.setupResizeObserver();
         this._initialized = true;
+    }
+
+    /**
+     * Upload every prefab in the bucket to the GPU and stash the resulting handle
+     * on each prefab so `bucket.get(id)` returns something usable as a model.
+     */
+    private uploadPrefabBucket(bucket: PrefabBucket3D): void {
+        for (const prefab of bucket.entries()) {
+            if (prefab.type === 'gltf') {
+                const model = this.uploadParsedGltf(prefab.parsed);
+                prefabHandles.set(prefab, model);
+            } else if (prefab.type === 'grid') {
+                const model = this.createGrid({
+                    size: prefab.size,
+                    step: prefab.step,
+                    lineWidth: prefab.lineWidth,
+                });
+                prefabHandles.set(prefab, model);
+            }
+        }
     }
 
     private setupResizeObserver(): void {
@@ -836,153 +932,32 @@ export class WebGPU3DRenderer extends Base3DRenderer {
      * ```
      */
     async loadGltf(url: string, opts?: { animations?: string[] }): Promise<GltfModel> {
-        const response = await fetch(url);
-        const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
+        const parsed = await parseGltf(url, opts);
+        return this.uploadParsedGltf(parsed);
+    }
 
-        let gltf: any;
-        let glbBinaryChunk: ArrayBuffer | null = null;
-
-        // Detect .glb (binary) vs .gltf (JSON)
-        const arrayBuffer = await response.arrayBuffer();
-        const magic = new Uint32Array(arrayBuffer, 0, 1)[0];
-
-        if (magic === 0x46546C67) {
-            // GLB: magic "glTF" (little-endian 0x46546C67)
-            let offset = 12; // past header
-
-            // Read chunks
-            while (offset < arrayBuffer.byteLength) {
-                const chunkLength = new Uint32Array(arrayBuffer, offset, 1)[0];
-                const chunkType = new Uint32Array(arrayBuffer, offset + 4, 1)[0];
-                offset += 8;
-
-                if (chunkType === 0x4E4F534A) {
-                    // JSON chunk
-                    const jsonBytes = new Uint8Array(arrayBuffer, offset, chunkLength);
-                    gltf = JSON.parse(new TextDecoder().decode(jsonBytes));
-                } else if (chunkType === 0x004E4942) {
-                    // BIN chunk
-                    glbBinaryChunk = arrayBuffer.slice(offset, offset + chunkLength);
-                }
-
-                offset += chunkLength;
-            }
-
-            if (!gltf) throw new Error(`Invalid GLB: no JSON chunk in ${url}`);
-        } else {
-            // Plain .gltf JSON
-            gltf = JSON.parse(new TextDecoder().decode(arrayBuffer));
-        }
-
-        if (!gltf.meshes?.length) throw new Error(`No meshes found in ${url}`);
-
-        // Load binary buffers
-        const buffers: ArrayBuffer[] = [];
-        for (let i = 0; i < (gltf.buffers?.length ?? 0); i++) {
-            const buf = gltf.buffers[i];
-            if (glbBinaryChunk && (!buf.uri || buf.uri === '')) {
-                buffers.push(glbBinaryChunk);
-            } else if (buf.uri) {
-                const r = await fetch(baseUrl + buf.uri);
-                buffers.push(await r.arrayBuffer());
-            }
-        }
-
-        // Helper: extract typed array from accessor (handles interleaved/strided bufferViews)
-        const getAccessorData = (accessorIndex: number): { data: Float32Array | Uint16Array | Uint32Array | Uint8Array; count: number; elementSize: number } => {
-            const accessor = gltf.accessors[accessorIndex];
-            const bufferView = gltf.bufferViews[accessor.bufferView];
-            const buffer = buffers[bufferView.buffer];
-
-            const typeMap: Record<number, any> = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
-            const byteSizeMap: Record<number, number> = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
-            const sizeMap: Record<string, number> = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
-
-            const TypedArray = typeMap[accessor.componentType];
-            const componentBytes = byteSizeMap[accessor.componentType];
-            const elementSize = sizeMap[accessor.type] ?? 1;
-            const baseOffset = (bufferView.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
-            const stride = bufferView.byteStride ?? (componentBytes * elementSize);
-            const tightStride = componentBytes * elementSize;
-
-            // If tightly packed, read directly
-            if (stride === tightStride) {
-                const data = new TypedArray(buffer, baseOffset, accessor.count * elementSize);
-                return { data, count: accessor.count, elementSize };
-            }
-
-            // Strided: de-interleave into a tightly packed array
-            const out = new TypedArray(accessor.count * elementSize);
-            const src = new Uint8Array(buffer);
-            const dst = new Uint8Array(out.buffer);
-            for (let i = 0; i < accessor.count; i++) {
-                const srcOff = baseOffset + i * stride;
-                const dstOff = i * tightStride;
-                for (let b = 0; b < tightStride; b++) {
-                    dst[dstOff + b] = src[srcOff + b];
-                }
-            }
-
-            return { data: out, count: accessor.count, elementSize };
-        };
-
-        // Pre-load all unique textures (cache by image index to avoid duplicates)
-        const textureCache = new Map<number, ImageBitmap>();
-        const loadTexture = async (imageIndex: number): Promise<ImageBitmap | undefined> => {
-            if (textureCache.has(imageIndex)) return textureCache.get(imageIndex)!;
-            const image = gltf.images?.[imageIndex];
-            if (!image) return undefined;
-
-            let blob: Blob | undefined;
-            if (image.bufferView !== undefined) {
-                const bv = gltf.bufferViews[image.bufferView];
-                const buf = buffers[bv.buffer];
-                const data = new Uint8Array(buf, bv.byteOffset ?? 0, bv.byteLength);
-                blob = new Blob([data], { type: image.mimeType ?? 'image/png' });
-            } else if (image.uri) {
-                const imgUrl = image.uri.startsWith('data:') ? image.uri : baseUrl + image.uri;
-                blob = await (await fetch(imgUrl)).blob();
-            }
-
-            if (blob) {
-                const bmp = await createImageBitmap(blob);
-                textureCache.set(imageIndex, bmp);
-                return bmp;
-            }
-            return undefined;
-        };
-
-        // Find the first mesh node (used for skin detection)
-        const meshNodeIndex = gltf.nodes?.findIndex((n: any) => n.mesh !== undefined) ?? -1;
-
-        // --- Detect skin and parse animation data ---
-        const skinIndex = meshNodeIndex !== -1 ? gltf.nodes?.[meshNodeIndex]?.skin : undefined;
-        let skinData: SkinData | null = null;
-        let animClips: AnimationClipData[] = [];
+    /**
+     * Upload a previously-parsed glTF to the GPU. Returns a GltfModel handle.
+     * Splitting parse (CPU) from upload (GPU) lets callers parse models in parallel
+     * before a renderer exists and inspect joint counts / vertex totals to size the
+     * renderer appropriately.
+     */
+    uploadParsedGltf(parsed: ParsedGltf): GltfModel {
         let skinnedModelSkinIndex = -1;
 
-        if (skinIndex !== undefined && gltf.skins?.[skinIndex]) {
-            skinData = parseSkin(gltf, skinIndex, getAccessorData);
-            animClips = parseAnimations(gltf, skinData, getAccessorData);
+        if (parsed.skin) {
+            const { data: skinData, animClips } = parsed.skin;
 
-            // Filter animations if specified
-            if (opts?.animations) {
-                animClips = animClips.filter(clip => opts.animations.includes(clip.name));
-            }
+            const animation = new SkeletalAnimation(skinData, animClips);
 
-            // Register the skeletal animation controller
-            const animation = new SkeletalAnimation(skinData, animClips, gltf.nodes);
-
-            // Compute bounding radius from IBM translations (bind-pose joint positions)
+            // Bounding radius from IBM translations (bind-pose joint positions)
             const ibm = skinData.inverseBindMatrices;
             let maxRadSq = 0;
             for (let j = 0; j < skinData.jointCount; j++) {
-                // IBM translation column = -bindPosePosition (column 3: indices 12,13,14)
                 const tx = ibm[j * 16 + 12], ty = ibm[j * 16 + 13], tz = ibm[j * 16 + 14];
                 const rSq = tx * tx + ty * ty + tz * tz;
                 if (rSq > maxRadSq) maxRadSq = rSq;
             }
-            // Add 50% margin for animation movement
             const skinnedRadius = Math.sqrt(maxRadSq) * 1.5;
 
             skinnedModelSkinIndex = this.skinnedModels.length;
@@ -992,120 +967,34 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 boundingRadius: skinnedRadius,
             });
 
-            // Pack animation data for GPU compute
-            packSkinAndAnimations(this.packedAnimData, skinData, animClips, gltf.nodes);
+            packSkinAndAnimations(this.packedAnimData, skinData, animClips);
             this.animComputeNeedsRebuild = true;
         }
 
-        // --- Load all primitives from all meshes ---
         const handles: ModelHandle[] = [];
-
-        // Collect all mesh node indices (nodes that have a mesh property)
-        const meshNodeIndices: number[] = [];
-        for (let i = 0; i < gltf.nodes.length; i++) {
-            if (gltf.nodes[i].mesh !== undefined) meshNodeIndices.push(i);
+        for (const prim of parsed.primitives) {
+            if (prim.skinned && prim.skinAttrs) {
+                handles.push(this.loadSkinnedModel(
+                    {
+                        positions: prim.positions,
+                        normals: prim.normals,
+                        uvs: prim.uvs,
+                        indices: prim.indices,
+                        texture: prim.texture,
+                    },
+                    prim.skinAttrs,
+                    skinnedModelSkinIndex,
+                ));
+            } else {
+                handles.push(this.loadModel({
+                    positions: prim.positions,
+                    normals: prim.normals,
+                    uvs: prim.uvs,
+                    indices: prim.indices,
+                    texture: prim.texture,
+                }));
+            }
         }
-        // Fallback: if no mesh nodes found, just use meshes[0]
-        const meshIndicesToLoad = meshNodeIndices.length > 0
-            ? meshNodeIndices.map((ni: number) => gltf.nodes[ni].mesh as number)
-            : [0];
-
-        for (const meshIdx of meshIndicesToLoad) {
-            const mesh = gltf.meshes[meshIdx];
-            if (!mesh) continue;
-
-            // Check if this mesh's node has a skin
-            const meshNodeForThis = gltf.nodes.find((n: any) => n.mesh === meshIdx);
-            const meshSkinIndex = meshNodeForThis?.skin;
-            const isSkinned = skinData && meshSkinIndex !== undefined;
-
-            // Get mesh node transform for this specific mesh node
-            let thisMeshNodeMatrix: Float32Array | null = null;
-            if (meshNodeForThis && !isSkinned) {
-                if (meshNodeForThis.scale || meshNodeForThis.rotation || meshNodeForThis.translation || meshNodeForThis.matrix) {
-                    thisMeshNodeMatrix = nodeToMat4(meshNodeForThis);
-                }
-            }
-
-        for (const primitive of mesh.primitives) {
-            // Positions (required)
-            const posAccess = getAccessorData(primitive.attributes.POSITION);
-            const positions = new Float32Array(posAccess.data as Float32Array);
-
-            // Normals (optional)
-            let normals: Float32Array | undefined;
-            if (primitive.attributes.NORMAL !== undefined) {
-                normals = new Float32Array(getAccessorData(primitive.attributes.NORMAL).data as Float32Array);
-            }
-
-            // UVs (optional)
-            let uvs: Float32Array | undefined;
-            if (primitive.attributes.TEXCOORD_0 !== undefined) {
-                uvs = new Float32Array(getAccessorData(primitive.attributes.TEXCOORD_0).data as Float32Array);
-            }
-
-            // Indices (optional)
-            let indices: Uint16Array | Uint32Array | undefined;
-            if (primitive.indices !== undefined) {
-                const idxAccess = getAccessorData(primitive.indices);
-                indices = idxAccess.data.length > 65535
-                    ? new Uint32Array(idxAccess.data)
-                    : new Uint16Array(idxAccess.data);
-            }
-
-            // Apply mesh node transform (e.g. scale [-1,1,1] for X mirror) — non-skinned only
-            if (thisMeshNodeMatrix && !isSkinned) {
-                const meshNodeMatrix = thisMeshNodeMatrix;
-                const mm = meshNodeMatrix;
-                const vertexCount = positions.length / 3;
-                for (let v = 0; v < vertexCount; v++) {
-                    const o = v * 3;
-                    const px = positions[o], py = positions[o + 1], pz = positions[o + 2];
-                    positions[o]     = mm[0] * px + mm[4] * py + mm[8]  * pz + mm[12];
-                    positions[o + 1] = mm[1] * px + mm[5] * py + mm[9]  * pz + mm[13];
-                    positions[o + 2] = mm[2] * px + mm[6] * py + mm[10] * pz + mm[14];
-
-                    if (normals) {
-                        const nx = normals[o], ny = normals[o + 1], nz = normals[o + 2];
-                        const tnx = mm[0] * nx + mm[4] * ny + mm[8]  * nz;
-                        const tny = mm[1] * nx + mm[5] * ny + mm[9]  * nz;
-                        const tnz = mm[2] * nx + mm[6] * ny + mm[10] * nz;
-                        const len = Math.sqrt(tnx * tnx + tny * tny + tnz * tnz);
-                        if (len > 0) {
-                            normals[o] = tnx / len;
-                            normals[o + 1] = tny / len;
-                            normals[o + 2] = tnz / len;
-                        }
-                    }
-                }
-            }
-
-            // Texture (optional)
-            let texture: ImageBitmap | undefined;
-            if (primitive.material !== undefined) {
-                const material = gltf.materials?.[primitive.material];
-                const texIndex = material?.pbrMetallicRoughness?.baseColorTexture?.index;
-                if (texIndex !== undefined && gltf.textures?.[texIndex]) {
-                    texture = await loadTexture(gltf.textures[texIndex].source);
-                }
-            }
-
-            // Skinned vs non-skinned model loading
-            if (isSkinned) {
-                const skinAttrs = parsePrimitiveSkinAttributes(primitive, getAccessorData);
-                if (skinAttrs) {
-                    handles.push(this.loadSkinnedModel(
-                        { positions, normals, uvs, indices, texture },
-                        skinAttrs,
-                        skinnedModelSkinIndex,
-                    ));
-                    continue;
-                }
-            }
-
-            handles.push(this.loadModel({ positions, normals, uvs, indices, texture }));
-        }
-        } // end for meshIdx
 
         let totalVertexCount = 0;
         for (const h of handles) totalVertexCount += h.vertexCount;
@@ -1119,7 +1008,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             totalVertexCount,
             skinned: handles.some(h => h.skinned),
             animations: animNames,
-            src: url,
+            src: parsed.src,
         };
     }
 
@@ -1128,7 +1017,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
      * with another instance (e.g., when spawning all parts of a character).
      */
     addInstance(opts: MeshInstanceOptions): InstanceHandle {
-        const modelOrGltf = opts.model;
+        // Resolve prefab → renderer handle if needed.
+        const modelOrGltf = isPrefab3D(opts.model) ? resolvePrefabHandle(opts.model) : opts.model;
 
         // GltfModel: spawn all parts as a linked group
         if ('parts' in modelOrGltf) {
