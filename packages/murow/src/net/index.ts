@@ -14,8 +14,8 @@
  *
  * @example
  * ```typescript
- * import { ServerNetwork, ClientNetwork } from '@mococa/net';
- * import { BunWebSocketServerTransport } from '@mococa/net/transports/bun-websocket';
+ * import { ServerNetwork, ClientNetwork } from 'murow/net';
+ * import { BunWebSocketServerTransport } from 'murow/net/transports/bun-websocket';
  * import { IntentRegistry, SnapshotRegistry } from '@mococa/protocol';
  *
  * // Server setup

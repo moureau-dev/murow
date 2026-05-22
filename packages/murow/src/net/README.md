@@ -1,4 +1,4 @@
-# Network Layer (`@mococa/net`)
+# Network Layer (`murow/net`)
 
 Transport-agnostic networking layer for multiplayer games. Provides generic client/server abstractions that work with any transport (WebSocket, WebRTC, UDP, Socket.io, etc.)
 
@@ -17,7 +17,7 @@ Transport-agnostic networking layer for multiplayer games. Provides generic clie
   - Socket.io
   - Custom transports
 
-- **Type-Safe Protocol** - Integrates with `@mococa/protocol`:
+- **Type-Safe Protocol** - Integrates with `murow/protocol`:
   - Intent encoding/decoding (client inputs)
   - Snapshot encoding/decoding (state sync)
   - RPC encoding/decoding (one-off events)
