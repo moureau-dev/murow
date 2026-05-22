@@ -18,7 +18,9 @@ export abstract class Base2DRenderer extends BaseRenderer<Renderer2DOptions> {
 
     constructor(canvas: HTMLCanvasElement, options: Renderer2DOptions) {
         super(canvas, options);
-        this.maxSprites = options.maxSprites;
+        // Subclasses are expected to fill `options.maxSprites` (possibly by deriving
+        // it from a prefab bucket) before calling super.
+        this.maxSprites = options.maxSprites ?? 1024;
     }
 
     abstract loadSpritesheet(source: SpritesheetSource): Promise<SpritesheetHandle>;

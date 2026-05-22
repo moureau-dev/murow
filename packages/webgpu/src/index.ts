@@ -10,6 +10,7 @@ export { d, std } from './shaders/typegpu';
 
 // 2D Renderer
 export { WebGPU2DRenderer } from './2d/renderer';
+export type { WebGPU2DRendererOptions } from './2d/renderer';
 export { SpriteAccessor } from './2d/sprite-accessor';
 
 // 3D Renderer

@@ -111,6 +111,16 @@ function isPrefab3D(value: ModelHandle | GltfModel | Prefab3D): value is Prefab3
     return (value as Prefab3D).type === 'gltf' || (value as Prefab3D).type === 'grid';
 }
 
+/** Resolve the tuple-shape transform options into flat scalars + defaults. */
+function resolveTransform(opts: MeshInstanceOptions) {
+    const [px, py, pz] = opts.position ?? [0, 0, 0];
+    const [rx, ry, rz] = opts.rotation ?? [0, 0, 0];
+    const s = opts.scale;
+    const [sx, sy, sz] = typeof s === 'number' ? [s, s, s] : (s ?? [1, 1, 1]);
+    const [cr, cg, cb] = opts.color ?? [1, 1, 1];
+    return { px, py, pz, rx, ry, rz, sx, sy, sz, cr, cg, cb };
+}
+
 /**
  * Look up the GPU handle attached to a prefab by its renderer. Used by
  * `addInstance({ model: bucket.get('foo') })` to resolve the prefab back to
@@ -156,10 +166,14 @@ export interface MeshInstanceOptions {
      * `bucket.get('my-id')`.
      */
     model: ModelHandle | GltfModel | Prefab3D;
-    x?: number; y?: number; z?: number;
-    rotX?: number; rotY?: number; rotZ?: number;
-    scaleX?: number; scaleY?: number; scaleZ?: number;
-    color?: [number, number, number];
+    /** World position. Defaults to `[0, 0, 0]`. */
+    position?: readonly [x: number, y: number, z: number];
+    /** Euler rotation in radians. Defaults to `[0, 0, 0]`. */
+    rotation?: readonly [x: number, y: number, z: number];
+    /** Per-axis scale. Pass a single number to scale uniformly. Defaults to `[1, 1, 1]`. */
+    scale?: number | readonly [x: number, y: number, z: number];
+    /** Tint color RGB. Defaults to `[1, 1, 1]`. */
+    color?: readonly [r: number, g: number, b: number];
 }
 
 export interface WebGPU3DRendererOptions extends Renderer3DOptions {
@@ -1058,30 +1072,28 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const dynBase = slot * DYNAMIC_MESH_FLOATS;
         const statBase = slot * STATIC_MESH_FLOATS;
 
-        const x = opts.x ?? 0, y = opts.y ?? 0, z = opts.z ?? 0;
-        this.dynamicData[dynBase + DYN_PREV_PX] = x;
-        this.dynamicData[dynBase + DYN_PREV_PY] = y;
-        this.dynamicData[dynBase + DYN_PREV_PZ] = z;
-        this.dynamicData[dynBase + DYN_CURR_PX] = x;
-        this.dynamicData[dynBase + DYN_CURR_PY] = y;
-        this.dynamicData[dynBase + DYN_CURR_PZ] = z;
+        const t = resolveTransform(opts);
+        this.dynamicData[dynBase + DYN_PREV_PX] = t.px;
+        this.dynamicData[dynBase + DYN_PREV_PY] = t.py;
+        this.dynamicData[dynBase + DYN_PREV_PZ] = t.pz;
+        this.dynamicData[dynBase + DYN_CURR_PX] = t.px;
+        this.dynamicData[dynBase + DYN_CURR_PY] = t.py;
+        this.dynamicData[dynBase + DYN_CURR_PZ] = t.pz;
 
-        const rx = opts.rotX ?? 0, ry = opts.rotY ?? 0, rz = opts.rotZ ?? 0;
-        this.dynamicData[dynBase + DYN_PREV_RX] = rx;
-        this.dynamicData[dynBase + DYN_PREV_RY] = ry;
-        this.dynamicData[dynBase + DYN_PREV_RZ] = rz;
-        this.dynamicData[dynBase + DYN_CURR_RX] = rx;
-        this.dynamicData[dynBase + DYN_CURR_RY] = ry;
-        this.dynamicData[dynBase + DYN_CURR_RZ] = rz;
+        this.dynamicData[dynBase + DYN_PREV_RX] = t.rx;
+        this.dynamicData[dynBase + DYN_PREV_RY] = t.ry;
+        this.dynamicData[dynBase + DYN_PREV_RZ] = t.rz;
+        this.dynamicData[dynBase + DYN_CURR_RX] = t.rx;
+        this.dynamicData[dynBase + DYN_CURR_RY] = t.ry;
+        this.dynamicData[dynBase + DYN_CURR_RZ] = t.rz;
 
-        this.staticData[statBase + STAT_SX] = opts.scaleX ?? 1;
-        this.staticData[statBase + STAT_SY] = opts.scaleY ?? 1;
-        this.staticData[statBase + STAT_SZ] = opts.scaleZ ?? 1;
+        this.staticData[statBase + STAT_SX] = t.sx;
+        this.staticData[statBase + STAT_SY] = t.sy;
+        this.staticData[statBase + STAT_SZ] = t.sz;
 
-        const color = opts.color ?? [1, 1, 1];
-        this.staticData[statBase + STAT_CR] = color[0];
-        this.staticData[statBase + STAT_CG] = color[1];
-        this.staticData[statBase + STAT_CB] = color[2];
+        this.staticData[statBase + STAT_CR] = t.cr;
+        this.staticData[statBase + STAT_CG] = t.cg;
+        this.staticData[statBase + STAT_CB] = t.cb;
 
         this.staticDirty = true;
         this.instanceModelIds[slot] = modelHandle.id;
@@ -1189,30 +1201,28 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const dynBase = slot * DYNAMIC_MESH_FLOATS;
         const statBase = slot * SKINNED_STATIC_MESH_FLOATS;
 
-        const x = opts.x ?? 0, y = opts.y ?? 0, z = opts.z ?? 0;
-        this.skinnedDynamicData[dynBase + DYN_PREV_PX] = x;
-        this.skinnedDynamicData[dynBase + DYN_PREV_PY] = y;
-        this.skinnedDynamicData[dynBase + DYN_PREV_PZ] = z;
-        this.skinnedDynamicData[dynBase + DYN_CURR_PX] = x;
-        this.skinnedDynamicData[dynBase + DYN_CURR_PY] = y;
-        this.skinnedDynamicData[dynBase + DYN_CURR_PZ] = z;
+        const t = resolveTransform(opts);
+        this.skinnedDynamicData[dynBase + DYN_PREV_PX] = t.px;
+        this.skinnedDynamicData[dynBase + DYN_PREV_PY] = t.py;
+        this.skinnedDynamicData[dynBase + DYN_PREV_PZ] = t.pz;
+        this.skinnedDynamicData[dynBase + DYN_CURR_PX] = t.px;
+        this.skinnedDynamicData[dynBase + DYN_CURR_PY] = t.py;
+        this.skinnedDynamicData[dynBase + DYN_CURR_PZ] = t.pz;
 
-        const rx = opts.rotX ?? 0, ry = opts.rotY ?? 0, rz = opts.rotZ ?? 0;
-        this.skinnedDynamicData[dynBase + DYN_PREV_RX] = rx;
-        this.skinnedDynamicData[dynBase + DYN_PREV_RY] = ry;
-        this.skinnedDynamicData[dynBase + DYN_PREV_RZ] = rz;
-        this.skinnedDynamicData[dynBase + DYN_CURR_RX] = rx;
-        this.skinnedDynamicData[dynBase + DYN_CURR_RY] = ry;
-        this.skinnedDynamicData[dynBase + DYN_CURR_RZ] = rz;
+        this.skinnedDynamicData[dynBase + DYN_PREV_RX] = t.rx;
+        this.skinnedDynamicData[dynBase + DYN_PREV_RY] = t.ry;
+        this.skinnedDynamicData[dynBase + DYN_PREV_RZ] = t.rz;
+        this.skinnedDynamicData[dynBase + DYN_CURR_RX] = t.rx;
+        this.skinnedDynamicData[dynBase + DYN_CURR_RY] = t.ry;
+        this.skinnedDynamicData[dynBase + DYN_CURR_RZ] = t.rz;
 
-        this.skinnedStaticData[statBase + SSTAT_SX] = opts.scaleX ?? 1;
-        this.skinnedStaticData[statBase + SSTAT_SY] = opts.scaleY ?? 1;
-        this.skinnedStaticData[statBase + SSTAT_SZ] = opts.scaleZ ?? 1;
+        this.skinnedStaticData[statBase + SSTAT_SX] = t.sx;
+        this.skinnedStaticData[statBase + SSTAT_SY] = t.sy;
+        this.skinnedStaticData[statBase + SSTAT_SZ] = t.sz;
 
-        const color = opts.color ?? [1, 1, 1];
-        this.skinnedStaticData[statBase + SSTAT_CR] = color[0];
-        this.skinnedStaticData[statBase + SSTAT_CG] = color[1];
-        this.skinnedStaticData[statBase + SSTAT_CB] = color[2];
+        this.skinnedStaticData[statBase + SSTAT_CR] = t.cr;
+        this.skinnedStaticData[statBase + SSTAT_CG] = t.cg;
+        this.skinnedStaticData[statBase + SSTAT_CB] = t.cb;
 
         // boneOffset is u32, but stored in a Float32Array — use DataView for correct bit pattern
         new DataView(this.skinnedStaticData.buffer).setUint32(

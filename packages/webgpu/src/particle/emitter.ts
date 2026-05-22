@@ -100,9 +100,8 @@ export class ParticleEmitter {
                 const sprite = this.renderer.addSprite({
                     sheet: this.config.sheet,
                     sprite: this.config.sprite ?? 0,
-                    x, y,
-                    scaleX: size,
-                    scaleY: size,
+                    position: [x, y],
+                    scale: size,
                     opacity: 1,
                     tint: this.config.color,
                     layer: 255, // particles on top
