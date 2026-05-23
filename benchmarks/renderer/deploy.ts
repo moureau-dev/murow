@@ -1,13 +1,14 @@
 import { Basebox } from "@moureau/basebox";
 
-const { BASEBOX_ANON_KEY, BASEBOX_SECRET_KEY, BASEBOX_DOMAIN } = process.env;
+const { BASEBOX_ANON_KEY, BASEBOX_SECRET_KEY, BASEBOX_DOMAIN, BASEBOX_BASEURL } = process.env;
 
 const dist = "./dist";
 const domain = BASEBOX_DOMAIN!;
 const publicKey = BASEBOX_ANON_KEY!;
 const apiKey = BASEBOX_SECRET_KEY!;
+const baseUrl = BASEBOX_BASEURL ?? undefined;
 
-const bb = new Basebox({ publicKey });
+const bb = new Basebox({ baseUrl, publicKey });
 
 const main = async () => {
     console.time("Deployment time");
