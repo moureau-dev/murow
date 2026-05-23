@@ -26,13 +26,20 @@ const bucket = new PrefabBucket('3d')
   //    animations: ['Idle', 'Walking'],
   // })
   .add({
+      type: 'gltf',
+      id: 'model',
+      src: 'https://raw.githubusercontent.com/8thwall/web/72556f9122f5b0e861f55748cc9a938a59691273/examples/aframe/animation-mixer/mixamo-animated-lowpoly.glb',
+      metadata: {
+        scale: 0.175
+      },
+  })
+  .add({
       type: 'grid',
       id: 'floor',
       size: 20,
       step: 0.33,
       lineWidth: 0.001,
   });
-
 
 export const gltf: Program = {
     name: '3D glTF',
@@ -48,7 +55,6 @@ export const gltf: Program = {
             autoResize: true,
             prefabs: bucket,
             maxInstances: instances,
-            maxBonesPerSkin: 64,
         });
 
         await renderer.init();
@@ -80,9 +86,9 @@ export const gltf: Program = {
             next();
         };
 
-        const gltfPrefabs = bucket.getAllByType('gltf');
+      const gltfPrefabs = bucket.getAllByType('gltf');
 
-        for (let i = 0; i < instances; i++) {
+      for (let i = 0; i < instances; i++) {
             const prefab = rng.pick(gltfPrefabs);
             if (!prefab) continue;
 
@@ -132,6 +138,11 @@ export const gltf: Program = {
             renderer.storePreviousState();
         });
 
+        // render with interpolation
+        loop.events.on('render', ({ alpha }) => {
+            renderer.render(alpha);
+        });
+
         // Display and update stats every second
         loop.events.on('tick', ({ tick }) => {
             if (tick % loop.ticker.rate !== 0) return;
@@ -174,10 +185,6 @@ export const gltf: Program = {
             if (forward !== 0 || right !== 0 || up !== 0) {
                 renderer.camera.move(right, up, forward);
             }
-        });
-
-        loop.events.on('render', ({ alpha }) => {
-            renderer.render(alpha);
         });
 
         loop.start();
