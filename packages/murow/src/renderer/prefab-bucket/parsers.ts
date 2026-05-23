@@ -145,6 +145,15 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             metadata: (spec.metadata ?? {}) as any,
         };
     },
+    composite: (spec) => {
+        if (spec.type !== 'composite') throw new Error('composite parser given non-composite spec');
+        return {
+            type: 'composite',
+            id: spec.id,
+            parts: spec.parts,
+            metadata: (spec.metadata ?? {}) as any,
+        };
+    },
 };
 
 export const parsers2d: PrefabParserMap<Prefab2DSpec, Prefab2D> = {

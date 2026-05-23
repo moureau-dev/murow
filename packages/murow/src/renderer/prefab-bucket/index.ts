@@ -68,12 +68,14 @@ export class BasePrefabBucket<
     Specs extends Record<string, Spec> = {},
 > {
     readonly mode: M;
-    /** Shared notification channel — see `PrefabBucketEvents`. */
+    /** Shared notification channel - see `PrefabBucketEvents`. */
     readonly events: EventSystem<PrefabBucketEvents>;
     private parsers: PrefabParserMap<Spec, Prefab>;
     private pending: Spec[] = [];
     private pendingIds: Set<string> = new Set();
     private prefabs: Map<string, Prefab> | null = null;
+    /** `groupName -> ordered list of final part ids`. Populated by `addGroup` on subclasses. */
+    protected groups: Map<string, string[]> = new Map();
 
     constructor(mode: M, parsers: PrefabParserMap<Spec, Prefab> = {} as PrefabParserMap<Spec, Prefab>) {
         this.mode = mode;
@@ -81,11 +83,23 @@ export class BasePrefabBucket<
         this.events = new EventSystem<PrefabBucketEvents>({ events: ['clips-changed'] });
     }
 
-    /** Add a single spec. Throws if id is a duplicate or if the bucket is already loaded. */
+    /** Add a single spec. Throws if id is a duplicate, contains '.', or if the bucket is already loaded. */
     add<const S extends Spec>(
         spec: S,
     ): BasePrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }> {
-        if (this.prefabs) throw new Error(`PrefabBucket: cannot add after load() — bucket is frozen`);
+        if (spec.id.includes('.')) throw new Error(`PrefabBucket: id '${spec.id}' is invalid - '.' is reserved for group paths`);
+        return this.addUnchecked(spec);
+    }
+
+    /**
+     * Internal add that skips the '.' validation. Used by `addGroup` on
+     * subclasses to register parts under group-path ids (e.g. `'campfire.logs'`)
+     * after the group itself has validated user input.
+     */
+    protected addUnchecked<const S extends Spec>(
+        spec: S,
+    ): BasePrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }> {
+        if (this.prefabs) throw new Error(`PrefabBucket: cannot add after load() - bucket is frozen`);
         if (this.pendingIds.has(spec.id)) throw new Error(`PrefabBucket: duplicate id '${spec.id}'`);
         this.pending.push(spec);
         this.pendingIds.add(spec.id);
@@ -102,6 +116,7 @@ export class BasePrefabBucket<
         if (this.prefabs) throw new Error(`PrefabBucket: cannot add after load() — bucket is frozen`);
         const seen = new Set<string>();
         for (const s of specs) {
+            if (s.id.includes('.')) throw new Error(`PrefabBucket: id '${s.id}' is invalid - '.' is reserved for group paths`);
             if (this.pendingIds.has(s.id) || seen.has(s.id)) {
                 throw new Error(`PrefabBucket: duplicate id '${s.id}'`);
             }

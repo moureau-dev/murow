@@ -70,7 +70,26 @@ export interface CubeSpec {
     readonly metadata?: Record<string, unknown>;
 }
 
-export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec;
+/** Local transform offset applied to a part inside a composite/group at spawn time. */
+export interface PartOffset {
+    readonly position?: readonly [number, number, number];
+    readonly rotation?: readonly [number, number, number];
+}
+
+/**
+ * A prefab that spawns several other prefabs at fixed local offsets. Created
+ * by `bucket.addGroup(...)`; not typically written by hand. Spawning a
+ * composite instance spawns one child per part, with each part's offset
+ * composed onto the instance's position/rotation.
+ */
+export interface CompositeSpec {
+    readonly type: 'composite';
+    readonly id: string;
+    readonly parts: readonly { readonly partId: string; readonly offset?: PartOffset }[];
+    readonly metadata?: Record<string, unknown>;
+}
+
+export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec | CompositeSpec;
 
 /**
  * Map a spec's `animations` tuple to a record-keyed-by-name. Used to type
@@ -175,7 +194,14 @@ export interface CubePrefab<S extends CubeSpec = CubeSpec> {
     readonly metadata: MetadataOf<S>;
 }
 
-export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab;
+export interface CompositePrefab<S extends CompositeSpec = CompositeSpec> {
+    readonly type: 'composite';
+    readonly id: S['id'];
+    readonly parts: readonly { readonly partId: string; readonly offset?: PartOffset }[];
+    readonly metadata: MetadataOf<S>;
+}
+
+export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab | CompositePrefab;
 
 // ============================================================================
 // 2D
@@ -220,5 +246,6 @@ export type PrefabFor<S> =
     S extends GltfSpec ? GltfPrefab<S> :
     S extends GridSpec ? GridPrefab<S> :
     S extends CubeSpec ? CubePrefab<S> :
+    S extends CompositeSpec ? CompositePrefab<S> :
     S extends SpritesheetSpec ? SpritesheetPrefab<S> :
     never;

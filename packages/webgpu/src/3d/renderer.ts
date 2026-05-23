@@ -50,6 +50,7 @@ import {
     type ParsedGltf,
     type PrefabBucket3D,
     type Prefab3D,
+    type CompositePrefab,
     type SkeletalAnimState,
     type PlayOptions,
 } from 'murow/renderer';
@@ -124,7 +125,7 @@ const prefabHandles = new WeakMap<Prefab3D, ModelHandle | GltfModel>();
 /** True iff value is a Prefab3D (returned from `bucket.get(...)`). */
 function isPrefab3D(value: ModelHandle | GltfModel | Prefab3D): value is Prefab3D {
     const t = (value as Prefab3D).type;
-    return t === 'gltf' || t === 'grid' || t === 'cube';
+    return t === 'gltf' || t === 'grid' || t === 'cube' || t === 'composite';
 }
 
 /** Resolve the tuple-shape transform options into flat scalars + defaults. */
@@ -1131,7 +1132,13 @@ export class WebGPU3DRenderer extends Base3DRenderer {
      * with another instance (e.g., when spawning all parts of a character).
      */
     addInstance(opts: MeshInstanceOptions): InstanceHandle {
-        // Resolve prefab → renderer handle if needed.
+        // Composite prefab: spawn each part with its baked offset composed
+        // onto the instance transform.
+        if (isPrefab3D(opts.model) && opts.model.type === 'composite') {
+            return this.addCompositeInstance(opts, opts.model);
+        }
+
+        // Resolve prefab -> renderer handle if needed.
         const modelOrGltf = isPrefab3D(opts.model) ? resolvePrefabHandle(opts.model) : opts.model;
 
         // GltfModel: spawn all parts as a linked group
@@ -1242,6 +1249,67 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             stop: skinnedHandle?.stop ? () => {
                 skinnedHandle.stop!();
             } : undefined,
+        };
+    }
+
+    /**
+     * Spawn a composite prefab by spawning each of its parts at the composed
+     * (instance + offset) transform. The returned handle broadcasts subsequent
+     * `setPosition` / `setRotation` to every child, keeping each child's
+     * baked offset applied on top of the new value.
+     */
+    private addCompositeInstance(opts: MeshInstanceOptions, composite: CompositePrefab): InstanceHandle {
+        const bucket = this._prefabs;
+        if (!bucket) {
+            throw new Error(
+                `addInstance: composite '${composite.id}' requires the renderer to be constructed with the bucket (\`prefabs\`).`,
+            );
+        }
+
+        const basePos = opts.position ?? [0, 0, 0];
+        const baseRot = opts.rotation ?? [0, 0, 0];
+
+        // Snapshot offsets so setPosition/setRotation broadcasts can re-apply them.
+        const offsets = composite.parts.map((p) => ({
+            px: p.offset?.position?.[0] ?? 0,
+            py: p.offset?.position?.[1] ?? 0,
+            pz: p.offset?.position?.[2] ?? 0,
+            rx: p.offset?.rotation?.[0] ?? 0,
+            ry: p.offset?.rotation?.[1] ?? 0,
+            rz: p.offset?.rotation?.[2] ?? 0,
+        }));
+
+        const childHandles: InstanceHandle[] = [];
+        for (let i = 0; i < composite.parts.length; i++) {
+            const part = composite.parts[i];
+            const off = offsets[i];
+            const partPrefab = bucket.get(part.partId) as unknown as Prefab3D;
+            const partOpts: MeshInstanceOptions = {
+                ...opts,
+                model: partPrefab,
+                position: [basePos[0] + off.px, basePos[1] + off.py, basePos[2] + off.pz],
+                rotation: [baseRot[0] + off.rx, baseRot[1] + off.ry, baseRot[2] + off.rz],
+            };
+            childHandles.push(this.addInstance(partOpts));
+        }
+
+        return {
+            skinned: childHandles.some((h) => h.skinned),
+            setPosition(x: number, y: number, z: number) {
+                for (let i = 0; i < childHandles.length; i++) {
+                    const o = offsets[i];
+                    childHandles[i].setPosition(x + o.px, y + o.py, z + o.pz);
+                }
+            },
+            setRotation(x: number, y: number, z: number) {
+                for (let i = 0; i < childHandles.length; i++) {
+                    const o = offsets[i];
+                    childHandles[i].setRotation(x + o.rx, y + o.ry, z + o.rz);
+                }
+            },
+            setScale(x: number, y: number, z: number) {
+                for (const h of childHandles) h.setScale(x, y, z);
+            },
         };
     }
 
