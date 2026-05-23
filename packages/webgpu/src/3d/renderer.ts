@@ -212,6 +212,13 @@ export interface WebGPU3DRendererOptions extends Renderer3DOptions {
      * explicitly. Defaults to `maxModels` when only `prefabs` is provided.
      */
     maxInstances?: number;
+    /**
+     * Max distance from the camera at which the GPU skeletal-animation
+     * compute kernel runs for an instance. Instances farther than this still
+     * render (with their last-computed bone matrices) and their CPU
+     * animation clocks keep ticking. Set to `Infinity` to disable. Default 50.
+     */
+    skinningCullDistance?: number;
 }
 
 export class WebGPU3DRenderer extends Base3DRenderer {
@@ -323,6 +330,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private nextBoneOffset = 0;
     private readonly maxSkinnedInstances: number;
     private readonly maxBonesPerSkin: number;
+    private skinningCullDistanceSq: number;
 
     // Raw skinned GPU buffers
     private rawSkinnedDynamicBuffer!: GPUBuffer;
@@ -370,6 +378,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 : 5000);
         this.maxBonesPerSkin = options.maxBonesPerSkin
             ?? (bucketStats ? Math.max(1, bucketStats.maxJointCount) : 64);
+        const cullDist = options.skinningCullDistance ?? 50;
+        this.skinningCullDistanceSq = cullDist * cullDist;
         this.maxTotalBones = this.maxSkinnedInstances * this.maxBonesPerSkin * 2;
         this.updatedBoneOffsets = new Uint8Array(this.maxTotalBones);
 
@@ -403,7 +413,23 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     }
 
     async init(): Promise<void> {
-        this.root = await tgpu.init();
+        // Request the adapter ourselves so we can read its limits and forward
+        // them as `requiredLimits` to the device. The defaults are very low
+        // (128 MB max storage buffer); for skinned scenes the bone-matrix
+        // buffer alone can exceed that at a few thousand instances. We pass
+        // through the adapter's actual caps so users get the GPU's real budget.
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) throw new Error('WebGPU3DRenderer: no GPU adapter available');
+        const a = adapter.limits;
+        const requiredLimits: Record<string, number> = {
+            maxBufferSize: a.maxBufferSize,
+            maxStorageBufferBindingSize: a.maxStorageBufferBindingSize,
+            maxStorageBuffersPerShaderStage: a.maxStorageBuffersPerShaderStage,
+            maxComputeWorkgroupStorageSize: a.maxComputeWorkgroupStorageSize,
+            maxComputeInvocationsPerWorkgroup: a.maxComputeInvocationsPerWorkgroup,
+        };
+        const device = await adapter.requestDevice({ requiredLimits });
+        this.root = tgpu.initFromDevice({ device });
         this.device = this.root.device;
 
         this.context = this.canvas.getContext('webgpu')!;
@@ -675,6 +701,17 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
     createCompute(name: string, options: ComputeOptions): ComputeBuilder {
         return new ComputeBuilder(name, options, this.root);
+    }
+
+    /**
+     * Max distance from the camera at which skeletal-animation compute runs.
+     * Hot-swappable, no allocation impact. See `WebGPU3DRendererOptions.skinningCullDistance`.
+     */
+    get skinningCullDistance(): number {
+        return Math.sqrt(this.skinningCullDistanceSq);
+    }
+    set skinningCullDistance(value: number) {
+        this.skinningCullDistanceSq = value * value;
     }
 
     /**
@@ -1511,6 +1548,37 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     // Pre-allocated dedup tracker for updateAnimations — indexed by bone offset, not slot (zero-GC)
     private updatedBoneOffsets!: Uint8Array;
 
+    /**
+     * Returns true if a skinned instance's bone-matrix compute should be
+     * dispatched this frame. Combines frustum culling (scaled bounding sphere)
+     * and a configurable distance cull from the camera. Callers pass the
+     * camera position + cullDistSq once outside the loop to avoid re-reading.
+     */
+    private shouldDispatchSkinning(
+        slot: number,
+        model: { skinIndex: number } | undefined,
+        camX: number, camY: number, camZ: number,
+        cullDistSq: number,
+    ): boolean {
+        const skinModel = model && model.skinIndex >= 0 ? this.skinnedModels[model.skinIndex] : null;
+        const baseRadius = skinModel?.boundingRadius ?? 10;
+        const base = slot * DYNAMIC_MESH_FLOATS;
+        const sBase = slot * SKINNED_STATIC_MESH_FLOATS;
+        const cx = this.skinnedDynamicData[base + DYN_CURR_PX];
+        const cy = this.skinnedDynamicData[base + DYN_CURR_PY];
+        const cz = this.skinnedDynamicData[base + DYN_CURR_PZ];
+        const sx = Math.abs(this.skinnedStaticData[sBase + SSTAT_SX]);
+        const sy = Math.abs(this.skinnedStaticData[sBase + SSTAT_SY]);
+        const sz = Math.abs(this.skinnedStaticData[sBase + SSTAT_SZ]);
+        const maxScale = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
+        if (!this.isInFrustum(cx, cy, cz, baseRadius * maxScale)) return false;
+
+        const dxv = cx - camX, dyv = cy - camY, dzv = cz - camZ;
+        if (dxv * dxv + dyv * dyv + dzv * dzv > cullDistSq) return false;
+
+        return true;
+    }
+
     private updateAnimations(deltaTime: number): void {
         this.syncLazyAnimationChanges();
 
@@ -1565,6 +1633,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         this.updatedBoneOffsets.fill(0);
         let count = 0;
         const dv = this.gpuInstDV;
+        const camPos = this.camera.position;
+        const camX = camPos[0], camY = camPos[1], camZ = camPos[2];
+        const cullDistSq = this.skinningCullDistanceSq;
 
         for (let slot = 0; slot < this.maxSkinnedInstances; slot++) {
             const animState = this.skinnedAnimStates[slot];
@@ -1608,6 +1679,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             const modelId = this.skinnedInstanceModelIds[slot];
             const model = this.models[modelId];
             const skinIdx = model?.skinIndex ?? 0;
+
+            // Frustum + distance cull. CPU time advance above kept ticking.
+            if (!this.shouldDispatchSkinning(slot, model, camX, camY, camZ, cullDistSq)) continue;
 
             const off = count * 32;
             dv.setInt32(off, animState.clipId, true);
