@@ -16,7 +16,7 @@ npm install murow
 The WebGPU renderer is **included by default**:
 
 ```typescript
-import { GameLoop, World, defineComponent } from 'murow';
+import { GameLoop, PrefabBucket, World, defineComponent } from 'murow';
 import { WebGPU2DRenderer, WebGPU3DRenderer, d } from 'murow/webgpu';
 ```
 
@@ -26,23 +26,33 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d } from 'murow/webgpu';
 <summary><strong>3D glTF Models with Animation</strong></summary>
 
 ```typescript
-import { GameLoop } from 'murow';
+import { GameLoop, PrefabBucket } from 'murow';
 import { WebGPU3DRenderer } from 'murow/webgpu';
 
-const renderer = new WebGPU3DRenderer(canvas, { maxModels: 100 });
+// Declare every spawnable thing up-front. Typed ids, parallel load.
+const prefabs = new PrefabBucket('3d')
+  .add({
+    type: 'gltf',
+    id: 'hero',
+    src: '/character.glb',
+    animations: ['Idle', 'Run'],
+    metadata: { scale: 0.01 },
+  });
+
+await prefabs.load();
+
+// Renderer self-sizes from the bucket — no magic numbers.
+const renderer = new WebGPU3DRenderer(canvas, { prefabs, maxInstances: 100 });
 await renderer.init();
 
-const model = await renderer.loadGltf('/character.glb', {
-  animations: ['Idle', 'Run']
-});
-
+const hero = prefabs.get('hero');           // typed as GltfPrefab
 const instance = renderer.addInstance({
-  model,
-  x: 0, y: 0, z: 0,
-  scaleX: 0.01, scaleY: 0.01, scaleZ: 0.01
+  model: hero,
+  position: [0, 0, 0],
+  scale: hero.metadata.scale,
 });
 
-instance.play?.('Idle', { loop: true });
+instance.play?.(hero.animations.Idle, { loop: true });   // typed clip name
 
 renderer.camera.setPosition(3, 1, 3);
 renderer.camera.setTarget(0, 0, 0);

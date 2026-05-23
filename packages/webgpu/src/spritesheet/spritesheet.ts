@@ -1,33 +1,22 @@
 /**
- * Spritesheet — manages sprite UV coordinates and GPU texture.
- * Supports grid-based spritesheets and texture-packer JSON.
+ * GPU-bound parts of spritesheet handling. Pure helpers (UV math, image loading)
+ * live in `murow/renderer/spritesheet-helpers`; they're re-exported here for
+ * backwards compatibility with code that did `import { ... } from 'murow/webgpu'`.
  *
  * Texture creation uses the raw GPUDevice (accessed via root.device)
  * since TypeGPU's texture API is unstable and we need copyExternalImageToTexture.
  */
-import type { SpritesheetHandle, SpriteUV } from 'murow/renderer/types';
+import type { SpritesheetHandle, SpriteUV } from 'murow/renderer';
 
-export interface GridSpritesheetConfig {
-    image: string;
-    frameWidth: number;
-    frameHeight: number;
-}
-
-export interface TexturePackerFrame {
-    frame: { x: number; y: number; w: number; h: number };
-}
-
-export interface TexturePackerData {
-    frames: Record<string, TexturePackerFrame>;
-    meta: { size: { w: number; h: number } };
-}
-
-export interface SpritesheetConfig {
-    image: string;
-    frameWidth?: number;
-    frameHeight?: number;
-    data?: string;
-}
+export {
+    computeGridUVs,
+    computeTexturePackerUVs,
+    loadImage,
+    type GridSpritesheetConfig,
+    type SpritesheetConfig,
+    type TexturePackerData,
+    type TexturePackerFrame,
+} from 'murow/renderer';
 
 export class Spritesheet implements SpritesheetHandle {
     readonly id: number;
@@ -68,47 +57,6 @@ export class Spritesheet implements SpritesheetHandle {
 
     get width(): number { return this._width; }
     get height(): number { return this._height; }
-}
-
-export function computeGridUVs(
-    imageWidth: number, imageHeight: number,
-    frameWidth: number, frameHeight: number,
-): SpriteUV[] {
-    const cols = Math.floor(imageWidth / frameWidth);
-    const rows = Math.floor(imageHeight / frameHeight);
-    const uvs: SpriteUV[] = [];
-    for (let row = 0; row < rows; row++) {
-        for (let col = 0; col < cols; col++) {
-            uvs.push({
-                minX: (col * frameWidth) / imageWidth,
-                minY: (row * frameHeight) / imageHeight,
-                maxX: ((col + 1) * frameWidth) / imageWidth,
-                maxY: ((row + 1) * frameHeight) / imageHeight,
-            });
-        }
-    }
-    return uvs;
-}
-
-export function computeTexturePackerUVs(data: TexturePackerData): SpriteUV[] {
-    const { w, h } = data.meta.size;
-    const uvs: SpriteUV[] = [];
-    for (const key of Object.keys(data.frames)) {
-        const frame = data.frames[key].frame;
-        uvs.push({
-            minX: frame.x / w,
-            minY: frame.y / h,
-            maxX: (frame.x + frame.w) / w,
-            maxY: (frame.y + frame.h) / h,
-        });
-    }
-    return uvs;
-}
-
-export async function loadImage(url: string): Promise<ImageBitmap> {
-    const response = await fetch(url);
-    const blob = await response.blob();
-    return createImageBitmap(blob);
 }
 
 export function createTextureFromBitmap(

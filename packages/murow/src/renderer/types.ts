@@ -15,11 +15,19 @@ export interface RendererOptions {
 }
 
 export interface Renderer2DOptions extends RendererOptions {
-    maxSprites: number;
+    /**
+     * Sprite instance budget. Optional when a prefab bucket is provided —
+     * the renderer will derive a sensible default from `maxInstances`.
+     */
+    maxSprites?: number;
 }
 
 export interface Renderer3DOptions extends RendererOptions {
-    maxModels: number;
+    /**
+     * Non-skinned instance budget. Optional when a prefab bucket is provided —
+     * the renderer will derive a sensible default from the bucket.
+     */
+    maxModels?: number;
     enableLighting?: boolean;
 }
 
@@ -56,17 +64,19 @@ export interface SpritesheetSource {
 
 export interface SpriteOptions {
     sheet: SpritesheetHandle;
+    /** Frame index into the spritesheet. Defaults to 0. */
     sprite?: number;
-    x?: number;
-    y?: number;
+    /** World position. Defaults to `[0, 0]`. */
+    position?: readonly [x: number, y: number];
     layer?: number;
-    scaleX?: number;
-    scaleY?: number;
+    /** Per-axis scale. Pass a single number to scale uniformly. Defaults to `[1, 1]`. */
+    scale?: number | readonly [x: number, y: number];
+    /** Rotation in radians. Defaults to 0. */
     rotation?: number;
     opacity?: number;
     flipX?: boolean;
     flipY?: boolean;
-    tint?: [r: number, g: number, b: number, a: number];
+    tint?: readonly [r: number, g: number, b: number, a: number];
 }
 
 export interface SpritesheetHandle {

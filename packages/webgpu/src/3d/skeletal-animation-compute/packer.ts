@@ -2,7 +2,7 @@
  * Packs animation data into flat typed arrays for GPU consumption.
  * Separated from the kernel so packing logic can be tested independently.
  */
-import type { PackedAnimationData } from '../gltf-skin-parser';
+import type { PackedAnimationData } from 'murow/renderer';
 
 export interface PackedBuffers {
     skelI32: Int32Array;

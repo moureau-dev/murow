@@ -4,7 +4,7 @@
  * Supports prev/curr state for frame interpolation.
  */
 import { lerp } from "murow/core/lerp";
-import type { Camera2DState } from 'murow/renderer/types';
+import type { Camera2DState } from 'murow/renderer';
 
 export class Camera2D implements Camera2DState {
     x: number = 0;

@@ -16,9 +16,9 @@
  * // outputMatrices is a Float32Array view into the bone matrix buffer
  * ```
  */
-import type { SkinData, AnimationClipData, AnimationChannel } from './gltf-skin-parser';
-import { getNodeTRS } from './gltf-skin-parser';
-import { trsToMat4, mat4Mul } from '../core/math';
+import type { SkinData, AnimationClipData, AnimationChannel } from './skin-parser';
+import { trsToMat4, mat4Mul } from '../math';
+import { lerp } from '../../core/lerp';
 
 export interface SkeletalClip {
     readonly id: number;
@@ -75,7 +75,7 @@ export class SkeletalAnimation {
     // Pre-stored as 16 floats so it can be used with mat4Mul offset API
     private readonly skelRootMat: Float32Array; // 16 floats, identity if no non-joint ancestors
 
-    constructor(skinData: SkinData, clips: AnimationClipData[], gltfNodes: any[]) {
+    constructor(skinData: SkinData, clips: AnimationClipData[]) {
         this.skinData = skinData;
         const jc = skinData.jointCount;
 
@@ -83,13 +83,9 @@ export class SkeletalAnimation {
         this.worldMatrices = new Float32Array(jc * 16);
         this.blendScratch = new Float32Array(jc * 16);
 
-        // Extract rest pose TRS for each joint node
-        this.originalRestPoseTRS = new Float32Array(jc * 10);
+        // Rest pose TRS — pre-extracted by parseSkin
+        this.originalRestPoseTRS = new Float32Array(skinData.restPoseTRS);
         this.currentTRS = new Float32Array(jc * 10);
-        for (let j = 0; j < jc; j++) {
-            const nodeTRS = getNodeTRS(gltfNodes[skinData.jointNodeIndices[j]]);
-            this.originalRestPoseTRS.set(nodeTRS, j * 10);
-        }
 
         // Skeleton root matrix (non-joint ancestors like armature scale)
         this.skelRootMat = new Float32Array(16);
@@ -129,6 +125,27 @@ export class SkeletalAnimation {
         });
         this.clipsByName.set(clip.name, id);
         return id;
+    }
+
+    /**
+     * Replace the clip list wholesale. Returns an old-id → new-id remap so
+     * callers can fix in-flight `SkeletalAnimState.clipId` / `prevClipId`
+     * references. Removed clips map to -1.
+     */
+    replaceClips(clips: AnimationClipData[], loop: boolean = true): Int32Array {
+        const oldNameToId = new Map(this.clipsByName);
+        const oldLen = this.clips.length;
+
+        this.clips = [];
+        this.clipsByName.clear();
+        for (const c of clips) this.loadClip(c, loop);
+
+        const remap = new Int32Array(oldLen).fill(-1);
+        for (const [name, oldId] of oldNameToId) {
+            const newId = this.clipsByName.get(name);
+            if (newId !== undefined) remap[oldId] = newId;
+        }
+        return remap;
     }
 
     getClipId(name: string): number {
@@ -224,11 +241,10 @@ export class SkeletalAnimation {
 
             // Lerp: output = lerp(prev, current, blendWeight)
             const w = state.blendWeight;
-            const oneMinusW = 1 - w;
             const scratch = this.blendScratch;
             const floatCount = jc * 16;
             for (let i = 0; i < floatCount; i++) {
-                output[outputOffset + i] = scratch[i] * oneMinusW + output[outputOffset + i] * w;
+                output[outputOffset + i] = lerp(scratch[i], output[outputOffset + i], w);
             }
         } else {
             // No crossfade — evaluate current clip directly
@@ -388,9 +404,9 @@ export class SkeletalAnimation {
         // Linear lerp for translation/scale
         // Reuse a scratch view
         const out = this._scratchVec3;
-        out[0] = vals[a] + (vals[b] - vals[a]) * f;
-        out[1] = vals[a + 1] + (vals[b + 1] - vals[a + 1]) * f;
-        out[2] = vals[a + 2] + (vals[b + 2] - vals[a + 2]) * f;
+        out[0] = lerp(vals[a],     vals[b],     f);
+        out[1] = lerp(vals[a + 1], vals[b + 1], f);
+        out[2] = lerp(vals[a + 2], vals[b + 2], f);
         return out;
     }
 

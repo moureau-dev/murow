@@ -10,7 +10,7 @@
         "test": "concurrently --kill-others-on-fail \"npm run test:murow\" \"npm run test:webgpu\"",
         "build:murow": "cd packages/murow && npm run build:types",
         "build:webgpu": "cd packages/webgpu && npm run build:types",
-        "copy-webgpu": "cp -r packages/webgpu/dist packages/murow/dist/webgpu",
+        "copy-webgpu": "rm -rf packages/murow/dist/webgpu && cp -r packages/webgpu/dist packages/murow/dist/webgpu",
         "prebuild": "bun run build:js",
         "build": "npm run build:murow && npm run build:webgpu",
         "postbuild": "npm run copy-webgpu",

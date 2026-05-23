@@ -4,7 +4,7 @@
  * Pure functions that extract skeletal data from parsed glTF JSON + binary buffers.
  * No GPU resources — just typed arrays ready for the renderer/animation controller.
  */
-import { nodeToMat4, mat4MulNew, mat4IdentityNew } from '../core/math';
+import { nodeToMat4, mat4MulNew, mat4IdentityNew } from '../math';
 
 // --- Types ---
 
@@ -18,6 +18,8 @@ export interface SkinData {
     parentJointIndices: Int16Array;
     /** World matrix of the skeleton root (non-joint ancestors of root joints). Column-major mat4, 16 floats. Null if identity. */
     skeletonRootMatrix: Float32Array | null;
+    /** Rest-pose TRS for each joint, packed as [tx, ty, tz, qx, qy, qz, qw, sx, sy, sz]. jointCount * 10 floats. */
+    restPoseTRS: Float32Array;
 }
 
 export interface AnimationChannel {
@@ -127,13 +129,87 @@ export function parseSkin(
         break; // only need one root joint's ancestors
     }
 
+    // Pre-extract rest-pose TRS for each joint so downstream consumers don't need raw gltf.nodes
+    const restPoseTRS = new Float32Array(jointCount * 10);
+    for (let j = 0; j < jointCount; j++) {
+        const trs = getNodeTRS(gltf.nodes[joints[j]]);
+        restPoseTRS.set(trs, j * 10);
+    }
+
     return {
         jointCount,
         jointNodeIndices,
         inverseBindMatrices,
         parentJointIndices,
         skeletonRootMatrix,
+        restPoseTRS,
     };
+}
+
+/**
+ * Decode one glTF animation entry into an `AnimationClipData`.
+ * Returns null if no channels target joints in this skin, or all channels use
+ * an unsupported interpolation mode.
+ */
+export function decodeAnimationClip(
+    anim: any,
+    nameFallback: string,
+    nodeToJoint: ReadonlyMap<number, number>,
+    getAccessorData: AccessorReader,
+): AnimationClipData | null {
+    const channels: AnimationChannel[] = [];
+    let maxTime = 0;
+
+    for (const channel of anim.channels) {
+        const targetNode = channel.target.node;
+        const jointIndex = nodeToJoint.get(targetNode);
+        if (jointIndex === undefined) continue; // not a joint in this skin
+
+        const path = channel.target.path as string;
+        if (path !== 'translation' && path !== 'rotation' && path !== 'scale') continue;
+
+        const sampler = anim.samplers[channel.sampler];
+        const interpolation = (sampler.interpolation ?? 'LINEAR') as 'LINEAR' | 'STEP';
+
+        // Skip CUBICSPLINE for now
+        if (interpolation !== 'LINEAR' && interpolation !== 'STEP') continue;
+
+        const inputAccess = getAccessorData(sampler.input);
+        const timestamps = new Float32Array(inputAccess.data as Float32Array);
+
+        const outputAccess = getAccessorData(sampler.output);
+        const values = new Float32Array(outputAccess.data as Float32Array);
+
+        if (timestamps.length > 0) {
+            const lastTime = timestamps[timestamps.length - 1];
+            if (lastTime > maxTime) maxTime = lastTime;
+        }
+
+        channels.push({
+            jointIndex,
+            path: path as 'translation' | 'rotation' | 'scale',
+            timestamps,
+            values,
+            interpolation,
+        });
+    }
+
+    if (channels.length === 0) return null;
+
+    return {
+        name: anim.name ?? nameFallback,
+        duration: maxTime,
+        channels,
+    };
+}
+
+/** Node→joint index map for a parsed skin. Build once and reuse when decoding clips lazily. */
+export function buildNodeToJointMap(skinData: SkinData): Map<number, number> {
+    const nodeToJoint = new Map<number, number>();
+    for (let j = 0; j < skinData.jointCount; j++) {
+        nodeToJoint.set(skinData.jointNodeIndices[j], j);
+    }
+    return nodeToJoint;
 }
 
 /**
@@ -146,68 +222,52 @@ export function parseAnimations(
 ): AnimationClipData[] {
     if (!gltf.animations?.length) return [];
 
-    // Build node → joint index map
-    const nodeToJoint = new Map<number, number>();
-    for (let j = 0; j < skinData.jointCount; j++) {
-        nodeToJoint.set(skinData.jointNodeIndices[j], j);
-    }
-
+    const nodeToJoint = buildNodeToJointMap(skinData);
     const clips: AnimationClipData[] = [];
 
-    for (const anim of gltf.animations) {
-        const channels: AnimationChannel[] = [];
-        let maxTime = 0;
-
-        for (const channel of anim.channels) {
-            const targetNode = channel.target.node;
-            const jointIndex = nodeToJoint.get(targetNode);
-            if (jointIndex === undefined) continue; // not a joint in this skin
-
-            const path = channel.target.path as string;
-            if (path !== 'translation' && path !== 'rotation' && path !== 'scale') continue;
-
-            const sampler = anim.samplers[channel.sampler];
-            const interpolation = (sampler.interpolation ?? 'LINEAR') as 'LINEAR' | 'STEP';
-
-            // Skip CUBICSPLINE for now
-            if (interpolation !== 'LINEAR' && interpolation !== 'STEP') continue;
-
-            const inputAccess = getAccessorData(sampler.input);
-            const timestamps = new Float32Array(inputAccess.data as Float32Array);
-
-            const outputAccess = getAccessorData(sampler.output);
-            const values = new Float32Array(outputAccess.data as Float32Array);
-
-            if (timestamps.length > 0) {
-                const lastTime = timestamps[timestamps.length - 1];
-                if (lastTime > maxTime) maxTime = lastTime;
-            }
-
-            channels.push({
-                jointIndex,
-                path: path as 'translation' | 'rotation' | 'scale',
-                timestamps,
-                values,
-                interpolation,
-            });
-        }
-
-        if (channels.length > 0) {
-            clips.push({
-                name: anim.name ?? `animation_${clips.length}`,
-                duration: maxTime,
-                channels,
-            });
-        }
+    for (let i = 0; i < gltf.animations.length; i++) {
+        const clip = decodeAnimationClip(gltf.animations[i], `animation_${clips.length}`, nodeToJoint, getAccessorData);
+        if (clip) clips.push(clip);
     }
 
     return clips;
 }
 
+/** Normalize per-vertex weights to sum to 1. */
 /**
- * Extract JOINTS_0 and WEIGHTS_0 from a glTF primitive.
- * Returns null if the primitive has no skinning attributes.
+ * Decode a WEIGHTS_0 accessor into a Float32Array. glTF allows weights as
+ * float, normalized u8, or normalized u16; this folds all three into floats.
+ * Always returns a fresh array so the caller can mutate it freely.
  */
+function decodeWeights(data: Float32Array | Uint16Array | Uint32Array | Uint8Array | Int8Array | Int16Array): Float32Array {
+    if (data instanceof Uint8Array) {
+        const out = new Float32Array(data.length);
+        for (let i = 0; i < data.length; i++) out[i] = data[i] / 255;
+        return out;
+    }
+    if (data instanceof Uint16Array) {
+        const out = new Float32Array(data.length);
+        for (let i = 0; i < data.length; i++) out[i] = data[i] / 65535;
+        return out;
+    }
+    return new Float32Array(data);
+}
+
+function normalizeWeights(weights: Float32Array): void {
+    const vertexCount = weights.length / 4;
+    for (let v = 0; v < vertexCount; v++) {
+        const o = v * 4;
+        const sum = weights[o] + weights[o + 1] + weights[o + 2] + weights[o + 3];
+        if (sum > 0 && Math.abs(sum - 1) > 1e-5) {
+            const inv = 1 / sum;
+            weights[o] *= inv;
+            weights[o + 1] *= inv;
+            weights[o + 2] *= inv;
+            weights[o + 3] *= inv;
+        }
+    }
+}
+
 export function parsePrimitiveSkinAttributes(
     primitive: any,
     getAccessorData: AccessorReader,
@@ -224,25 +284,8 @@ export function parsePrimitiveSkinAttributes(
         ? jointsAccess.data
         : new Uint16Array(jointsAccess.data);
 
-    // Convert weights to Float32Array — handle normalized byte/short formats
-    let weights: Float32Array;
-    if (weightsAccess.data instanceof Float32Array) {
-        weights = weightsAccess.data;
-    } else if (weightsAccess.data instanceof Uint8Array) {
-        // Normalized unsigned byte: divide by 255
-        weights = new Float32Array(weightsAccess.data.length);
-        for (let i = 0; i < weightsAccess.data.length; i++) {
-            weights[i] = weightsAccess.data[i] / 255;
-        }
-    } else if (weightsAccess.data instanceof Uint16Array) {
-        // Normalized unsigned short: divide by 65535
-        weights = new Float32Array(weightsAccess.data.length);
-        for (let i = 0; i < weightsAccess.data.length; i++) {
-            weights[i] = weightsAccess.data[i] / 65535;
-        }
-    } else {
-        weights = new Float32Array(weightsAccess.data as any);
-    }
+    const weights = decodeWeights(weightsAccess.data);
+    normalizeWeights(weights);
 
     return { joints, weights };
 }
@@ -326,7 +369,6 @@ export function packSkinAndAnimations(
     packed: PackedAnimationData,
     skinData: SkinData,
     clips: AnimationClipData[],
-    gltfNodes: any[],
 ): number {
     const skinIndex = packed.skins.length;
     const jc = skinData.jointCount;
@@ -359,10 +401,9 @@ export function packSkinAndAnimations(
         packed.ibmData.push(skinData.inverseBindMatrices[i]);
     }
 
-    // Rest pose TRS
+    // Rest pose TRS (pre-extracted into skinData by parseSkin)
     for (let j = 0; j < jc; j++) {
-        const trs = getNodeTRS(gltfNodes[skinData.jointNodeIndices[j]]);
-        for (let k = 0; k < 10; k++) packed.restTRS.push(trs[k]);
+        for (let k = 0; k < 10; k++) packed.restTRS.push(skinData.restPoseTRS[j * 10 + k]);
     }
 
     // Skeleton root matrix

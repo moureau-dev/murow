@@ -10,7 +10,7 @@ import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer } from 'typegpu';
 import * as d from 'typegpu/data'; // used for buffer type creation
 import { FreeList } from 'murow/core/free-list';
-import { Base2DRenderer} from 'murow/renderer/base-2d-renderer';
+import { Base2DRenderer } from 'murow/renderer';
 import type {
     Renderer2DOptions,
     SpriteHandle,
@@ -56,14 +56,45 @@ import {
 } from './shader';
 import {
     Spritesheet,
-    loadImage,
     createTextureFromBitmap,
-    computeGridUVs,
-    computeTexturePackerUVs,
-    type TexturePackerData,
 } from '../spritesheet/spritesheet';
+import { parseSpritesheet, type ParsedSpritesheet } from 'murow/renderer';
 import { GeometryBuilder, type GeometryOptions } from '../geometry/geometry-builder';
 import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder';
+import type { PrefabBucket2D, Prefab2D, SpritesheetPrefab } from 'murow/renderer';
+
+export interface WebGPU2DRendererOptions extends Renderer2DOptions {
+    /**
+     * Pre-loaded prefab bucket. When provided, the renderer uploads each prefab
+     * to the GPU during `init()`, and `addSprite({ prefab: bucket.get('id') })`
+     * resolves to the right spritesheet handle. The bucket must have `load()`
+     * resolved before being passed in.
+     */
+    prefabs?: PrefabBucket2D;
+    /**
+     * How many sprite instances you intend to spawn. Used to size buffers when
+     * `maxSprites` is not given explicitly. Defaults to 1024.
+     */
+    maxInstances?: number;
+}
+
+/** WeakMap of prefab → uploaded GPU handle, populated in init(). */
+const prefab2DHandles = new WeakMap<Prefab2D, SpritesheetHandle>();
+
+/** True iff value is a Prefab2D (returned from `bucket.get(...)`). */
+function isPrefab2D(value: SpritesheetHandle | Prefab2D): value is Prefab2D {
+    return (value as Prefab2D).type === 'spritesheet';
+}
+
+function resolveSpritePrefabHandle(prefab: Prefab2D): SpritesheetHandle {
+    const h = prefab2DHandles.get(prefab);
+    if (!h) {
+        throw new Error(
+            `Prefab '${prefab.id}' has no GPU handle — has the renderer's init() been called with this bucket?`,
+        );
+    }
+    return h;
+}
 
 export class WebGPU2DRenderer extends Base2DRenderer {
     private root!: TgpuRoot;
@@ -113,14 +144,18 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     private resizeObserver: ResizeObserver | null = null;
     private resizeCallbacks: ((width: number, height: number) => void)[] = [];
 
-    constructor(canvas: HTMLCanvasElement, options: Renderer2DOptions) {
-        super(canvas, options);
+    private readonly _prefabs: PrefabBucket2D | null;
+
+    constructor(canvas: HTMLCanvasElement, options: WebGPU2DRendererOptions) {
+        const resolvedMaxSprites = options.maxSprites ?? options.maxInstances ?? 1024;
+        super(canvas, { ...options, maxSprites: resolvedMaxSprites });
+        this._prefabs = options.prefabs ?? null;
         this.camera = new Camera2D(canvas.width || 800, canvas.height || 600);
-        this.freeList = new FreeList(options.maxSprites);
-        this.batcher = new SparseBatcher(options.maxSprites);
-        this.dynamicData = new Float32Array(options.maxSprites * DYNAMIC_FLOATS_PER_SPRITE);
-        this.staticData = new Float32Array(options.maxSprites * STATIC_FLOATS_PER_SPRITE);
-        this.slotIndexData = new Uint32Array(options.maxSprites);
+        this.freeList = new FreeList(resolvedMaxSprites);
+        this.batcher = new SparseBatcher(resolvedMaxSprites);
+        this.dynamicData = new Float32Array(resolvedMaxSprites * DYNAMIC_FLOATS_PER_SPRITE);
+        this.staticData = new Float32Array(resolvedMaxSprites * STATIC_FLOATS_PER_SPRITE);
+        this.slotIndexData = new Uint32Array(resolvedMaxSprites);
     }
 
     async init(): Promise<void> {
@@ -192,8 +227,26 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         this.rawSlotIndexBuffer = this.root.unwrap(this.slotIndexBuffer) as any;
         this.rawUniformBuffer = this.root.unwrap(this.uniformBuffer) as any;
 
+        if (this._prefabs) {
+            this.uploadPrefabBucket(this._prefabs);
+        }
+
         this.setupResizeObserver();
         this._initialized = true;
+    }
+
+    /**
+     * Upload every prefab in the bucket to the GPU and stash the resulting
+     * SpritesheetHandle on each prefab so `bucket.get(id)` returns something
+     * usable as a sprite source.
+     */
+    private uploadPrefabBucket(bucket: PrefabBucket2D): void {
+        for (const prefab of bucket.entries()) {
+            if (prefab.type === 'spritesheet') {
+                const handle = this.uploadParsedSpritesheet((prefab as SpritesheetPrefab).parsed);
+                prefab2DHandles.set(prefab, handle);
+            }
+        }
     }
 
     private setupResizeObserver(): void {
@@ -254,27 +307,25 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     }
 
     async loadSpritesheet(source: SpritesheetSource): Promise<SpritesheetHandle> {
-        const bitmap = await loadImage(source.image);
-        const { texture, view } = createTextureFromBitmap(this._device, bitmap);
+        const parsed = await parseSpritesheet(source);
+        return this.uploadParsedSpritesheet(parsed);
+    }
+
+    /**
+     * Upload a previously-parsed spritesheet to the GPU. Returns a SpritesheetHandle.
+     * Splitting parse (CPU) from upload (GPU) lets callers parse spritesheets in parallel
+     * before a renderer exists.
+     */
+    uploadParsedSpritesheet(parsed: ParsedSpritesheet): SpritesheetHandle {
+        const { texture, view } = createTextureFromBitmap(this._device, parsed.bitmap);
 
         const sampler = this._device.createSampler({
             magFilter: 'nearest',
             minFilter: 'nearest',
         });
 
-        let uvs;
-        if (source.data) {
-            const resp = await fetch(source.data);
-            const json: TexturePackerData = await resp.json();
-            uvs = computeTexturePackerUVs(json);
-        } else if (source.frameWidth && source.frameHeight) {
-            uvs = computeGridUVs(bitmap.width, bitmap.height, source.frameWidth, source.frameHeight);
-        } else {
-            uvs = [{ minX: 0, minY: 0, maxX: 1, maxY: 1 }];
-        }
-
         const id = this.nextSheetId++;
-        const sheet = new Spritesheet(id, texture, view, sampler, uvs, bitmap.width, bitmap.height);
+        const sheet = new Spritesheet(id, texture, view, sampler, parsed.uvs, parsed.width, parsed.height);
         this.sheets.set(id, sheet);
 
         const bindGroup = this._device.createBindGroup({
@@ -289,28 +340,32 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         return sheet;
     }
 
-    addSprite(opts: SpriteOptions): SpriteHandle {
+    addSprite(opts: Omit<SpriteOptions, 'sheet'> & { sheet: SpritesheetHandle | Prefab2D }): SpriteHandle {
         const slot = this.freeList.allocate();
         if (slot === -1) throw new Error(`Max sprites (${this.maxSprites}) reached`);
 
         const dynBase = slot * DYNAMIC_FLOATS_PER_SPRITE;
         const statBase = slot * STATIC_FLOATS_PER_SPRITE;
 
-        const x = opts.x ?? 0;
-        const y = opts.y ?? 0;
-        this.dynamicData[dynBase + DYNAMIC_OFFSET_PREV_X] = x;
-        this.dynamicData[dynBase + DYNAMIC_OFFSET_PREV_Y] = y;
-        this.dynamicData[dynBase + DYNAMIC_OFFSET_CURR_X] = x;
-        this.dynamicData[dynBase + DYNAMIC_OFFSET_CURR_Y] = y;
+        // Resolve prefab → SpritesheetHandle if needed.
+        const sheet = isPrefab2D(opts.sheet) ? resolveSpritePrefabHandle(opts.sheet) : opts.sheet;
+
+        const [px, py] = opts.position ?? [0, 0];
+        this.dynamicData[dynBase + DYNAMIC_OFFSET_PREV_X] = px;
+        this.dynamicData[dynBase + DYNAMIC_OFFSET_PREV_Y] = py;
+        this.dynamicData[dynBase + DYNAMIC_OFFSET_CURR_X] = px;
+        this.dynamicData[dynBase + DYNAMIC_OFFSET_CURR_Y] = py;
 
         const rotation = opts.rotation ?? 0;
         this.dynamicData[dynBase + DYNAMIC_OFFSET_PREV_ROTATION] = rotation;
         this.dynamicData[dynBase + DYNAMIC_OFFSET_CURR_ROTATION] = rotation;
 
-        this.staticData[statBase + STATIC_OFFSET_SCALE_X] = opts.scaleX ?? 1;
-        this.staticData[statBase + STATIC_OFFSET_SCALE_Y] = opts.scaleY ?? 1;
+        const s = opts.scale;
+        const [sx, sy] = typeof s === 'number' ? [s, s] : (s ?? [1, 1]);
+        this.staticData[statBase + STATIC_OFFSET_SCALE_X] = sx;
+        this.staticData[statBase + STATIC_OFFSET_SCALE_Y] = sy;
 
-        const uv = opts.sheet.getUV(opts.sprite ?? 0);
+        const uv = sheet.getUV(opts.sprite ?? 0);
         this.staticData[statBase + STATIC_OFFSET_UV_MIN_X] = uv.minX;
         this.staticData[statBase + STATIC_OFFSET_UV_MIN_Y] = uv.minY;
         this.staticData[statBase + STATIC_OFFSET_UV_MAX_X] = uv.maxX;
@@ -328,10 +383,10 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         this.staticData[statBase + STATIC_OFFSET_TINT_A] = tint[3];
 
         this.staticDirty = true;
-        this.batcher.add(opts.layer ?? 0, opts.sheet.id, slot);
+        this.batcher.add(opts.layer ?? 0, sheet.id, slot);
 
         return new SpriteAccessor(
-            this.dynamicData, this.staticData, slot, opts.sheet.id,
+            this.dynamicData, this.staticData, slot, sheet.id,
             () => { this.staticDirty = true; },
         );
     }

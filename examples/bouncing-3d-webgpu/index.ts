@@ -6,7 +6,7 @@ import {
     lerp,
     type InputSnapshot,
 } from 'murow';
-import { WebGPU3DRenderer, type MeshInstanceHandle } from 'murow/webgpu';
+import { WebGPU3DRenderer, type InstanceHandle, type MeshInstanceHandle } from 'murow/webgpu';
 
 // --- Components ---
 
@@ -57,7 +57,7 @@ const AMOUNT_OF_ENTITIES = 12_000;
 
 class WebGPU3DWrapper {
     gpu: WebGPU3DRenderer;
-    handles: (MeshInstanceHandle | null)[];
+    handles: (InstanceHandle | null)[];
 
     constructor(canvas: HTMLCanvasElement, maxEntities: number) {
         this.handles = new Array(maxEntities).fill(null);
@@ -78,7 +78,7 @@ class WebGPU3DWrapper {
         this.gpu.camera.far = 3000;
 
         // Load Suzanne from Khronos glTF samples
-        const [suzanneModel] = await this.gpu.loadGltf(
+        const suzanneModel = await this.gpu.loadGltf(
           'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Suzanne/glTF/Suzanne.gltf',
         );
 
@@ -108,9 +108,9 @@ class WebGPU3DWrapper {
 
                 handle = this.gpu.addInstance({
                     model,
-                    x: pos.x, y: pos.y, z: pos.z,
-                    rotX: rot.x, rotY: rot.y, rotZ: rot.z,
-                    scaleX: scale.x, scaleY: scale.y, scaleZ: scale.z,
+                    position: [pos.x, pos.y, pos.z],
+                    rotation: [rot.x, rot.y, rot.z],
+                    scale: [scale.x, scale.y, scale.z],
                     color: colors[modelData.modelId % colors.length],
                 });
                 this.handles[eid] = handle;
@@ -136,7 +136,9 @@ class WebGPU3DWrapper {
             const eid = despawned[i];
             const handle = this.handles[eid];
             if (handle !== null) {
-                this.gpu.removeInstance(handle);
+                // addInstance returns the public InstanceHandle but for single-part models
+                // it is actually a MeshInstanceHandle internally (which removeInstance needs).
+                this.gpu.removeInstance(handle as MeshInstanceHandle);
                 this.handles[eid] = null;
             }
         }

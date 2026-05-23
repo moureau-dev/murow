@@ -121,10 +121,8 @@ class WebGPUSpriteRenderer {
                 handle = this.gpu.addSprite({
                     sheet: this.sheet,
                     sprite: spriteData.textureId,
-                    x: pos.x,
-                    y: pos.y,
-                    scaleX: spriteData.scale * 32,
-                    scaleY: spriteData.scale * 32,
+                    position: [pos.x, pos.y],
+                    scale: spriteData.scale * 32,
                 });
                 this.handles[eid] = handle;
             }
