@@ -23,6 +23,7 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **Zero-GC data path** — `Float32Array` buffers, `FreeList` slot allocation, no per-frame objects
 - **GPU-side interpolation** — `mix(prev, curr, alpha)` runs in shaders, not on CPU
 - **Sparse batching** — Minimal draw calls via layer/sheet sorting (`SparseBatcher`)
+- **PrefabBucket** — declare assets up front, parallel load, typed-id lookups; the renderer self-sizes from the bucket. Lives in [`murow`](../murow/src/renderer) and is consumed by any backend.
 
 ### 2D Rendering
 - **Sprite rendering** — 1 draw call per spritesheet, regardless of sprite count
@@ -31,10 +32,10 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **Particle emitter** — CPU-driven particles with gravity, fade, lifetime
 
 ### 3D Rendering
-- **glTF loading** — `.glb` meshes with textures and skinned animation
-- **Skeletal animation** — Crossfading, looping, event callbacks
+- **glTF loading** — `.glb` meshes with textures and skinned animation (via `PrefabBucket`)
+- **Skeletal animation** — Crossfading, looping, event callbacks; typed animation names
 - **Frustum culling** — Automatic per-instance visibility checks
-- **Grid helpers** — `createGrid()` for debug visualization
+- **Grid helpers** — `{ type: 'grid' }` prefab spec for debug visualization
 
 ## Usage
 
@@ -42,18 +43,28 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 <summary><strong>2D Sprites</strong></summary>
 
 ```typescript
+import { PrefabBucket } from 'murow';
 import { WebGPU2DRenderer } from 'murow/webgpu';
 
-const renderer = new WebGPU2DRenderer(canvas, { maxSprites: 10000 });
+const prefabs = new PrefabBucket('2d')
+  .add({
+    type: 'spritesheet',
+    id: 'characters',
+    url: '/assets/characters.png',
+    frameWidth: 32,
+    frameHeight: 32,
+  });
+
+await prefabs.load();
+
+const renderer = new WebGPU2DRenderer(canvas, { prefabs, maxInstances: 10000 });
 await renderer.init();
 
-const sheet = await renderer.loadSpritesheet({
-  image: '/assets/characters.png',
-  frameWidth: 32,
-  frameHeight: 32,
+const player = renderer.addSprite({
+  sheet: prefabs.get('characters'),
+  sprite: 0,
+  position: [400, 300],
 });
-
-const player = renderer.addSprite({ sheet, sprite: 0, x: 400, y: 300 });
 player.x = 500; // Direct buffer writes
 renderer.render(alpha);
 ```
@@ -63,17 +74,31 @@ renderer.render(alpha);
 <summary><strong>3D Models (glTF)</strong></summary>
 
 ```typescript
+import { PrefabBucket } from 'murow';
 import { WebGPU3DRenderer } from 'murow/webgpu';
 
-const renderer = new WebGPU3DRenderer(canvas, { maxModels: 100 });
+const prefabs = new PrefabBucket('3d')
+  .add({
+    type: 'gltf',
+    id: 'hero',
+    url: '/character.glb',
+    animations: ['Idle', 'Run', 'Attack'],
+    metadata: { scale: 0.01 },
+  });
+
+await prefabs.load();
+
+// Renderer sizes its skinned + bone buffers from the bucket — no magic numbers.
+const renderer = new WebGPU3DRenderer(canvas, { prefabs, maxInstances: 100 });
 await renderer.init();
 
-const model = await renderer.loadGltf('/character.glb', {
-  animations: ['Idle', 'Run', 'Attack']
+const hero = prefabs.get('hero');                 // typed as GltfPrefab
+const instance = renderer.addInstance({
+  model: hero,
+  position: [0, 0, 0],
+  scale: hero.metadata.scale,
 });
-
-const instance = renderer.addInstance({ model, x: 0, y: 0, z: 0, scaleX: 0.01 });
-instance.play?.('Idle', { loop: true, crossfade: 0.15 });
+instance.play?.(hero.animations.Idle, { loop: true, crossfade: 0.15 });
 
 renderer.camera.setPosition(3, 1, 3);
 renderer.camera.setTarget(0, 0, 0);
@@ -155,6 +180,11 @@ Full example: [gpu-particles.ts](../../benchmarks/renderer/programs/gpu-particle
 
 ## API Reference
 
+This package exports **only** WebGPU-specific concrete renderers and GPU helpers.
+Renderer-agnostic primitives (`PrefabBucket`, parsers, skeletal animation,
+spritesheet helpers) live in [`murow`](../murow/src/renderer) and are imported
+from `'murow'`.
+
 ### Renderers
 - [`WebGPU2DRenderer`](./src/2d/renderer.ts) — Sprite renderer with batching and interpolation
 - [`WebGPU3DRenderer`](./src/3d/renderer.ts) — Mesh renderer with glTF, skinning, frustum culling
@@ -163,19 +193,19 @@ Full example: [gpu-particles.ts](../../benchmarks/renderer/programs/gpu-particle
 - [`GeometryBuilder`](./src/geometry/geometry-builder.ts) — Custom instanced geometries with TypeGPU shaders
 - [`ComputeBuilder`](./src/compute/compute-builder.ts) — GPU compute kernels with buffer management
 
-### Animation
-- [`SkeletalAnimation`](./src/3d/skeletal-animation.ts) — Skinned mesh animation (glTF)
-- [`MorphAnimation`](./src/3d/morph-animation.ts) — Morph target animation (glTF)
-- [`AnimationController`](./src/2d/animation.ts) — 2D spritesheet animation
-
 ### Camera
 - [`Camera2D`](./src/camera/camera-2d.ts) — Orthographic camera with pan/zoom
 - [`Camera3D`](./src/camera/camera-3d.ts) — Perspective camera with FPS controls
 
+### Animation
+- [`MorphAnimation`](./src/3d/morph-animation.ts) — Morph target animation (GPU buffer write path)
+- [`AnimationController`](./src/2d/animation.ts) — 2D spritesheet animation
+- `SkeletalAnimation` lives in [`murow`](../murow/src/renderer/gltf) — CPU-side bone evaluation, renderer-agnostic
+
 ### Utilities
 - [`SpriteAccessor`](./src/2d/sprite-accessor.ts) — Direct buffer access for sprites
 - [`ParticleEmitter`](./src/particle/emitter.ts) — CPU particle system
-- [`Spritesheet`](./src/spritesheet/spritesheet.ts) — Texture atlas management
+- [`Spritesheet`](./src/spritesheet/spritesheet.ts) — GPU-bound texture atlas (built from a parsed bucket prefab)
 - `d` / `std` — TypeGPU data types and standard library (re-exported)
 
 ## Architecture
