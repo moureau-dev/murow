@@ -127,6 +127,27 @@ export class SkeletalAnimation {
         return id;
     }
 
+    /**
+     * Replace the clip list wholesale. Returns an old-id → new-id remap so
+     * callers can fix in-flight `SkeletalAnimState.clipId` / `prevClipId`
+     * references. Removed clips map to -1.
+     */
+    replaceClips(clips: AnimationClipData[], loop: boolean = true): Int32Array {
+        const oldNameToId = new Map(this.clipsByName);
+        const oldLen = this.clips.length;
+
+        this.clips = [];
+        this.clipsByName.clear();
+        for (const c of clips) this.loadClip(c, loop);
+
+        const remap = new Int32Array(oldLen).fill(-1);
+        for (const [name, oldId] of oldNameToId) {
+            const newId = this.clipsByName.get(name);
+            if (newId !== undefined) remap[oldId] = newId;
+        }
+        return remap;
+    }
+
     getClipId(name: string): number {
         const id = this.clipsByName.get(name);
         if (id === undefined) throw new Error(`Skeletal clip "${name}" not found`);

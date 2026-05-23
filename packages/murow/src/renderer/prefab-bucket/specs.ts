@@ -40,6 +40,12 @@ export interface GltfSpec {
     readonly src: string;
     /** Optional whitelist of animation clip names to keep. Defaults to all. Filter them here and get type-safety and more performance. */
     readonly animations?: readonly string[];
+    /**
+     * Release the source glTF JSON + accessor reader after parse. Saves
+     * memory but removes `loadAnimations` / `unloadAnimations` at runtime
+     * and the type level.
+     */
+    readonly freezeAnimations?: boolean;
     /** Optional user-defined sidecar data (scale, speed, gameplay hints, etc). */
     readonly metadata?: Record<string, unknown>;
 }
@@ -66,16 +72,37 @@ export type AnimationsRecord<A extends readonly string[]> = {
     readonly [K in A[number]]: K;
 };
 
-/**
- * GltfPrefab — generic over its source spec so the spec's literal `animations`
- * tuple, `id`, and `metadata` are preserved through `bucket.get('annie')`.
- *
- * Animation fields (`animations`, `animationList`) reflect what the spec declared:
- *   - Spec with `animations: ['Run', 'Idle1']` → narrow record `{ Run, Idle1 }` and tuple
- *   - Spec with `animations?` (default) → wide record/array
- *   - Spec without `animations` field at all → fields absent
- */
-export type GltfPrefab<S extends GltfSpec = GltfSpec> = {
+/** Animation fields for a spec with a non-empty literal `animations` tuple. */
+type NarrowAnimations<S extends GltfSpec> = {
+    readonly animations: AnimationsRecord<Extract<S['animations'], readonly string[]>>;
+    readonly animationList: Extract<S['animations'], readonly string[]>;
+};
+
+/** Animation fields for a spec where `animations` was declared optional (default). */
+type WideAnimations = {
+    readonly animations?: Record<string, string>;
+    readonly animationList?: readonly string[];
+};
+
+/** Lazy clip-management methods. Present when the spec didn't set `freezeAnimations: true`. */
+export type UnfrozenAnimationMethods = {
+    /** Decode and pack clips by name. Already-loaded names are no-ops; unknown names throw. */
+    loadAnimations(names: readonly string[]): Promise<void>;
+    /** Drop clips from the packed buffer. No-op for clips that aren't loaded. */
+    unloadAnimations(names: readonly string[]): void;
+    /** Restore the prefab to its spec-declared (parse-time) animation set. */
+    resetAnimations(): void;
+};
+
+/** Optional-method version of `UnfrozenAnimationMethods`, used on the wide-union `GltfPrefab<GltfSpec>`. */
+type OptionalAnimationMethods = {
+    loadAnimations?: UnfrozenAnimationMethods['loadAnimations'];
+    unloadAnimations?: UnfrozenAnimationMethods['unloadAnimations'];
+    resetAnimations?: UnfrozenAnimationMethods['resetAnimations'];
+};
+
+/** Common (non-conditional) fields of every parsed glTF prefab. */
+type GltfPrefabBase<S extends GltfSpec> = {
     readonly type: 'gltf';
     readonly id: S['id'];
     readonly parsed: ParsedGltf;
@@ -85,22 +112,43 @@ export type GltfPrefab<S extends GltfSpec = GltfSpec> = {
     readonly totalVertexCount: number;
     /** Passed through from the spec. */
     readonly metadata: MetadataOf<S>;
-} & (
-    // 1. Spec has a non-empty animations tuple → narrow record + tuple
+};
+
+/**
+ * Animation record/list fields, narrowed by what the spec declared:
+ *   - literal `animations` tuple → narrow record + tuple
+ *   - `animations?` (declared optional) → wide record + array
+ *   - field absent → no animation fields
+ */
+type GltfPrefabAnimationFields<S extends GltfSpec> =
     S extends { animations: readonly [string, ...string[]] }
-        ? {
-            readonly animations: AnimationsRecord<S['animations']>;
-            readonly animationList: S['animations'];
-        }
-    // 2. Spec has `animations?` (declared optional) → wide record + array
+        ? NarrowAnimations<S>
     : S extends { animations?: readonly string[] | undefined }
-        ? {
-            readonly animations?: Record<string, string>;
-            readonly animationList?: readonly string[];
-        }
-    // 3. Spec has no animations field → fields absent
-    : {}
-);
+        ? WideAnimations
+        : {};
+
+/** Pull out the `freezeAnimations` literal: `true`/`false` if pinned, `boolean` if wide, `never` if absent. */
+type FreezeFlagOf<S> = S extends { freezeAnimations?: infer F } ? F : never;
+
+/**
+ * Lazy-method narrowing:
+ *   - wide spec (`freezeAnimations?: boolean`) → optional methods, so the
+ *     union `Prefab3D` doesn't re-add them to a narrowed-frozen variant
+ *   - literal `true` → no methods
+ *   - literal `false` or absent → required methods
+ */
+type GltfPrefabLazyMethods<S extends GltfSpec> =
+    boolean extends FreezeFlagOf<S>
+        ? OptionalAnimationMethods
+    : S extends { freezeAnimations: true }
+        ? {}
+    : UnfrozenAnimationMethods;
+
+/** Parsed glTF prefab, with `id`, `metadata`, `animations`, and `freezeAnimations` narrowed by the spec literal. */
+export type GltfPrefab<S extends GltfSpec = GltfSpec> =
+    & GltfPrefabBase<S>
+    & GltfPrefabAnimationFields<S>
+    & GltfPrefabLazyMethods<S>;
 
 export interface GridPrefab<S extends GridSpec = GridSpec> {
     readonly type: 'grid';

@@ -22,21 +22,33 @@ import type { PackedAnimationData } from 'murow/renderer';
 
 const WORKGROUP_SIZE = 64;
 
+/**
+ * Capacity headroom for each storage buffer. Over-allocating is harmless —
+ * the kernel only ever reads as far as the uploaded data describes — and
+ * lets resyncs upload via `writeBuffer` instead of rebuilding the kernel.
+ */
+export interface AnimationKernelBudgets {
+    skelI32Capacity: number;
+    animF32Capacity: number;
+    matricesCapacity: number;
+}
+
 export function buildAnimationKernel(
     root: TgpuRoot,
     packed: PackedAnimationData,
     maxInstances: number,
     maxTotalBones: number,
-): { kernel: ComputeKernel; packedBuffers: PackedBuffers } {
+    budgets: AnimationKernelBudgets,
+): { kernel: ComputeKernel; packedBuffers: PackedBuffers; budgets: AnimationKernelBudgets } {
     const pb = packAnimationData(packed);
 
     const kernel = new ComputeBuilder('skeletal-animation', { workgroupSize: WORKGROUP_SIZE }, root)
         .buffers({
             uniforms:     { uniform: AnimComputeUniforms },
             instances:    { storage: d.arrayOf(InstanceAnimStateGPU, maxInstances) },
-            skelI32:      { storage: d.arrayOf(d.i32, pb.skelI32.length) },
-            animF32:      { storage: d.arrayOf(d.f32, pb.animF32.length) },
-            matrices:     { storage: d.arrayOf(d.mat4x4f, pb.totalMats) },
+            skelI32:      { storage: d.arrayOf(d.i32, budgets.skelI32Capacity) },
+            animF32:      { storage: d.arrayOf(d.f32, budgets.animF32Capacity) },
+            matrices:     { storage: d.arrayOf(d.mat4x4f, budgets.matricesCapacity) },
             boneMatrices: { storage: d.arrayOf(d.mat4x4f, maxTotalBones), readwrite: true },
         })
         .shader(({ uniforms, instances, skelI32, animF32, matrices, boneMatrices }, { globalId }) => {
@@ -291,14 +303,25 @@ export function buildAnimationKernel(
         })
         .build();
 
-    // Upload static data
-    kernel.write('skelI32', Array.from(pb.skelI32));
-    kernel.write('animF32', Array.from(pb.animF32));
+    uploadPackedToKernel(root, kernel, pb);
 
-    // Upload matrices via raw buffer (TypeGPU mat4x4f write format is complex)
-    const matBuffer = kernel.getBuffer('matrices');
-    const rawMatBuffer = root.unwrap(matBuffer) as GPUBuffer;
-    root.device.queue.writeBuffer(rawMatBuffer, 0, pb.matFloats as GPUAllowSharedBufferSource);
+    return { kernel, packedBuffers: pb, budgets };
+}
 
-    return { kernel, packedBuffers: pb };
+/**
+ * Re-upload packed animation data into an already-built kernel. Uses
+ * `device.queue.writeBuffer` directly against the typed arrays — TypeGPU's
+ * per-element write path is dramatically slower for big buffers.
+ */
+export function uploadPackedToKernel(root: TgpuRoot, kernel: ComputeKernel, pb: PackedBuffers): void {
+    const queue = root.device.queue;
+
+    const skelBuf = root.unwrap(kernel.getBuffer('skelI32')) as GPUBuffer;
+    queue.writeBuffer(skelBuf, 0, pb.skelI32 as GPUAllowSharedBufferSource);
+
+    const animBuf = root.unwrap(kernel.getBuffer('animF32')) as GPUBuffer;
+    queue.writeBuffer(animBuf, 0, pb.animF32 as GPUAllowSharedBufferSource);
+
+    const matBuf = root.unwrap(kernel.getBuffer('matrices')) as GPUBuffer;
+    queue.writeBuffer(matBuf, 0, pb.matFloats as GPUAllowSharedBufferSource);
 }

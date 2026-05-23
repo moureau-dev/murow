@@ -147,6 +147,72 @@ export function parseSkin(
 }
 
 /**
+ * Decode one glTF animation entry into an `AnimationClipData`.
+ * Returns null if no channels target joints in this skin, or all channels use
+ * an unsupported interpolation mode.
+ */
+export function decodeAnimationClip(
+    anim: any,
+    nameFallback: string,
+    nodeToJoint: ReadonlyMap<number, number>,
+    getAccessorData: AccessorReader,
+): AnimationClipData | null {
+    const channels: AnimationChannel[] = [];
+    let maxTime = 0;
+
+    for (const channel of anim.channels) {
+        const targetNode = channel.target.node;
+        const jointIndex = nodeToJoint.get(targetNode);
+        if (jointIndex === undefined) continue; // not a joint in this skin
+
+        const path = channel.target.path as string;
+        if (path !== 'translation' && path !== 'rotation' && path !== 'scale') continue;
+
+        const sampler = anim.samplers[channel.sampler];
+        const interpolation = (sampler.interpolation ?? 'LINEAR') as 'LINEAR' | 'STEP';
+
+        // Skip CUBICSPLINE for now
+        if (interpolation !== 'LINEAR' && interpolation !== 'STEP') continue;
+
+        const inputAccess = getAccessorData(sampler.input);
+        const timestamps = new Float32Array(inputAccess.data as Float32Array);
+
+        const outputAccess = getAccessorData(sampler.output);
+        const values = new Float32Array(outputAccess.data as Float32Array);
+
+        if (timestamps.length > 0) {
+            const lastTime = timestamps[timestamps.length - 1];
+            if (lastTime > maxTime) maxTime = lastTime;
+        }
+
+        channels.push({
+            jointIndex,
+            path: path as 'translation' | 'rotation' | 'scale',
+            timestamps,
+            values,
+            interpolation,
+        });
+    }
+
+    if (channels.length === 0) return null;
+
+    return {
+        name: anim.name ?? nameFallback,
+        duration: maxTime,
+        channels,
+    };
+}
+
+/** Node→joint index map for a parsed skin. Build once and reuse when decoding clips lazily. */
+export function buildNodeToJointMap(skinData: SkinData): Map<number, number> {
+    const nodeToJoint = new Map<number, number>();
+    for (let j = 0; j < skinData.jointCount; j++) {
+        nodeToJoint.set(skinData.jointNodeIndices[j], j);
+    }
+    return nodeToJoint;
+}
+
+/**
  * Parse animation clips that target joints in a skin.
  */
 export function parseAnimations(
@@ -156,59 +222,12 @@ export function parseAnimations(
 ): AnimationClipData[] {
     if (!gltf.animations?.length) return [];
 
-    // Build node → joint index map
-    const nodeToJoint = new Map<number, number>();
-    for (let j = 0; j < skinData.jointCount; j++) {
-        nodeToJoint.set(skinData.jointNodeIndices[j], j);
-    }
-
+    const nodeToJoint = buildNodeToJointMap(skinData);
     const clips: AnimationClipData[] = [];
 
-    for (const anim of gltf.animations) {
-        const channels: AnimationChannel[] = [];
-        let maxTime = 0;
-
-        for (const channel of anim.channels) {
-            const targetNode = channel.target.node;
-            const jointIndex = nodeToJoint.get(targetNode);
-            if (jointIndex === undefined) continue; // not a joint in this skin
-
-            const path = channel.target.path as string;
-            if (path !== 'translation' && path !== 'rotation' && path !== 'scale') continue;
-
-            const sampler = anim.samplers[channel.sampler];
-            const interpolation = (sampler.interpolation ?? 'LINEAR') as 'LINEAR' | 'STEP';
-
-            // Skip CUBICSPLINE for now
-            if (interpolation !== 'LINEAR' && interpolation !== 'STEP') continue;
-
-            const inputAccess = getAccessorData(sampler.input);
-            const timestamps = new Float32Array(inputAccess.data as Float32Array);
-
-            const outputAccess = getAccessorData(sampler.output);
-            const values = new Float32Array(outputAccess.data as Float32Array);
-
-            if (timestamps.length > 0) {
-                const lastTime = timestamps[timestamps.length - 1];
-                if (lastTime > maxTime) maxTime = lastTime;
-            }
-
-            channels.push({
-                jointIndex,
-                path: path as 'translation' | 'rotation' | 'scale',
-                timestamps,
-                values,
-                interpolation,
-            });
-        }
-
-        if (channels.length > 0) {
-            clips.push({
-                name: anim.name ?? `animation_${clips.length}`,
-                duration: maxTime,
-                channels,
-            });
-        }
+    for (let i = 0; i < gltf.animations.length; i++) {
+        const clip = decodeAnimationClip(gltf.animations[i], `animation_${clips.length}`, nodeToJoint, getAccessorData);
+        if (clip) clips.push(clip);
     }
 
     return clips;

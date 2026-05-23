@@ -15,6 +15,8 @@
  * to the specific prefab variant for that id (not just the union).
  */
 
+import { EventSystem } from '../../core/events';
+
 export type PrefabMode = '2d' | '3d';
 
 /**
@@ -38,13 +40,23 @@ export interface PrefabBase {
     readonly metadata?: Record<string, unknown>;
 }
 
+/** `clips-changed` fires when a prefab's animation set is mutated by lazy load/unload. */
+export type PrefabBucketEvents = [
+    ['clips-changed', { prefabId: string; added: readonly string[]; removed: readonly string[] }],
+];
+
+/** Context passed to each parser at load time, carrying the bucket's shared event channel. */
+export interface PrefabParserContext {
+    readonly events: EventSystem<PrefabBucketEvents>;
+}
+
 /**
  * Pluggable parser registry — keyed by spec `type`. Each entry knows how to turn
  * one variant of spec into its parsed prefab. The bucket itself is mode-agnostic;
  * the webgpu package (or any other backend) registers parsers at construction.
  */
 export type PrefabParser<Spec extends PrefabSpecBase = PrefabSpecBase, Prefab extends PrefabBase = PrefabBase> =
-    (spec: Spec) => Promise<Prefab> | Prefab;
+    (spec: Spec, ctx: PrefabParserContext) => Promise<Prefab> | Prefab;
 
 export type PrefabParserMap<Spec extends PrefabSpecBase, Prefab extends PrefabBase> =
     Record<string, PrefabParser<Spec, Prefab>>;
@@ -56,6 +68,8 @@ export class BasePrefabBucket<
     Specs extends Record<string, Spec> = {},
 > {
     readonly mode: M;
+    /** Shared notification channel — see `PrefabBucketEvents`. */
+    readonly events: EventSystem<PrefabBucketEvents>;
     private parsers: PrefabParserMap<Spec, Prefab>;
     private pending: Spec[] = [];
     private pendingIds: Set<string> = new Set();
@@ -64,6 +78,7 @@ export class BasePrefabBucket<
     constructor(mode: M, parsers: PrefabParserMap<Spec, Prefab> = {} as PrefabParserMap<Spec, Prefab>) {
         this.mode = mode;
         this.parsers = parsers;
+        this.events = new EventSystem<PrefabBucketEvents>({ events: ['clips-changed'] });
     }
 
     /** Add a single spec. Throws if id is a duplicate or if the bucket is already loaded. */
@@ -102,10 +117,11 @@ export class BasePrefabBucket<
     /** Load all pending specs in parallel. Idempotent if already loaded. */
     async load(): Promise<void> {
         if (this.prefabs) return;
+        const ctx: PrefabParserContext = { events: this.events };
         const parsed = await Promise.all(this.pending.map(s => {
             const parser = this.parsers[s.type];
             if (!parser) throw new Error(`PrefabBucket: no parser registered for type '${s.type}'`);
-            return parser(s);
+            return parser(s, ctx);
         }));
         const map = new Map<string, Prefab>();
         for (const p of parsed) map.set(p.id, p);
@@ -159,5 +175,17 @@ export class BasePrefabBucket<
             if (p.type === type) out.push(p as R);
         }
         return out;
+    }
+
+    /**
+     * Drop every runtime-loaded clip across all prefabs, restoring each to
+     * its parse-time animation set. Called by the renderer on destroy so
+     * a kept-alive bucket doesn't carry runtime state into the next session.
+     */
+    resetAnimations(): void {
+        if (!this.prefabs) return;
+        for (const prefab of this.prefabs.values()) {
+            (prefab as unknown as { resetAnimations?: () => void }).resetAnimations?.();
+        }
     }
 }

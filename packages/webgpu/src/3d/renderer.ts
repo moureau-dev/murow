@@ -53,7 +53,13 @@ import {
     type SkeletalAnimState,
     type PlayOptions,
 } from 'murow/renderer';
-import { buildAnimationKernel } from './skeletal-animation-compute/index';
+import {
+    buildAnimationKernel,
+    uploadPackedToKernel,
+    type AnimationKernelBudgets,
+} from './skeletal-animation-compute/index';
+import { packAnimationData } from './skeletal-animation-compute/packer';
+import { GltfClipResyncCoordinator } from './clip-resync-coordinator';
 import type { ComputeKernel } from '../compute/compute-builder';
 
 // --- Dynamic offset constants ---
@@ -268,7 +274,11 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         animation: SkeletalAnimation;
         jointCount: number;
         boundingRadius: number; // max distance from root to any joint in bind pose
+        parsedSkin: NonNullable<ParsedGltf['skin']>; // back-ref for resyncs
     }[] = [];
+
+    // Null when constructed without a `prefabs` bucket; lazy load/unload requires it as event source.
+    private clipResync: GltfClipResyncCoordinator | null = null;
 
     // Skinned pipeline resources
     private skinnedMeshLayout!: SkinnedMeshDataLayout;
@@ -286,6 +296,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private packedAnimData: PackedAnimationData = createPackedAnimationData();
     private animComputeKernel: ComputeKernel | null = null;
     private animComputeNeedsRebuild = false;
+    // Capacities the active kernel was built with — used to gate the in-place upload path on resync.
+    private animKernelBudgets: AnimationKernelBudgets | null = null;
     private animClipTableOffset = 0;
     private animChannelTableOffset = 0;
     private animJointLookupOffset = 0;
@@ -561,14 +573,22 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     }
 
     /**
-     * Upload every prefab in the bucket to the GPU and stash the resulting handle
-     * on each prefab so `bucket.get(id)` returns something usable as a model.
+     * Upload every prefab in the bucket to the GPU and stash the handle on
+     * each prefab so `bucket.get(id)` resolves to a usable model. Also
+     * subscribes the resync coordinator to the bucket's `clips-changed`
+     * channel for lazy load/unload.
      */
     private uploadPrefabBucket(bucket: PrefabBucket3D): void {
+        this.clipResync = new GltfClipResyncCoordinator(bucket);
+
         for (const prefab of bucket.entries()) {
             if (prefab.type === 'gltf') {
+                const beforeSkinCount = this.skinnedModels.length;
                 const model = this.uploadParsedGltf(prefab.parsed);
                 prefabHandles.set(prefab, model);
+                if (this.skinnedModels.length > beforeSkinCount) {
+                    this.clipResync.registerSkin(prefab.id, beforeSkinCount);
+                }
             } else if (prefab.type === 'grid') {
                 const model = this.createGrid({
                     size: prefab.size,
@@ -1005,6 +1025,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 animation,
                 jointCount: skinData.jointCount,
                 boundingRadius: skinnedRadius,
+                parsedSkin: parsed.skin,
             });
 
             packSkinAndAnimations(this.packedAnimData, skinData, animClips);
@@ -1276,22 +1297,117 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     }
 
     /**
+     * Drain pending resyncs from the coordinator. Per affected skin: rebuild
+     * its `SkeletalAnimation` clip list densely, remap in-flight animStates,
+     * then full-repack `packedAnimData`. Falls back to a kernel rebuild only
+     * when the new data exceeds the kernel's allocated budgets.
+     *
+     * The dense renumbering is load-bearing: the kernel reads each clip by
+     * its per-skin index, which must equal `SkeletalAnimation`'s clip id.
+     */
+    private syncLazyAnimationChanges(): void {
+        const resync = this.clipResync;
+        if (!resync || resync.pending.size === 0) return;
+
+        // Per-skin id remap tables, keyed by skinnedModels index.
+        const remapsBySkin = new Map<number, Int32Array>();
+        for (const skinIndex of resync.pending) {
+            const sm = this.skinnedModels[skinIndex];
+            if (!sm) continue;
+            remapsBySkin.set(skinIndex, sm.animation.replaceClips(sm.parsedSkin.animClips));
+        }
+        resync.clear();
+
+        // Remap every active instance whose skin had clip changes.
+        for (let slot = 0; slot < this.maxSkinnedInstances; slot++) {
+            const animState = this.skinnedAnimStates[slot];
+            if (!animState) continue;
+            const modelId = this.skinnedInstanceModelIds[slot];
+            const model = this.models[modelId];
+            if (!model || model.skinIndex < 0) continue;
+            const remap = remapsBySkin.get(model.skinIndex);
+            if (!remap) continue;
+
+            if (animState.clipId >= 0 && animState.clipId < remap.length) {
+                const next = remap[animState.clipId];
+                if (next < 0) {
+                    // Playing clip got unloaded — stop the instance.
+                    animState.clipId = -1;
+                    animState.playing = false;
+                } else {
+                    animState.clipId = next;
+                }
+            }
+            if (animState.prevClipId >= 0 && animState.prevClipId < remap.length) {
+                animState.prevClipId = remap[animState.prevClipId]; // -1 if unloaded → crossfade collapses naturally
+            }
+        }
+
+        // Repack order must match skinnedModels order so per-skin indices stay valid.
+        this.packedAnimData = createPackedAnimationData();
+        for (const sm of this.skinnedModels) {
+            packSkinAndAnimations(this.packedAnimData, sm.parsedSkin.data, sm.parsedSkin.animClips);
+        }
+
+        if (this.tryUploadInPlace()) return;
+        this.animComputeNeedsRebuild = true;
+    }
+
+    /** Doubling-growth budgets for kernel storage buffers, with sensible floors. */
+    private growBudgetsForPacked(
+        packed: PackedAnimationData,
+        previous: AnimationKernelBudgets | null,
+    ): AnimationKernelBudgets {
+        const pb = packAnimationData(packed);
+        const grow = (cur: number, prev: number, floor: number) =>
+            Math.max(cur * 2, prev, floor);
+        return {
+            skelI32Capacity:   grow(pb.skelI32.length,   previous?.skelI32Capacity   ?? 0, 256),
+            animF32Capacity:   grow(pb.animF32.length,   previous?.animF32Capacity   ?? 0, 4096),
+            matricesCapacity:  grow(pb.totalMats,        previous?.matricesCapacity  ?? 0, 8),
+        };
+    }
+
+    /** Upload `packedAnimData` to the existing kernel iff it fits the current budgets. Returns false to force a rebuild. */
+    private tryUploadInPlace(): boolean {
+        const kernel = this.animComputeKernel;
+        const budgets = this.animKernelBudgets;
+        if (!kernel || !budgets) return false;
+
+        const pb = packAnimationData(this.packedAnimData);
+        if (pb.skelI32.length  > budgets.skelI32Capacity)  return false;
+        if (pb.animF32.length  > budgets.animF32Capacity)  return false;
+        if (pb.totalMats       > budgets.matricesCapacity) return false;
+
+        uploadPackedToKernel(this.root, kernel, pb);
+        this.animClipTableOffset = pb.clipTableOffset;
+        this.animChannelTableOffset = pb.channelTableOffset;
+        this.animJointLookupOffset = pb.jointLookupOffset;
+        return true;
+    }
+
+    /**
      * Update skeletal animations for all skinned instances. Call once per tick.
      */
     // Pre-allocated dedup tracker for updateAnimations — indexed by bone offset, not slot (zero-GC)
     private updatedBoneOffsets!: Uint8Array;
 
     private updateAnimations(deltaTime: number): void {
+        this.syncLazyAnimationChanges();
+
         // Rebuild GPU compute kernel if new skinned models were loaded.
         // Note: the kernel only builds when at least one clip exists. Skinned
         // models with zero clips will still render via the CPU bone-matrix
         // upload at line ~1555 (writing rest poses from boneMatrixData).
         if (this.animComputeNeedsRebuild && this.packedAnimData.clips.length > 0) {
             this.animComputeKernel?.destroy();
+            // 2× headroom so subsequent lazy clip changes can upload in place.
+            const budgets = this.growBudgetsForPacked(this.packedAnimData, null);
             const { kernel, packedBuffers } = buildAnimationKernel(
-                this.root, this.packedAnimData, this.maxSkinnedInstances, this.maxTotalBones,
+                this.root, this.packedAnimData, this.maxSkinnedInstances, this.maxTotalBones, budgets,
             );
             this.animComputeKernel = kernel;
+            this.animKernelBudgets = budgets;
             this.animClipTableOffset = packedBuffers.clipTableOffset;
             this.animChannelTableOffset = packedBuffers.channelTableOffset;
             this.animJointLookupOffset = packedBuffers.jointLookupOffset;
@@ -1762,6 +1878,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         this.resizeObserver?.disconnect();
         this.resizeObserver = null;
         this.resizeCallbacks.length = 0;
+        // Detach from the bucket so it doesn't retain this dead renderer via the coordinator's closure.
+        this.clipResync?.dispose();
+        this.clipResync = null;
         this.dynamicBuffer?.destroy();
         this.staticBuffer?.destroy();
         this.uniformBuffer?.destroy();

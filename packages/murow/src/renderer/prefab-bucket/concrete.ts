@@ -74,9 +74,9 @@ export class PrefabBucket<
      */
     get<
         K extends keyof Specs & string,
-        R extends PrefabUnionForMode<M> = PrefabFor<Specs[K]> & PrefabUnionForMode<M>,
+        R = PrefabFor<Specs[K]>,
     >(id: StringOr<K>): R {
-        return super.get<K, R>(id as K);
+        return super.get(id as K) as R;
     }
 }
 

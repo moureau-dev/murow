@@ -14,9 +14,12 @@ import {
     parseSkin,
     parseAnimations,
     parsePrimitiveSkinAttributes,
+    decodeAnimationClip,
+    buildNodeToJointMap,
     type SkinData,
     type AnimationClipData,
     type PrimitiveSkinAttributes,
+    type AccessorReader,
 } from './skin-parser';
 import {
     bakeTransformIntoVertices,
@@ -39,6 +42,22 @@ export interface ParsedGltfPrimitive {
     skinned: boolean;
 }
 
+/**
+ * Retained parser state for decoding more clips after the initial `parseGltf`.
+ * Null when the spec opted out via `freezeAnimations: true`.
+ */
+export interface ParsedGltfSource {
+    readonly availableAnimations: readonly string[];
+    /** Returns null if the clip has no channels targeting joints in this skin. Throws on unknown name. */
+    decodeAnimation(name: string): AnimationClipData | null;
+}
+
+/** Skin + filtered animation clips. Mutated by lazy `loadAnimations` / `unloadAnimations`. */
+export interface ParsedGltfSkin {
+    data: SkinData;
+    animClips: AnimationClipData[];
+}
+
 /** CPU-side result of parsing a glTF / glb URL. */
 export interface ParsedGltf {
     /** Source URL the model was loaded from. */
@@ -46,14 +65,23 @@ export interface ParsedGltf {
     /** One entry per primitive that should become a model part. */
     primitives: ParsedGltfPrimitive[];
     /** Skin + filtered animation clips, or null if the model has no skin. */
-    skin: { data: SkinData; animClips: AnimationClipData[] } | null;
+    skin: ParsedGltfSkin | null;
+    /** Retained parser state for lazy clip decoding. Null when the spec passed `freezeAnimations: true`. */
+    source: ParsedGltfSource | null;
+}
+
+export interface ParseGltfOptions {
+    /** Whitelist of clip names to keep. */
+    animations?: string[];
+    /** Release the source JSON + accessor reader after parse. Disables lazy load. */
+    freezeAnimations?: boolean;
 }
 
 /**
  * Parse a glTF / .glb file from a URL into CPU-side data.
  * Does no GPU work. Safe to call in parallel; safe to call before a renderer exists.
  */
-export async function parseGltf(url: string, opts?: { animations?: string[] }): Promise<ParsedGltf> {
+export async function parseGltf(url: string, opts?: ParseGltfOptions): Promise<ParsedGltf> {
     const response = await fetch(url);
     const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
     const arrayBuffer = await response.arrayBuffer();
@@ -74,7 +102,7 @@ export async function parseGltf(url: string, opts?: { animations?: string[] }): 
         }
     }
 
-    const getAccessorData = (accessorIndex: number): { data: Float32Array | Uint16Array | Uint32Array | Uint8Array; count: number; elementSize: number } => {
+    const getAccessorData: AccessorReader = (accessorIndex: number) => {
         const accessor = gltf.accessors[accessorIndex];
         const bufferView = gltf.bufferViews[accessor.bufferView];
         const buffer = buffers[bufferView.buffer];
@@ -208,9 +236,27 @@ export async function parseGltf(url: string, opts?: { animations?: string[] }): 
         }
     }
 
+    let source: ParsedGltfSource | null = null;
+    if (!opts?.freezeAnimations && skinData) {
+        const allAnims: any[] = gltf.animations ?? [];
+        const availableAnimations: readonly string[] = allAnims.map(
+            (a: any, i: number) => a.name ?? `animation_${i}`
+        );
+        const nodeToJoint = buildNodeToJointMap(skinData);
+        source = {
+            availableAnimations,
+            decodeAnimation(name: string): AnimationClipData | null {
+                const idx = allAnims.findIndex((a: any, i: number) => (a.name ?? `animation_${i}`) === name);
+                if (idx < 0) throw new Error(`glTF ${url} has no animation named '${name}'`);
+                return decodeAnimationClip(allAnims[idx], `animation_${idx}`, nodeToJoint, getAccessorData);
+            },
+        };
+    }
+
     return {
         src: url,
         primitives,
         skin: skinData ? { data: skinData, animClips } : null,
+        source,
     };
 }
