@@ -18,6 +18,7 @@
  */
 import type { SkinData, AnimationClipData, AnimationChannel } from './skin-parser';
 import { trsToMat4, mat4Mul } from '../math';
+import { lerp } from '../../core/lerp';
 
 export interface SkeletalClip {
     readonly id: number;
@@ -219,11 +220,10 @@ export class SkeletalAnimation {
 
             // Lerp: output = lerp(prev, current, blendWeight)
             const w = state.blendWeight;
-            const oneMinusW = 1 - w;
             const scratch = this.blendScratch;
             const floatCount = jc * 16;
             for (let i = 0; i < floatCount; i++) {
-                output[outputOffset + i] = scratch[i] * oneMinusW + output[outputOffset + i] * w;
+                output[outputOffset + i] = lerp(scratch[i], output[outputOffset + i], w);
             }
         } else {
             // No crossfade — evaluate current clip directly
@@ -383,9 +383,9 @@ export class SkeletalAnimation {
         // Linear lerp for translation/scale
         // Reuse a scratch view
         const out = this._scratchVec3;
-        out[0] = vals[a] + (vals[b] - vals[a]) * f;
-        out[1] = vals[a + 1] + (vals[b + 1] - vals[a + 1]) * f;
-        out[2] = vals[a + 2] + (vals[b + 2] - vals[a + 2]) * f;
+        out[0] = lerp(vals[a],     vals[b],     f);
+        out[1] = lerp(vals[a + 1], vals[b + 1], f);
+        out[2] = lerp(vals[a + 2], vals[b + 2], f);
         return out;
     }
 
