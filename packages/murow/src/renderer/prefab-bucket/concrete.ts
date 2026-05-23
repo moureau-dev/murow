@@ -31,6 +31,13 @@ import type {
 type SpecForMode<M> = M extends '3d' ? Prefab3DSpec : Prefab2DSpec;
 type PrefabUnionForMode<M> = M extends '3d' ? Prefab3D : Prefab2D;
 
+/**
+ * Registry of prefab specs and their parsed variants. The bucket tracks the mapping of
+ * spec `id` strings to their parsed prefab types, so `get` narrows to the correct
+ * prefab type based on the provided id. The bucket is mutable; call `add`/`addAll`
+ * to register new specs and their prefab types. Call `load` to parse all registered
+ * specs and populate the bucket's internal prefab registry.
+ */
 export class PrefabBucket<
     M extends '2d' | '3d' = '3d',
     Specs extends Record<string, SpecForMode<M>> = {},
