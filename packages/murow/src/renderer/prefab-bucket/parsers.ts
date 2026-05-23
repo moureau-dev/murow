@@ -136,6 +136,15 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             metadata: (spec.metadata ?? {}) as any,
         };
     },
+    cube: (spec) => {
+        if (spec.type !== 'cube') throw new Error('cube parser given non-cube spec');
+        return {
+            type: 'cube',
+            id: spec.id,
+            size: spec.size ?? 1,
+            metadata: (spec.metadata ?? {}) as any,
+        };
+    },
 };
 
 export const parsers2d: PrefabParserMap<Prefab2DSpec, Prefab2D> = {

@@ -85,6 +85,8 @@ export type PrefabBucket2D<Specs extends Record<string, Prefab2DSpec> = {}> = Pr
 export type PrefabBucket3D<Specs extends Record<string, Prefab3DSpec> = {}> = PrefabBucket<'3d', Specs>;
 
 export type {
+    CubePrefab,
+    CubeSpec,
     GltfPrefab,
     GltfSpec,
     GridPrefab,

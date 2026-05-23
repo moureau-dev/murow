@@ -61,7 +61,16 @@ export interface GridSpec {
     readonly metadata?: Record<string, unknown>;
 }
 
-export type Prefab3DSpec = GltfSpec | GridSpec;
+/** Unit cube prefab centered at origin. Use the instance's `scale` to size it. */
+export interface CubeSpec {
+    readonly type: 'cube';
+    readonly id: string;
+    /** Edge length. Defaults to 1. */
+    readonly size?: number;
+    readonly metadata?: Record<string, unknown>;
+}
+
+export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec;
 
 /**
  * Map a spec's `animations` tuple to a record-keyed-by-name. Used to type
@@ -159,7 +168,14 @@ export interface GridPrefab<S extends GridSpec = GridSpec> {
     readonly metadata: MetadataOf<S>;
 }
 
-export type Prefab3D = GltfPrefab | GridPrefab;
+export interface CubePrefab<S extends CubeSpec = CubeSpec> {
+    readonly type: 'cube';
+    readonly id: S['id'];
+    readonly size: number;
+    readonly metadata: MetadataOf<S>;
+}
+
+export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab;
 
 // ============================================================================
 // 2D
@@ -203,5 +219,6 @@ export type Prefab2D = SpritesheetPrefab;
 export type PrefabFor<S> =
     S extends GltfSpec ? GltfPrefab<S> :
     S extends GridSpec ? GridPrefab<S> :
+    S extends CubeSpec ? CubePrefab<S> :
     S extends SpritesheetSpec ? SpritesheetPrefab<S> :
     never;

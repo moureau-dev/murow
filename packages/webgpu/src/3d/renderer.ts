@@ -123,7 +123,8 @@ const prefabHandles = new WeakMap<Prefab3D, ModelHandle | GltfModel>();
 
 /** True iff value is a Prefab3D (returned from `bucket.get(...)`). */
 function isPrefab3D(value: ModelHandle | GltfModel | Prefab3D): value is Prefab3D {
-    return (value as Prefab3D).type === 'gltf' || (value as Prefab3D).type === 'grid';
+    const t = (value as Prefab3D).type;
+    return t === 'gltf' || t === 'grid' || t === 'cube';
 }
 
 /** Resolve the tuple-shape transform options into flat scalars + defaults. */
@@ -600,6 +601,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                     lineWidth: prefab.lineWidth,
                 });
                 prefabHandles.set(prefab, model);
+            } else if (prefab.type === 'cube') {
+                const model = this.createCube({ size: prefab.size });
+                prefabHandles.set(prefab, model);
             }
         }
     }
@@ -708,6 +712,51 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             normals: new Float32Array(normals),
             indices: new Uint16Array(indices),
         });
+    }
+
+    /**
+     * Create a unit-cube mesh centered at the origin. Pass `size` to scale the
+     * edge length, or keep size = 1 and scale at the instance level.
+     *
+     * ```ts
+     * const cube = renderer.createCube();
+     * renderer.addInstance({ model: cube, color: [1, 0.5, 0.2], scale: 2 });
+     * ```
+     */
+    createCube(opts: { size?: number } = {}): ModelHandle {
+        const h = (opts.size ?? 1) / 2;
+
+        // 36 vertices, 6 faces, 2 triangles per face, 3 vertices per triangle. Per-face flat normals.
+        const positions = new Float32Array([
+            // +Z
+            -h, -h,  h,   h, -h,  h,   h,  h,  h,
+            -h, -h,  h,   h,  h,  h,  -h,  h,  h,
+            // -Z
+             h, -h, -h,  -h, -h, -h,  -h,  h, -h,
+             h, -h, -h,  -h,  h, -h,   h,  h, -h,
+            // +Y
+            -h,  h,  h,   h,  h,  h,   h,  h, -h,
+            -h,  h,  h,   h,  h, -h,  -h,  h, -h,
+            // -Y
+            -h, -h, -h,   h, -h, -h,   h, -h,  h,
+            -h, -h, -h,   h, -h,  h,  -h, -h,  h,
+            // +X
+             h, -h,  h,   h, -h, -h,   h,  h, -h,
+             h, -h,  h,   h,  h, -h,   h,  h,  h,
+            // -X
+            -h, -h, -h,  -h, -h,  h,  -h,  h,  h,
+            -h, -h, -h,  -h,  h,  h,  -h,  h, -h,
+        ]);
+        const normals = new Float32Array([
+             0, 0, 1,  0, 0, 1,  0, 0, 1,   0, 0, 1,  0, 0, 1,  0, 0, 1,
+             0, 0,-1,  0, 0,-1,  0, 0,-1,   0, 0,-1,  0, 0,-1,  0, 0,-1,
+             0, 1, 0,  0, 1, 0,  0, 1, 0,   0, 1, 0,  0, 1, 0,  0, 1, 0,
+             0,-1, 0,  0,-1, 0,  0,-1, 0,   0,-1, 0,  0,-1, 0,  0,-1, 0,
+             1, 0, 0,  1, 0, 0,  1, 0, 0,   1, 0, 0,  1, 0, 0,  1, 0, 0,
+            -1, 0, 0, -1, 0, 0, -1, 0, 0,  -1, 0, 0, -1, 0, 0, -1, 0, 0,
+        ]);
+
+        return this.loadModel({ positions, normals });
     }
 
     /**
