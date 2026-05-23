@@ -312,6 +312,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private skinnedFreeList!: FreeList;
     private skinnedBatcher!: SparseBatcher;
     private skinnedStaticDirty = false;
+    // DataView over `skinnedStaticData` reused on every spawn to write the u32 boneOffset
+    // without allocating. Stored once at buffer creation.
+    private skinnedStaticDV!: DataView;
     private skinnedInstanceModelIds!: Uint8Array;
     private skinnedInstanceBoneOffsets!: Uint32Array;
     private skinnedAnimStates: (SkeletalAnimState | null)[] = [];
@@ -382,6 +385,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         this.skinnedBatcher = new SparseBatcher(msi);
         this.skinnedDynamicData = new Float32Array(msi * DYNAMIC_MESH_FLOATS);
         this.skinnedStaticData = new Float32Array(msi * SKINNED_STATIC_MESH_FLOATS);
+        this.skinnedStaticDV = new DataView(this.skinnedStaticData.buffer);
         this.skinnedSlotIndexData = new Uint32Array(msi);
         this.skinnedInstanceModelIds = new Uint8Array(msi);
         this.skinnedInstanceBoneOffsets = new Uint32Array(msi);
@@ -1252,10 +1256,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         this.skinnedStaticData[statBase + SSTAT_CG] = t.cg;
         this.skinnedStaticData[statBase + SSTAT_CB] = t.cb;
 
-        // boneOffset is u32, but stored in a Float32Array — use DataView for correct bit pattern
-        new DataView(this.skinnedStaticData.buffer).setUint32(
-            (statBase + SSTAT_BONE_OFFSET) * 4, boneOffset, true
-        );
+        // boneOffset is u32 stored inside the Float32 buffer — use the reusable DataView.
+        this.skinnedStaticDV.setUint32((statBase + SSTAT_BONE_OFFSET) * 4, boneOffset, true);
 
         this.skinnedStaticDirty = true;
         this.skinnedInstanceModelIds[slot] = modelHandle.id;
