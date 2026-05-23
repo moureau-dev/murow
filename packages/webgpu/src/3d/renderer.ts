@@ -9,9 +9,9 @@
  */
 import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer } from 'typegpu';
-import { Base3DRenderer } from 'murow/renderer/base-3d-renderer';
+import { Base3DRenderer } from 'murow/renderer';
 import { d } from '../shaders/typegpu';
-import type { Renderer3DOptions } from 'murow/renderer/types';
+import type { Renderer3DOptions } from 'murow/renderer';
 import { FreeList } from 'murow/core/free-list';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder';
@@ -40,10 +40,19 @@ import {
     type MeshDataLayout,
     type SkinnedMeshDataLayout,
 } from './shader';
-import { createPackedAnimationData, packSkinAndAnimations, type PrimitiveSkinAttributes, type PackedAnimationData } from './gltf-skin-parser';
-import { parseGltf, type ParsedGltf } from './gltf-parser';
-import type { PrefabBucket3D, Prefab3D } from '../prefabs';
-import { SkeletalAnimation, type SkeletalAnimState, type PlayOptions } from './skeletal-animation';
+import {
+    createPackedAnimationData,
+    packSkinAndAnimations,
+    parseGltf,
+    SkeletalAnimation,
+    type PrimitiveSkinAttributes,
+    type PackedAnimationData,
+    type ParsedGltf,
+    type PrefabBucket3D,
+    type Prefab3D,
+    type SkeletalAnimState,
+    type PlayOptions,
+} from 'murow/renderer';
 import { buildAnimationKernel } from './skeletal-animation-compute/index';
 import type { ComputeKernel } from '../compute/compute-builder';
 

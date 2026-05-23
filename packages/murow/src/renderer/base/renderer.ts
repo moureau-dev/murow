@@ -1,7 +1,7 @@
 /**
  * Abstract base for all renderers. Provides lifecycle and canvas management.
  */
-import type { ClearColor, RendererOptions } from "./types";
+import type { ClearColor, RendererOptions } from "../types";
 
 export abstract class BaseRenderer<TOptions extends RendererOptions = RendererOptions> {
     readonly canvas: HTMLCanvasElement;

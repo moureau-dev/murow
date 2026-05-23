@@ -10,7 +10,7 @@ import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer } from 'typegpu';
 import * as d from 'typegpu/data'; // used for buffer type creation
 import { FreeList } from 'murow/core/free-list';
-import { Base2DRenderer} from 'murow/renderer/base-2d-renderer';
+import { Base2DRenderer } from 'murow/renderer';
 import type {
     Renderer2DOptions,
     SpriteHandle,
@@ -58,10 +58,10 @@ import {
     Spritesheet,
     createTextureFromBitmap,
 } from '../spritesheet/spritesheet';
-import { parseSpritesheet, type ParsedSpritesheet } from '../spritesheet/spritesheet-parser';
+import { parseSpritesheet, type ParsedSpritesheet } from 'murow/renderer';
 import { GeometryBuilder, type GeometryOptions } from '../geometry/geometry-builder';
 import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder';
-import type { PrefabBucket2D, Prefab2D, SpritesheetPrefab } from '../prefabs';
+import type { PrefabBucket2D, Prefab2D, SpritesheetPrefab } from 'murow/renderer';
 
 export interface WebGPU2DRendererOptions extends Renderer2DOptions {
     /**

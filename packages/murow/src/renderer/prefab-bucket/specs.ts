@@ -1,14 +1,17 @@
 /**
- * Prefab spec / prefab type unions for the WebGPU renderers.
+ * Prefab spec / prefab type unions.
  *
  * Specs describe what to load (URLs, sizes, options). Prefabs are the
  * parsed CPU-side result — the renderer reads these at init() to size
  * GPU buffers and uploads them; user code retrieves them by id and
  * passes them to `addInstance` / `addSprite`.
+ *
+ * These types are renderer-agnostic. The actual GPU upload lives in
+ * specific backends (e.g. `@murow/webgpu`).
  */
 
-import type { ParsedGltf } from '../3d/gltf-parser';
-import type { ParsedSpritesheet } from '../spritesheet/spritesheet-parser';
+import type { ParsedGltf } from '../gltf/parser';
+import type { ParsedSpritesheet } from '../spritesheet/parser';
 
 /**
  * Extracts the spec's `metadata` literal type.

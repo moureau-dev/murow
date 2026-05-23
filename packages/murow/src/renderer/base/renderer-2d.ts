@@ -1,7 +1,7 @@
 /**
  * Abstract base for 2D renderers. Defines the sprite-based rendering API.
  */
-import { BaseRenderer } from "./base-renderer";
+import { BaseRenderer } from "./renderer";
 import type {
     Camera2DState,
     Renderer2DOptions,
@@ -9,7 +9,7 @@ import type {
     SpriteOptions,
     SpritesheetHandle,
     SpritesheetSource,
-} from "./types";
+} from "../types";
 
 export abstract class Base2DRenderer extends BaseRenderer<Renderer2DOptions> {
     readonly maxSprites: number;

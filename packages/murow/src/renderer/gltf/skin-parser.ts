@@ -4,7 +4,7 @@
  * Pure functions that extract skeletal data from parsed glTF JSON + binary buffers.
  * No GPU resources — just typed arrays ready for the renderer/animation controller.
  */
-import { nodeToMat4, mat4MulNew, mat4IdentityNew } from '../core/math';
+import { nodeToMat4, mat4MulNew, mat4IdentityNew } from '../math';
 
 // --- Types ---
 

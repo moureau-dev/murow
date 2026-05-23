@@ -17,7 +17,7 @@
  * ```
  */
 
-import { PrefabBucket as BasePrefabBucket, type StringOr } from 'murow/renderer';
+import { BasePrefabBucket, type StringOr } from './index';
 import { parsers2d, parsers3d } from './parsers';
 import type {
     Prefab2D,

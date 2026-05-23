@@ -1,9 +1,8 @@
 /**
- * PrefabBucket — typed registry of reusable spawn templates.
- *
- * Construct with `'2d'` or `'3d'` to pick the spec/prefab universe. The mode
- * narrows what `add()` will accept (2D buckets can't hold GLTFs, 3D buckets
- * can't hold spritesheets).
+ * BasePrefabBucket — generic, renderer-agnostic registry of reusable spawn
+ * templates. Backends (e.g. `@murow/webgpu`) extend this with specialized
+ * spec/prefab unions; most users want the concrete `PrefabBucket` class
+ * exported alongside this one (see `./prefab-bucket-concrete.ts`).
  *
  * Lifecycle:
  *   1. `add()` / `addAll()` collect specs (sync, no I/O)
@@ -14,9 +13,6 @@
  * error once the bucket has been populated. The id-to-spec mapping is
  * threaded through generics so subclasses can narrow `get()`'s return type
  * to the specific prefab variant for that id (not just the union).
- *
- * Concrete spec/prefab unions and the spec→prefab parsing live in
- * the webgpu package, so this base stays renderer-agnostic.
  */
 
 export type PrefabMode = '2d' | '3d';
@@ -53,7 +49,7 @@ export type PrefabParser<Spec extends PrefabSpecBase = PrefabSpecBase, Prefab ex
 export type PrefabParserMap<Spec extends PrefabSpecBase, Prefab extends PrefabBase> =
     Record<string, PrefabParser<Spec, Prefab>>;
 
-export class PrefabBucket<
+export class BasePrefabBucket<
     M extends PrefabMode = PrefabMode,
     Spec extends PrefabSpecBase = PrefabSpecBase,
     Prefab extends PrefabBase = PrefabBase,
@@ -73,12 +69,12 @@ export class PrefabBucket<
     /** Add a single spec. Throws if id is a duplicate or if the bucket is already loaded. */
     add<const S extends Spec>(
         spec: S,
-    ): PrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }> {
+    ): BasePrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }> {
         if (this.prefabs) throw new Error(`PrefabBucket: cannot add after load() — bucket is frozen`);
         if (this.pendingIds.has(spec.id)) throw new Error(`PrefabBucket: duplicate id '${spec.id}'`);
         this.pending.push(spec);
         this.pendingIds.add(spec.id);
-        return this as unknown as PrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }>;
+        return this as unknown as BasePrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }>;
     }
 
     /**
@@ -87,7 +83,7 @@ export class PrefabBucket<
      */
     addAll<const Ss extends readonly Spec[]>(
         specs: Ss,
-    ): PrefabBucket<M, Spec, Prefab, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }> {
+    ): BasePrefabBucket<M, Spec, Prefab, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }> {
         if (this.prefabs) throw new Error(`PrefabBucket: cannot add after load() — bucket is frozen`);
         const seen = new Set<string>();
         for (const s of specs) {
@@ -100,7 +96,7 @@ export class PrefabBucket<
             this.pending.push(s);
             this.pendingIds.add(s.id);
         }
-        return this as unknown as PrefabBucket<M, Spec, Prefab, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }>;
+        return this as unknown as BasePrefabBucket<M, Spec, Prefab, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }>;
     }
 
     /** Load all pending specs in parallel. Idempotent if already loaded. */

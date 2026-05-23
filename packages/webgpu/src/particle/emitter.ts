@@ -23,7 +23,7 @@
  * ```
  */
 import { SimpleRNG } from 'murow/core/simple-rng';
-import type { SpriteHandle, SpritesheetHandle } from 'murow/renderer/types';
+import type { SpriteHandle, SpritesheetHandle } from 'murow/renderer';
 import type { WebGPU2DRenderer } from '../2d/renderer';
 
 export interface Range {

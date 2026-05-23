@@ -6,14 +6,13 @@
  * Splitting parse from upload lets callers fetch all spritesheets in parallel
  * (via `Promise.all`) before a renderer exists.
  */
-import type { SpriteUV } from 'murow/renderer/types';
+import type { SpriteUV, SpritesheetSource } from '../types';
 import {
     computeGridUVs,
     computeTexturePackerUVs,
     loadImage,
     type TexturePackerData,
-} from './spritesheet';
-import type { SpritesheetSource } from 'murow/renderer/types';
+} from './helpers';
 
 /** CPU-side result of parsing a spritesheet source. */
 export interface ParsedSpritesheet {

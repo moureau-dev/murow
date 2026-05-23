@@ -18,7 +18,7 @@ import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builde
 import { AnimComputeUniforms, InstanceAnimStateGPU } from '../../core/types';
 import type { TgpuRoot } from 'typegpu';
 import { packAnimationData, type PackedBuffers } from './packer';
-import type { PackedAnimationData } from '../gltf-skin-parser';
+import type { PackedAnimationData } from 'murow/renderer';
 
 const WORKGROUP_SIZE = 64;
 

@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { PrefabBucket, type PrefabSpecBase, type PrefabBase, type PrefabParserMap } from './prefab-bucket';
+import { BasePrefabBucket, type PrefabSpecBase, type PrefabBase, type PrefabParserMap } from './index';
 
 // --- Test fixtures ---
 
@@ -25,12 +25,12 @@ const parsers: PrefabParserMap<TestSpec, TestPrefab> = {
 };
 
 function makeBucket() {
-    return new PrefabBucket<'3d', TestSpec, TestPrefab>('3d', parsers);
+    return new BasePrefabBucket<'3d', TestSpec, TestPrefab>('3d', parsers);
 }
 
 // --- Tests ---
 
-describe('PrefabBucket', () => {
+describe('BasePrefabBucket', () => {
     describe('lifecycle', () => {
         test('starts unloaded with size 0', () => {
             const bucket = makeBucket();
@@ -202,8 +202,8 @@ describe('PrefabBucket', () => {
 
     describe('mode + parser registry', () => {
         test('exposes the mode passed to the constructor', () => {
-            const b2d = new PrefabBucket<'2d', TestSpec, TestPrefab>('2d', parsers);
-            const b3d = new PrefabBucket<'3d', TestSpec, TestPrefab>('3d', parsers);
+            const b2d = new BasePrefabBucket<'2d', TestSpec, TestPrefab>('2d', parsers);
+            const b3d = new BasePrefabBucket<'3d', TestSpec, TestPrefab>('3d', parsers);
             expect(b2d.mode).toBe('2d');
             expect(b3d.mode).toBe('3d');
         });
@@ -218,7 +218,7 @@ describe('PrefabBucket', () => {
             const syncParsers: PrefabParserMap<TestSpec, TestPrefab> = {
                 test: (spec) => ({ type: 'test', id: spec.id, doubled: spec.payload * 2 }),
             };
-            const bucket = new PrefabBucket<'3d', TestSpec, TestPrefab>('3d', syncParsers)
+            const bucket = new BasePrefabBucket<'3d', TestSpec, TestPrefab>('3d', syncParsers)
                 .add({ type: 'test', id: 'x', payload: 7 });
             await bucket.load();
             expect(bucket.get('x').doubled).toBe(14);

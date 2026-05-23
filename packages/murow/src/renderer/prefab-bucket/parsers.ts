@@ -3,9 +3,9 @@
  * Used by createPrefabBucket; not part of the public surface.
  */
 
-import type { PrefabParserMap } from 'murow/renderer';
-import { parseGltf } from '../3d/gltf-parser';
-import { parseSpritesheet } from '../spritesheet/spritesheet-parser';
+import type { PrefabParserMap } from './index';
+import { parseGltf } from '../gltf/parser';
+import { parseSpritesheet } from '../spritesheet/parser';
 import type {
     Prefab2D,
     Prefab2DSpec,

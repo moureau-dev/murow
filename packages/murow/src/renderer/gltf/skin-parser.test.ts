@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { parseSkin, getNodeTRS } from './gltf-skin-parser';
+import { parseSkin, getNodeTRS } from './skin-parser';
 
 /**
  * Minimal accessor reader for tests — we construct typed-array data inline

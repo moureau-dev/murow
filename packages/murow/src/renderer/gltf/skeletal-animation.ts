@@ -16,8 +16,8 @@
  * // outputMatrices is a Float32Array view into the bone matrix buffer
  * ```
  */
-import type { SkinData, AnimationClipData, AnimationChannel } from './gltf-skin-parser';
-import { trsToMat4, mat4Mul } from '../core/math';
+import type { SkinData, AnimationClipData, AnimationChannel } from './skin-parser';
+import { trsToMat4, mat4Mul } from '../math';
 
 export interface SkeletalClip {
     readonly id: number;

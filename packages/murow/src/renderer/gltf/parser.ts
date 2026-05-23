@@ -9,7 +9,7 @@
  *   - tests verify parsing without a WebGPU device
  *   - parsing run in parallel across many URLs via `Promise.all`
  */
-import { nodeToMat4 } from '../core/math';
+import { nodeToMat4 } from '../math';
 import {
     parseSkin,
     parseAnimations,
@@ -17,7 +17,7 @@ import {
     type SkinData,
     type AnimationClipData,
     type PrimitiveSkinAttributes,
-} from './gltf-skin-parser';
+} from './skin-parser';
 
 /** Per-primitive CPU data ready for upload. */
 export interface ParsedGltfPrimitive {

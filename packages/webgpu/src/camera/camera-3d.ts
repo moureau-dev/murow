@@ -5,7 +5,7 @@
  */
  import { lerp } from "murow/core/lerp";
  import { Ray3D } from "murow/core/ray";
- import type { Camera3DState } from 'murow/renderer/types';
+ import type { Camera3DState } from 'murow/renderer';
 
 export class Camera3D implements Camera3DState {
     position: [number, number, number] = [0, 5, -10];
