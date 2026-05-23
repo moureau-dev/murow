@@ -37,7 +37,7 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             skinnedPartCount,
             jointCount,
             totalVertexCount,
-            metadata: spec.metadata,
+            metadata: spec.metadata ?? {},
         };
 
         // Animation views — present only when the spec declared a non-empty list,
@@ -62,7 +62,7 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             size: spec.size,
             step: spec.step,
             lineWidth: spec.lineWidth,
-            metadata: spec.metadata as any,
+            metadata: (spec.metadata ?? {}) as any,
         };
     },
 };
@@ -83,7 +83,7 @@ export const parsers2d: PrefabParserMap<Prefab2DSpec, Prefab2D> = {
             frameCount: parsed.uvs.length,
             width: parsed.width,
             height: parsed.height,
-            metadata: spec.metadata as any,
+            metadata: (spec.metadata ?? {}) as any,
         };
     },
 };

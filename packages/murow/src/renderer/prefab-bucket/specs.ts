@@ -14,15 +14,19 @@ import type { ParsedGltf } from '../gltf/parser';
 import type { ParsedSpritesheet } from '../spritesheet/parser';
 
 /**
- * Extracts the spec's `metadata` literal type.
+ * Extracts the spec's `metadata` literal type for the parsed prefab.
+ * Missing metadata defaults to `{}` at parse time, so the parsed prefab's
+ * `metadata` field is always present — no `?.` needed.
+ *
  * - Required field → exact literal type (e.g. `{ scale: 0.5 }`)
- * - Optional field → field type | undefined (e.g. `{ scale: number } | undefined`)
- * - Absent → `undefined`
+ * - Optional field → `NonNullable<M>` (you know the field is there at runtime,
+ *                    but its shape isn't pinned because the spec didn't pin it)
+ * - Absent         → `Record<string, unknown>` (default open shape)
  */
 type MetadataOf<S> =
     S extends { readonly metadata: infer M } ? M :
-    S extends { readonly metadata?: infer M } ? M | undefined :
-    undefined;
+    S extends { readonly metadata?: infer M } ? NonNullable<M> :
+    Record<string, unknown>;
 
 // ============================================================================
 // 3D

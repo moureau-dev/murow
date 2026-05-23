@@ -1,5 +1,5 @@
-import { GameLoop, SimpleRNG } from 'murow';
-import { InstanceHandle, WebGPU3DRenderer, createPrefabBucket, type GltfPrefab, type PrefabBucket3D } from 'murow/webgpu';
+import { GameLoop, PrefabBucket, SimpleRNG, type GltfPrefab } from 'murow';
+import { InstanceHandle, WebGPU3DRenderer } from 'murow/webgpu';
 
 import type { Control, ControlValues, Program, ProgramHandle } from '..';
 
@@ -15,17 +15,24 @@ const controls: Control[] = [
     { kind: 'number', key: 'far', label: 'Far', min: 1, max: 1000, step: 1, default: DEFAULT_FAR },
 ];
 
-interface PrefabConfig {
-    id: PrefabId;
-    url: string;
-    speed?: number;
-    scale: number;
-    animations: string[];
-}
+const bucket = new PrefabBucket('3d')
+  // .add({
+  //    type: 'gltf',
+  //    id: 'soldier',
+  //    src: 'assets/soldier.glb',
+  //    metadata: {
+  //        scale: 0.01,
+  //    },
+  //    animations: ['Idle', 'Walking'],
+  // })
+  .add({
+      type: 'grid',
+      id: 'floor',
+      size: 20,
+      step: 0.33,
+      lineWidth: 0.001,
+  });
 
-type PrefabId = ''
-
-const prefabConfigs: PrefabConfig[] = [];
 
 export const gltf: Program = {
     name: '3D glTF',
@@ -34,66 +41,60 @@ export const gltf: Program = {
     async init(canvas: HTMLCanvasElement, stats: HTMLElement, values: ControlValues): Promise<ProgramHandle> {
         const instances = Math.max(1, Math.floor(values.instances ?? DEFAULT_INSTANCES));
 
-        // Declare all prefabs upfront. Load fetches + parses everything in parallel.
-        // Cast pins the typed-id union (`bucket.get` would otherwise be `never`-typed
-        // because the loop hides literals from the compiler).
-        const bucket = createPrefabBucket('3d') as PrefabBucket3D<PrefabId>;
-        for (const cfg of prefabConfigs) {
-            bucket.add({ type: 'gltf', id: cfg.id, url: cfg.url, animations: cfg.animations });
-        }
-        bucket.add({ type: 'grid', id: 'floor', size: 20, step: 0.33, lineWidth: 0.001 });
         await bucket.load();
 
-        // Renderer self-sizes from the bucket: maxSkinnedInstances = instances * maxSkinnedPartsPerPrefab,
-        // maxBonesPerSkin = max jointCount across prefabs. No more magic numbers.
         const renderer = new WebGPU3DRenderer(canvas, {
-            maxModels: prefabConfigs.length + 10,
             clearColor: [0.15, 0.15, 0.2, 1],
             autoResize: true,
             prefabs: bucket,
             maxInstances: instances,
+            maxBonesPerSkin: 64,
         });
 
         await renderer.init();
 
         const rng = new SimpleRNG(1212121);
 
-        const playRandom = (cfg: PrefabConfig, instance: InstanceHandle, prefab: GltfPrefab) => {
+        const playRandom = (instance: InstanceHandle, prefab: GltfPrefab) => {
+            if (!prefab.animationList?.length) return;
+
+            const list = prefab.animationList ?? [];
+            if (!list.length) return;
+
             const next = (animationName?: string) => {
-                const randomAnimation = rng.pick(cfg.animations);
+                const randomAnimation = rng.pick([...list]);
                 const name = rng.rand() > 0.5 ? animationName ?? randomAnimation : randomAnimation;
 
                 try {
                     instance.play?.(name, {
                         loop: true,
-                        speed: cfg.speed,
                         crossfade: 0.15,
                         onEnd: () => next(animationName) // schedule next animation without growing call stack
                     });
                 } catch (err) {
                     console.error(err);
-                    console.error(`Available animations: `, prefab.animations);
+                    console.error(`Available animations: `, list);
                 }
             };
 
             next();
         };
 
+        const gltfPrefabs = bucket.getAllByType('gltf');
+
         for (let i = 0; i < instances; i++) {
-            const cfg = rng.pick(prefabConfigs);
-            const prefab = bucket.get(cfg.id) as GltfPrefab;
+            const prefab = rng.pick(gltfPrefabs);
+            if (!prefab) continue;
+
+            const scale = (prefab.metadata.scale as number | undefined) ?? 1;
 
             const instance = renderer.addInstance({
                 model: prefab,
-                x: rng.rand() * 20,
-                y: 0,
-                z: rng.rand() * 20,
-                scaleX: cfg.scale,
-                scaleY: cfg.scale,
-                scaleZ: cfg.scale,
+                position: [rng.rand() * 20, 0, rng.rand() * 20],
+                scale,
             });
 
-            playRandom(cfg, instance, prefab);
+            playRandom(instance, prefab);
         }
 
         // Grid floor
@@ -136,8 +137,8 @@ export const gltf: Program = {
             if (tick % loop.ticker.rate !== 0) return;
 
             let totalVertexCount = 0;
-            for (const cfg of prefabConfigs) {
-                totalVertexCount += (bucket.get(cfg.id) as GltfPrefab).totalVertexCount;
+            for (const p of gltfPrefabs) {
+                totalVertexCount += p.totalVertexCount;
             }
             stats.textContent = `FPS: ${loop.fps} | Vertices: ${totalVertexCount} | Instantiations: ${instances} (${instances * totalVertexCount} vertexes)`;
         });
