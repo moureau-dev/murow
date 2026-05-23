@@ -213,12 +213,13 @@ export interface WebGPU3DRendererOptions extends Renderer3DOptions {
      */
     maxInstances?: number;
     /**
-     * Max distance from the camera at which the GPU skeletal-animation
-     * compute kernel runs for an instance. Instances farther than this still
-     * render (with their last-computed bone matrices) and their CPU
-     * animation clocks keep ticking. Set to `Infinity` to disable. Default 50.
+     * Max distance (world units) at which skeletal animation is computed for
+     * skinned instances. Past this, instances still render but reuse their
+     * last bone matrices; their internal animation clocks keep ticking on
+     * CPU. See `renderer.setAnimationCullDistance` to change at runtime.
+     * Set to `Infinity` to disable. Default 50.
      */
-    skinningCullDistance?: number;
+    animationCullDistance?: number;
 }
 
 export class WebGPU3DRenderer extends Base3DRenderer {
@@ -330,7 +331,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private nextBoneOffset = 0;
     private readonly maxSkinnedInstances: number;
     private readonly maxBonesPerSkin: number;
-    private skinningCullDistanceSq: number;
+    private animationCullDistanceSq: number;
 
     // Raw skinned GPU buffers
     private rawSkinnedDynamicBuffer!: GPUBuffer;
@@ -378,8 +379,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 : 5000);
         this.maxBonesPerSkin = options.maxBonesPerSkin
             ?? (bucketStats ? Math.max(1, bucketStats.maxJointCount) : 64);
-        const cullDist = options.skinningCullDistance ?? 50;
-        this.skinningCullDistanceSq = cullDist * cullDist;
+        const cullDist = options.animationCullDistance ?? 50;
+        this.animationCullDistanceSq = cullDist * cullDist;
         this.maxTotalBones = this.maxSkinnedInstances * this.maxBonesPerSkin * 2;
         this.updatedBoneOffsets = new Uint8Array(this.maxTotalBones);
 
@@ -704,14 +705,27 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     }
 
     /**
-     * Max distance from the camera at which skeletal-animation compute runs.
-     * Hot-swappable, no allocation impact. See `WebGPU3DRendererOptions.skinningCullDistance`.
+     * Set the maximum distance (in world units) at which the renderer keeps
+     * computing skeletal animation. Skinned instances farther than this are
+     * still drawn, but with their last-computed bone matrices instead of
+     * fresh ones, which saves GPU compute work. Their internal animation
+     * clocks keep ticking on CPU, so when they come back into range they
+     * resume in sync.
+     *
+     * Lower values trade visual smoothness on distant characters for FPS.
+     * Pass `Infinity` to disable culling entirely (always animate).
+     *
+     * Safe to call any time; takes effect on the next frame.
+     *
+     * @param distance Max distance to animate at, in world units.
      */
-    get skinningCullDistance(): number {
-        return Math.sqrt(this.skinningCullDistanceSq);
+    setAnimationCullDistance(distance: number): void {
+        this.animationCullDistanceSq = distance * distance;
     }
-    set skinningCullDistance(value: number) {
-        this.skinningCullDistanceSq = value * value;
+
+    /** Current animation cull distance (in world units). See `setAnimationCullDistance`. */
+    get animationCullDistance(): number {
+        return Math.sqrt(this.animationCullDistanceSq);
     }
 
     /**
@@ -1635,7 +1649,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const dv = this.gpuInstDV;
         const camPos = this.camera.position;
         const camX = camPos[0], camY = camPos[1], camZ = camPos[2];
-        const cullDistSq = this.skinningCullDistanceSq;
+        const cullDistSq = this.animationCullDistanceSq;
 
         for (let slot = 0; slot < this.maxSkinnedInstances; slot++) {
             const animState = this.skinnedAnimStates[slot];
