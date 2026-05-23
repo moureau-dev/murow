@@ -215,6 +215,25 @@ export function parseAnimations(
 }
 
 /** Normalize per-vertex weights to sum to 1. */
+/**
+ * Decode a WEIGHTS_0 accessor into a Float32Array. glTF allows weights as
+ * float, normalized u8, or normalized u16; this folds all three into floats.
+ * Always returns a fresh array so the caller can mutate it freely.
+ */
+function decodeWeights(data: Float32Array | Uint16Array | Uint32Array | Uint8Array | Int8Array | Int16Array): Float32Array {
+    if (data instanceof Uint8Array) {
+        const out = new Float32Array(data.length);
+        for (let i = 0; i < data.length; i++) out[i] = data[i] / 255;
+        return out;
+    }
+    if (data instanceof Uint16Array) {
+        const out = new Float32Array(data.length);
+        for (let i = 0; i < data.length; i++) out[i] = data[i] / 65535;
+        return out;
+    }
+    return new Float32Array(data);
+}
+
 function normalizeWeights(weights: Float32Array): void {
     const vertexCount = weights.length / 4;
     for (let v = 0; v < vertexCount; v++) {
@@ -246,23 +265,7 @@ export function parsePrimitiveSkinAttributes(
         ? jointsAccess.data
         : new Uint16Array(jointsAccess.data);
 
-    let weights: Float32Array;
-    if (weightsAccess.data instanceof Float32Array) {
-        weights = new Float32Array(weightsAccess.data);
-    } else if (weightsAccess.data instanceof Uint8Array) {
-        weights = new Float32Array(weightsAccess.data.length);
-        for (let i = 0; i < weightsAccess.data.length; i++) {
-            weights[i] = weightsAccess.data[i] / 255;
-        }
-    } else if (weightsAccess.data instanceof Uint16Array) {
-        weights = new Float32Array(weightsAccess.data.length);
-        for (let i = 0; i < weightsAccess.data.length; i++) {
-            weights[i] = weightsAccess.data[i] / 65535;
-        }
-    } else {
-        weights = new Float32Array(weightsAccess.data as any);
-    }
-
+    const weights = decodeWeights(weightsAccess.data);
     normalizeWeights(weights);
 
     return { joints, weights };

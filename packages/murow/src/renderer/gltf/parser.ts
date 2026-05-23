@@ -101,6 +101,66 @@ function remapSkinAttributes(
     return attrs;
 }
 
+/** Extract per-primitive vertex attributes from glTF accessors. */
+function extractPrimitiveAttributes(
+    primitive: any,
+    getAccessorData: (index: number) => { data: Float32Array | Uint16Array | Uint32Array | Uint8Array; count: number; elementSize: number },
+): {
+    positions: Float32Array;
+    normals: Float32Array | undefined;
+    uvs: Float32Array | undefined;
+    indices: Uint16Array | Uint32Array | undefined;
+} {
+    const positions = new Float32Array(getAccessorData(primitive.attributes.POSITION).data as Float32Array);
+
+    const normals = primitive.attributes.NORMAL !== undefined
+        ? new Float32Array(getAccessorData(primitive.attributes.NORMAL).data as Float32Array)
+        : undefined;
+
+    const uvs = primitive.attributes.TEXCOORD_0 !== undefined
+        ? new Float32Array(getAccessorData(primitive.attributes.TEXCOORD_0).data as Float32Array)
+        : undefined;
+
+    let indices: Uint16Array | Uint32Array | undefined;
+    if (primitive.indices !== undefined) {
+        const idxAccess = getAccessorData(primitive.indices);
+        indices = idxAccess.data.length > 65535
+            ? new Uint32Array(idxAccess.data)
+            : new Uint16Array(idxAccess.data);
+    }
+
+    return { positions, normals, uvs, indices };
+}
+
+/**
+ * Bake a column-major mat4 into positions (in place) and re-orient + renormalize
+ * normals. Used to fold a non-skinned mesh node's transform into its vertices
+ * so the renderer doesn't need to know about per-mesh node transforms.
+ */
+function bakeTransformIntoVertices(positions: Float32Array, normals: Float32Array | undefined, mm: Float32Array): void {
+    const vertexCount = positions.length / 3;
+    for (let v = 0; v < vertexCount; v++) {
+        const o = v * 3;
+        const px = positions[o], py = positions[o + 1], pz = positions[o + 2];
+        positions[o]     = mm[0] * px + mm[4] * py + mm[8]  * pz + mm[12];
+        positions[o + 1] = mm[1] * px + mm[5] * py + mm[9]  * pz + mm[13];
+        positions[o + 2] = mm[2] * px + mm[6] * py + mm[10] * pz + mm[14];
+
+        if (normals) {
+            const nx = normals[o], ny = normals[o + 1], nz = normals[o + 2];
+            const tnx = mm[0] * nx + mm[4] * ny + mm[8]  * nz;
+            const tny = mm[1] * nx + mm[5] * ny + mm[9]  * nz;
+            const tnz = mm[2] * nx + mm[6] * ny + mm[10] * nz;
+            const len = Math.sqrt(tnx * tnx + tny * tny + tnz * tnz);
+            if (len > 0) {
+                normals[o]     = tnx / len;
+                normals[o + 1] = tny / len;
+                normals[o + 2] = tnz / len;
+            }
+        }
+    }
+}
+
 /** Per-primitive CPU data ready for upload. */
 export interface ParsedGltfPrimitive {
     positions: Float32Array;
@@ -125,42 +185,52 @@ export interface ParsedGltf {
 }
 
 /**
+ * Decode a fetched glTF payload — either a JSON .gltf or a binary .glb container —
+ * into the parsed JSON object and (for .glb) the embedded binary chunk.
+ */
+function decodeGltfContainer(arrayBuffer: ArrayBuffer, url: string): { gltf: any; glbBinaryChunk: ArrayBuffer | null } {
+    const GLB_MAGIC = 0x46546C67;       // "glTF"
+    const CHUNK_JSON = 0x4E4F534A;      // "JSON"
+    const CHUNK_BIN = 0x004E4942;       // "BIN\0"
+
+    const magic = new Uint32Array(arrayBuffer, 0, 1)[0];
+    if (magic !== GLB_MAGIC) {
+        return { gltf: JSON.parse(new TextDecoder().decode(arrayBuffer)), glbBinaryChunk: null };
+    }
+
+    let gltf: any;
+    let glbBinaryChunk: ArrayBuffer | null = null;
+    let offset = 12; // past 12-byte GLB header
+
+    while (offset < arrayBuffer.byteLength) {
+        const chunkLength = new Uint32Array(arrayBuffer, offset, 1)[0];
+        const chunkType = new Uint32Array(arrayBuffer, offset + 4, 1)[0];
+        offset += 8;
+
+        if (chunkType === CHUNK_JSON) {
+            const jsonBytes = new Uint8Array(arrayBuffer, offset, chunkLength);
+            gltf = JSON.parse(new TextDecoder().decode(jsonBytes));
+        } else if (chunkType === CHUNK_BIN) {
+            glbBinaryChunk = arrayBuffer.slice(offset, offset + chunkLength);
+        }
+
+        offset += chunkLength;
+    }
+
+    if (!gltf) throw new Error(`Invalid GLB: no JSON chunk in ${url}`);
+    return { gltf, glbBinaryChunk };
+}
+
+/**
  * Parse a glTF / .glb file from a URL into CPU-side data.
  * Does no GPU work. Safe to call in parallel; safe to call before a renderer exists.
  */
 export async function parseGltf(url: string, opts?: { animations?: string[] }): Promise<ParsedGltf> {
     const response = await fetch(url);
     const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
-
-    let gltf: any;
-    let glbBinaryChunk: ArrayBuffer | null = null;
-
     const arrayBuffer = await response.arrayBuffer();
-    const magic = new Uint32Array(arrayBuffer, 0, 1)[0];
 
-    if (magic === 0x46546C67) {
-        // GLB: magic "glTF" (little-endian 0x46546C67)
-        let offset = 12; // past header
-
-        while (offset < arrayBuffer.byteLength) {
-            const chunkLength = new Uint32Array(arrayBuffer, offset, 1)[0];
-            const chunkType = new Uint32Array(arrayBuffer, offset + 4, 1)[0];
-            offset += 8;
-
-            if (chunkType === 0x4E4F534A) {
-                const jsonBytes = new Uint8Array(arrayBuffer, offset, chunkLength);
-                gltf = JSON.parse(new TextDecoder().decode(jsonBytes));
-            } else if (chunkType === 0x004E4942) {
-                glbBinaryChunk = arrayBuffer.slice(offset, offset + chunkLength);
-            }
-
-            offset += chunkLength;
-        }
-
-        if (!gltf) throw new Error(`Invalid GLB: no JSON chunk in ${url}`);
-    } else {
-        gltf = JSON.parse(new TextDecoder().decode(arrayBuffer));
-    }
+    const { gltf, glbBinaryChunk } = decodeGltfContainer(arrayBuffer, url);
 
     if (!gltf.meshes?.length) throw new Error(`No meshes found in ${url}`);
 
@@ -281,51 +351,10 @@ export async function parseGltf(url: string, opts?: { animations?: string[] }): 
         }
 
         for (const primitive of mesh.primitives) {
-            const posAccess = getAccessorData(primitive.attributes.POSITION);
-            const positions = new Float32Array(posAccess.data as Float32Array);
+            const { positions, normals, uvs, indices } = extractPrimitiveAttributes(primitive, getAccessorData);
 
-            let normals: Float32Array | undefined;
-            if (primitive.attributes.NORMAL !== undefined) {
-                normals = new Float32Array(getAccessorData(primitive.attributes.NORMAL).data as Float32Array);
-            }
-
-            let uvs: Float32Array | undefined;
-            if (primitive.attributes.TEXCOORD_0 !== undefined) {
-                uvs = new Float32Array(getAccessorData(primitive.attributes.TEXCOORD_0).data as Float32Array);
-            }
-
-            let indices: Uint16Array | Uint32Array | undefined;
-            if (primitive.indices !== undefined) {
-                const idxAccess = getAccessorData(primitive.indices);
-                indices = idxAccess.data.length > 65535
-                    ? new Uint32Array(idxAccess.data)
-                    : new Uint16Array(idxAccess.data);
-            }
-
-            // Bake mesh-node transform into positions/normals (non-skinned only)
             if (thisMeshNodeMatrix && !isSkinned) {
-                const mm = thisMeshNodeMatrix;
-                const vertexCount = positions.length / 3;
-                for (let v = 0; v < vertexCount; v++) {
-                    const o = v * 3;
-                    const px = positions[o], py = positions[o + 1], pz = positions[o + 2];
-                    positions[o]     = mm[0] * px + mm[4] * py + mm[8]  * pz + mm[12];
-                    positions[o + 1] = mm[1] * px + mm[5] * py + mm[9]  * pz + mm[13];
-                    positions[o + 2] = mm[2] * px + mm[6] * py + mm[10] * pz + mm[14];
-
-                    if (normals) {
-                        const nx = normals[o], ny = normals[o + 1], nz = normals[o + 2];
-                        const tnx = mm[0] * nx + mm[4] * ny + mm[8]  * nz;
-                        const tny = mm[1] * nx + mm[5] * ny + mm[9]  * nz;
-                        const tnz = mm[2] * nx + mm[6] * ny + mm[10] * nz;
-                        const len = Math.sqrt(tnx * tnx + tny * tny + tnz * tnz);
-                        if (len > 0) {
-                            normals[o] = tnx / len;
-                            normals[o + 1] = tny / len;
-                            normals[o + 2] = tnz / len;
-                        }
-                    }
-                }
+                bakeTransformIntoVertices(positions, normals, thisMeshNodeMatrix);
             }
 
             let texture: ImageBitmap | undefined;
