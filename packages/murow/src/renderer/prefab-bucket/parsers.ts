@@ -22,7 +22,7 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
         //   - []               → load zero clips, no animationList (static skinned model)
         //   - ['Run', 'Idle']  → load only those, animationList = ['Run', 'Idle'] (literal)
         const parsed = await parseGltf(
-            spec.url,
+            spec.src,
             spec.animations !== undefined ? { animations: [...spec.animations] } : undefined,
         );
         const skinnedPartCount = parsed.primitives.filter(p => p.skinned).length;
@@ -71,7 +71,7 @@ export const parsers2d: PrefabParserMap<Prefab2DSpec, Prefab2D> = {
     spritesheet: async (spec) => {
         if (spec.type !== 'spritesheet') throw new Error('spritesheet parser given non-spritesheet spec');
         const parsed = await parseSpritesheet({
-            image: spec.url,
+            image: spec.src,
             frameWidth: spec.frameWidth,
             frameHeight: spec.frameHeight,
             data: spec.data,

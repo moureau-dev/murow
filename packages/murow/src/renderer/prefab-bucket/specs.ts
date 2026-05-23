@@ -37,7 +37,7 @@ export interface GltfSpec {
     /** Unique identifier for the prefab. */
     readonly id: string;
     /** URL to the .gltf or .glb file. */
-    readonly url: string;
+    readonly src: string;
     /** Optional whitelist of animation clip names to keep. Defaults to all. Filter them here and get type-safety and more performance. */
     readonly animations?: readonly string[];
     /** Optional user-defined sidecar data (scale, speed, gameplay hints, etc). */
@@ -120,7 +120,8 @@ export type Prefab3D = GltfPrefab | GridPrefab;
 export interface SpritesheetSpec {
     readonly type: 'spritesheet';
     readonly id: string;
-    readonly url: string;
+    /** URL to the image. */
+    readonly src: string;
     readonly frameWidth?: number;
     readonly frameHeight?: number;
     /** URL to a texture-packer JSON file. Mutually exclusive with frameWidth/frameHeight. */

@@ -39,7 +39,7 @@ const bucket = new PrefabBucket('3d')
   .add({
     type: 'gltf',
     id: 'hero',
-    url: '/hero.glb',
+    src: '/hero.glb',
     animations: ['Idle', 'Run'],
     metadata: { scale: 0.01 },
   })
@@ -80,7 +80,7 @@ The mode narrows what `add()` accepts and what `get()` returns. Type-safe by con
 Every spec can carry user-defined `metadata: Record<string, unknown>`. Literal types preserved through to the prefab:
 
 ```typescript
-.add({ type: 'gltf', id: 'hero', url: '/hero.glb', metadata: { scale: 0.01, hp: 100 } });
+.add({ type: 'gltf', id: 'hero', src: '/hero.glb', metadata: { scale: 0.01, hp: 100 } });
 //                              bucket.get('hero').metadata is { scale: 0.01, hp: 100 }
 ```
 

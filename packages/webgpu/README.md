@@ -50,7 +50,7 @@ const prefabs = new PrefabBucket('2d')
   .add({
     type: 'spritesheet',
     id: 'characters',
-    url: '/assets/characters.png',
+    src: '/assets/characters.png',
     frameWidth: 32,
     frameHeight: 32,
   });
@@ -81,7 +81,7 @@ const prefabs = new PrefabBucket('3d')
   .add({
     type: 'gltf',
     id: 'hero',
-    url: '/character.glb',
+    src: '/character.glb',
     animations: ['Idle', 'Run', 'Attack'],
     metadata: { scale: 0.01 },
   });

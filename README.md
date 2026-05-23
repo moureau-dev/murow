@@ -34,7 +34,7 @@ const prefabs = new PrefabBucket('3d')
   .add({
     type: 'gltf',
     id: 'hero',
-    url: '/character.glb',
+    src: '/character.glb',
     animations: ['Idle', 'Run'],
     metadata: { scale: 0.01 },
   });
