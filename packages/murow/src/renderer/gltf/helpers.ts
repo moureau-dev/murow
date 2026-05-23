@@ -4,15 +4,19 @@
  */
 import type { SkinData, AccessorReader } from './skin-parser';
 
+// GLB file signature and chunk-type tags (glTF 2.0 spec § 4.4.1).
+const GLB_MAGIC = fourCC('glTF');
+const CHUNK_JSON = fourCC('JSON');
+const CHUNK_BIN = fourCC('BIN\0');
+
+/** Largest value representable as a 16-bit unsigned integer. */
+const UINT16_MAX = 0xFFFF;
+
 /**
  * Decode a fetched glTF payload — either a JSON .gltf or a binary .glb container —
  * into the parsed JSON object and (for .glb) the embedded binary chunk.
  */
 export function decodeGltfContainer(arrayBuffer: ArrayBuffer, url: string): { gltf: any; glbBinaryChunk: ArrayBuffer | null } {
-    const GLB_MAGIC = 0x46546C67;       // "glTF"
-    const CHUNK_JSON = 0x4E4F534A;      // "JSON"
-    const CHUNK_BIN = 0x004E4942;       // "BIN\0"
-
     const magic = new Uint32Array(arrayBuffer, 0, 1)[0];
     if (magic !== GLB_MAGIC) {
         return { gltf: JSON.parse(new TextDecoder().decode(arrayBuffer)), glbBinaryChunk: null };
@@ -152,7 +156,7 @@ export function extractPrimitiveAttributes(
     let indices: Uint16Array | Uint32Array | undefined;
     if (primitive.indices !== undefined) {
         const idxAccess = getAccessorData(primitive.indices);
-        indices = idxAccess.data.length > 65535
+        indices = idxAccess.data.length > UINT16_MAX
             ? new Uint32Array(idxAccess.data)
             : new Uint16Array(idxAccess.data);
     }
@@ -187,4 +191,9 @@ export function bakeTransformIntoVertices(positions: Float32Array, normals: Floa
             }
         }
     }
+}
+
+/** 4-char ASCII tag -> little-endian u32, matching how GLB stores its magic and chunk types. */
+function fourCC(s: string): number {
+    return s.charCodeAt(0) | (s.charCodeAt(1) << 8) | (s.charCodeAt(2) << 16) | (s.charCodeAt(3) << 24);
 }
