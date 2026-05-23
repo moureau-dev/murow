@@ -19,6 +19,88 @@ import {
     type PrimitiveSkinAttributes,
 } from './skin-parser';
 
+/** Validate that all skins in the file are equivalent and build joint remaps. */
+function validateAndBuildSkinRemaps(
+    gltf: any,
+    canonicalSkinIndex: number,
+    skinData: SkinData,
+    skinJointRemaps: Map<number, Uint16Array>,
+    getAccessorData: (index: number) => any
+): void {
+    const canonicalNodeToJoint = new Map<number, number>();
+    for (let j = 0; j < skinData.jointCount; j++) {
+        canonicalNodeToJoint.set(skinData.jointNodeIndices[j], j);
+    }
+    const canonicalIbm = skinData.inverseBindMatrices;
+
+    const referencedSkins = new Set<number>();
+    for (const n of gltf.nodes) {
+        if (n.mesh !== undefined && n.skin !== undefined) referencedSkins.add(n.skin);
+    }
+
+    for (const otherIdx of referencedSkins) {
+        if (otherIdx === canonicalSkinIndex) continue;
+        const otherSkin = gltf.skins[otherIdx];
+        if (!otherSkin) continue;
+        const otherJoints: number[] = otherSkin.joints;
+
+        if (otherJoints.length !== skinData.jointCount) {
+            throw new Error(
+                `glTF has incompatible skins (skin ${otherIdx} has ${otherJoints.length} joints, ` +
+                `canonical skin ${canonicalSkinIndex} has ${skinData.jointCount}). ` +
+                `Multi-skeleton models are not supported yet.`
+            );
+        }
+
+        const remap = new Uint16Array(otherJoints.length);
+        for (let j = 0; j < otherJoints.length; j++) {
+            const canonJ = canonicalNodeToJoint.get(otherJoints[j]);
+            if (canonJ === undefined) {
+                throw new Error(
+                    `glTF skin ${otherIdx} references node ${otherJoints[j]} which is not a joint in ` +
+                    `canonical skin ${canonicalSkinIndex}. Multi-skeleton models are not supported yet.`
+                );
+            }
+            remap[j] = canonJ;
+        }
+
+        const otherIbmAccess = getAccessorData(otherSkin.inverseBindMatrices);
+        const otherIbm = otherIbmAccess.data as Float32Array;
+        const EPS = 1e-4;
+        for (let j = 0; j < otherJoints.length; j++) {
+            const canonJ = remap[j];
+            for (let k = 0; k < 16; k++) {
+                if (Math.abs(otherIbm[j * 16 + k] - canonicalIbm[canonJ * 16 + k]) > EPS) {
+                    throw new Error(
+                        `glTF skin ${otherIdx} has different inverse bind matrices than canonical skin ` +
+                        `${canonicalSkinIndex}. Multi-skeleton models are not supported yet.`
+                    );
+                }
+            }
+        }
+
+        skinJointRemaps.set(otherIdx, remap);
+    }
+}
+
+/** Remap joint indices if the mesh uses a non-canonical skin. */
+function remapSkinAttributes(
+    attrs: { joints: Uint16Array; weights: Float32Array },
+    meshSkinIndex: number | undefined,
+    canonicalSkinIndex: number | undefined,
+    skinJointRemaps: Map<number, Uint16Array>
+): { joints: Uint16Array; weights: Float32Array } {
+    const remap = meshSkinIndex !== canonicalSkinIndex ? skinJointRemaps.get(meshSkinIndex!) : undefined;
+    if (remap) {
+        const remapped = new Uint16Array(attrs.joints.length);
+        for (let i = 0; i < attrs.joints.length; i++) {
+            remapped[i] = remap[attrs.joints[i]];
+        }
+        return { joints: remapped, weights: attrs.weights };
+    }
+    return attrs;
+}
+
 /** Per-primitive CPU data ready for upload. */
 export interface ParsedGltfPrimitive {
     positions: Float32Array;
@@ -155,20 +237,20 @@ export async function parseGltf(url: string, opts?: { animations?: string[] }): 
         return undefined;
     };
 
-    // First mesh node — used to look up the skin
-    const meshNodeIndex = gltf.nodes?.findIndex((n: any) => n.mesh !== undefined) ?? -1;
-
-    // Detect skin + parse animations
-    const skinIndex = meshNodeIndex !== -1 ? gltf.nodes?.[meshNodeIndex]?.skin : undefined;
+    const skinnedMeshNodeIndex = gltf.nodes?.findIndex((n: any) => n.mesh !== undefined && n.skin !== undefined) ?? -1;
+    const canonicalSkinIndex = skinnedMeshNodeIndex !== -1 ? gltf.nodes[skinnedMeshNodeIndex].skin : undefined;
     let skinData: SkinData | null = null;
     let animClips: AnimationClipData[] = [];
+    const skinJointRemaps = new Map<number, Uint16Array>();
 
-    if (skinIndex !== undefined && gltf.skins?.[skinIndex]) {
-        skinData = parseSkin(gltf, skinIndex, getAccessorData);
+    if (canonicalSkinIndex !== undefined && gltf.skins?.[canonicalSkinIndex]) {
+        skinData = parseSkin(gltf, canonicalSkinIndex, getAccessorData);
         animClips = parseAnimations(gltf, skinData, getAccessorData);
         if (opts?.animations) {
             animClips = animClips.filter(clip => opts.animations!.includes(clip.name));
         }
+
+        validateAndBuildSkinRemaps(gltf, canonicalSkinIndex, skinData, skinJointRemaps, getAccessorData);
     }
 
     // Collect mesh node indices in order
@@ -260,7 +342,7 @@ export async function parseGltf(url: string, opts?: { animations?: string[] }): 
             if (isSkinned) {
                 const attrs = parsePrimitiveSkinAttributes(primitive, getAccessorData);
                 if (attrs) {
-                    skinAttrs = attrs;
+                    skinAttrs = remapSkinAttributes(attrs, meshSkinIndex, canonicalSkinIndex, skinJointRemaps);
                     skinned = true;
                 }
             }

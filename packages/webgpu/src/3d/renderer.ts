@@ -336,13 +336,13 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         // Derive skinned-budget sizing from the bucket when present; explicit options win.
         //
         // The auto-sized formula is `maxInstances × parts × bonesPerSkin × 128 bytes` which
-        // explodes for rigs with many parts/joints (a 14-part, 70-bone prefab at 2000 instances
-        // would need ~478 MB, past WebGPU's default 256 MB buffer cap). In practice characters
-        // are spawned in a mix and the bone buffer is a *shared pool*, not per-instance, so we
-        // cap both at sensible defaults. Pass explicit `maxSkinnedInstances`/`maxBonesPerSkin`
-        // to override when your scene actually needs more.
+        // explodes for rigs with many parts (a 14-part, 70-bone prefab at 2000 instances
+        // would need ~478 MB, past WebGPU's default 256 MB buffer cap). The bone buffer is a
+        // shared pool, not per-instance, so we cap the per-instance parts dimension; the bones
+        // dimension must fit the largest rig in the bucket or vertices weighted to clipped
+        // joints render as garbage. Pass explicit `maxSkinnedInstances`/`maxBonesPerSkin` to
+        // override when needed.
         const SKINNED_PARTS_PER_INSTANCE_DEFAULT_CAP = 3;
-        const BONES_PER_SKIN_DEFAULT_CAP = 32;
 
         const bucketStats = this._prefabs ? computeBucketStats(this._prefabs) : null;
         const maxInstances = options.maxInstances ?? resolvedMaxModels;
@@ -352,9 +352,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 ? maxInstances * Math.max(1, Math.min(bucketStats.maxSkinnedParts, SKINNED_PARTS_PER_INSTANCE_DEFAULT_CAP))
                 : 5000);
         this.maxBonesPerSkin = options.maxBonesPerSkin
-            ?? (bucketStats
-                ? Math.max(1, Math.min(bucketStats.maxJointCount, BONES_PER_SKIN_DEFAULT_CAP))
-                : 64);
+            ?? (bucketStats ? Math.max(1, bucketStats.maxJointCount) : 64);
         this.maxTotalBones = this.maxSkinnedInstances * this.maxBonesPerSkin * 2;
         this.updatedBoneOffsets = new Uint8Array(this.maxTotalBones);
 

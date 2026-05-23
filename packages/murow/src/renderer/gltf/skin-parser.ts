@@ -214,10 +214,22 @@ export function parseAnimations(
     return clips;
 }
 
-/**
- * Extract JOINTS_0 and WEIGHTS_0 from a glTF primitive.
- * Returns null if the primitive has no skinning attributes.
- */
+/** Normalize per-vertex weights to sum to 1. */
+function normalizeWeights(weights: Float32Array): void {
+    const vertexCount = weights.length / 4;
+    for (let v = 0; v < vertexCount; v++) {
+        const o = v * 4;
+        const sum = weights[o] + weights[o + 1] + weights[o + 2] + weights[o + 3];
+        if (sum > 0 && Math.abs(sum - 1) > 1e-5) {
+            const inv = 1 / sum;
+            weights[o] *= inv;
+            weights[o + 1] *= inv;
+            weights[o + 2] *= inv;
+            weights[o + 3] *= inv;
+        }
+    }
+}
+
 export function parsePrimitiveSkinAttributes(
     primitive: any,
     getAccessorData: AccessorReader,
@@ -234,18 +246,15 @@ export function parsePrimitiveSkinAttributes(
         ? jointsAccess.data
         : new Uint16Array(jointsAccess.data);
 
-    // Convert weights to Float32Array — handle normalized byte/short formats
     let weights: Float32Array;
     if (weightsAccess.data instanceof Float32Array) {
-        weights = weightsAccess.data;
+        weights = new Float32Array(weightsAccess.data);
     } else if (weightsAccess.data instanceof Uint8Array) {
-        // Normalized unsigned byte: divide by 255
         weights = new Float32Array(weightsAccess.data.length);
         for (let i = 0; i < weightsAccess.data.length; i++) {
             weights[i] = weightsAccess.data[i] / 255;
         }
     } else if (weightsAccess.data instanceof Uint16Array) {
-        // Normalized unsigned short: divide by 65535
         weights = new Float32Array(weightsAccess.data.length);
         for (let i = 0; i < weightsAccess.data.length; i++) {
             weights[i] = weightsAccess.data[i] / 65535;
@@ -253,6 +262,8 @@ export function parsePrimitiveSkinAttributes(
     } else {
         weights = new Float32Array(weightsAccess.data as any);
     }
+
+    normalizeWeights(weights);
 
     return { joints, weights };
 }
