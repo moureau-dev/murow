@@ -35,7 +35,10 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **glTF loading** — `.glb` meshes with textures and skinned animation (via `PrefabBucket`)
 - **Skeletal animation** — Crossfading, looping, event callbacks; typed animation names
 - **Frustum culling** — Automatic per-instance visibility checks
-- **Grid helpers** — `{ type: 'grid' }` prefab spec for debug visualization
+- **Distance-based animation culling** — Skip compute-shader skinning for instances outside `animationCullDistance`
+- **Prefab groups & composites** — `bucket.addGroup(...)` registers multi-part prefabs spawnable as a single instance with baked offsets
+- **Instance recycling** — `handle.destroy()` frees slots and bone-matrix blocks; respawns reuse them without growing buffers
+- **Grid / cube helpers** — `{ type: 'grid' }` and `{ type: 'cube' }` prefab specs
 
 ## Usage
 

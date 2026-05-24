@@ -70,8 +70,10 @@ The bucket carries derived stats (joint counts, skinned-part counts, vertex tota
 
 ### Mode argument
 
-- `new PrefabBucket('3d')` — accepts gltf / grid specs
+- `new PrefabBucket('3d')` — accepts gltf / grid / cube / composite specs
 - `new PrefabBucket('2d')` — accepts spritesheet specs
+
+Use `addGroup(name, parts)` to register a set of prefabs under a dotted namespace (`bucket.get('campfire.logs')`) and `getGroup(name).asComposite()` to spawn the whole group as one logical instance with per-part offsets.
 
 The mode narrows what `add()` accepts and what `get()` returns. Type-safe by construction.
 
