@@ -24,10 +24,12 @@ export interface Renderer2DOptions extends RendererOptions {
 
 export interface Renderer3DOptions extends RendererOptions {
     /**
-     * Non-skinned instance budget. Optional when a prefab bucket is provided —
-     * the renderer will derive a sensible default from the bucket.
+     * How many instances you intend to spawn at once. Sizes both the
+     * non-skinned instance pool directly and seeds the default for the
+     * skinned-instance budget. Optional when a prefab bucket is provided -
+     * the renderer derives a sensible default from the bucket.
      */
-    maxModels?: number;
+    maxInstances?: number;
     enableLighting?: boolean;
 }
 

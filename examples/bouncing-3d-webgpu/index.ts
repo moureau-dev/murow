@@ -62,7 +62,7 @@ class WebGPU3DWrapper {
     constructor(canvas: HTMLCanvasElement, maxEntities: number) {
         this.handles = new Array(maxEntities).fill(null);
         this.gpu = new WebGPU3DRenderer(canvas, {
-            maxModels: maxEntities,
+            maxInstances: maxEntities,
             clearColor: [0.1, 0.1, 0.12, 1],
         });
     }

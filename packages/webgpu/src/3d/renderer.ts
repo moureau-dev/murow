@@ -102,6 +102,8 @@ export interface MeshInstanceHandle {
     setScale(x: number, y: number, z: number): void;
     play?(name: string, opts?: PlayOptions): void;
     stop?(): void;
+    /** Free this instance's renderer slot. Safe to call once per handle. */
+    destroy(): void;
 }
 
 /** A loaded glTF model — may contain multiple mesh parts that share a skeleton. */
@@ -174,6 +176,8 @@ export interface InstanceHandle {
     play?(name: string, opts?: PlayOptions): void;
     stop?(): void;
     readonly skinned: boolean;
+    /** Free this instance's renderer slot(s). Safe to call once per handle. */
+    destroy(): void;
 }
 
 export interface MeshInstanceOptions {
@@ -206,12 +210,6 @@ export interface WebGPU3DRendererOptions extends Renderer3DOptions {
      * `maxBonesPerSkin` defaults to the maximum joint count across all prefabs.
      */
     prefabs?: PrefabBucket3D;
-    /**
-     * How many instances you intend to spawn. Used together with `prefabs` to
-     * size the skinned-instance budget. Ignored if `maxSkinnedInstances` is set
-     * explicitly. Defaults to `maxModels` when only `prefabs` is provided.
-     */
-    maxInstances?: number;
     /**
      * Max distance (world units) at which skeletal animation is computed for
      * skinned instances. Past this, instances still render but reuse their
@@ -329,6 +327,12 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private skinnedInstanceBoneOffsets!: Uint32Array;
     private skinnedAnimStates: (SkeletalAnimState | null)[] = [];
     private nextBoneOffset = 0;
+    /** Reusable bone-offset blocks per skinIndex. Pushed on remove, popped on add. Indexed by skinIndex (low cardinality), so a Map of lists is fine. */
+    private freedBoneOffsets: Map<number, number[]> = new Map();
+    /** Per-bone-offset refcount. Linked multi-part instances share a block; freed when refcount hits 0. Indexed by boneOffset (< maxTotalBones). */
+    private boneOffsetRefcount!: Uint32Array;
+    /** Per-bone-offset skinIndex tag, so we can return the block to the right per-skin freelist on remove. */
+    private boneOffsetSkinIndex!: Uint32Array;
     private readonly maxSkinnedInstances: number;
     private readonly maxBonesPerSkin: number;
     private animationCullDistanceSq: number;
@@ -349,19 +353,19 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private readonly _prefabs: PrefabBucket3D | null;
 
     constructor(canvas: HTMLCanvasElement, options: WebGPU3DRendererOptions) {
-        // Resolve maxModels from the bucket before delegating to super:
+        // Resolve maxInstances from the bucket before delegating to super:
         // default to `bucket.size + slack` so non-skinned prefabs (grids, primitives)
         // always have room without the user having to count them by hand.
-        const resolvedMaxModels = options.maxModels
+        const resolvedMaxInstances = options.maxInstances
             ?? (options.prefabs ? options.prefabs.size + 16 : 32);
-        super(canvas, { ...options, maxModels: resolvedMaxModels });
+        super(canvas, { ...options, maxInstances: resolvedMaxInstances });
         this.camera = new Camera3D();
 
         this._prefabs = options.prefabs ?? null;
 
         // Derive skinned-budget sizing from the bucket when present; explicit options win.
         //
-        // The auto-sized formula is `maxInstances × parts × bonesPerSkin × 128 bytes` which
+        // The auto-sized formula is `maxInstances * parts * bonesPerSkin * 128 bytes` which
         // explodes for rigs with many parts (a 14-part, 70-bone prefab at 2000 instances
         // would need ~478 MB, past WebGPU's default 256 MB buffer cap). The bone buffer is a
         // shared pool, not per-instance, so we cap the per-instance parts dimension; the bones
@@ -371,11 +375,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const SKINNED_PARTS_PER_INSTANCE_DEFAULT_CAP = 3;
 
         const bucketStats = this._prefabs ? computeBucketStats(this._prefabs) : null;
-        const maxInstances = options.maxInstances ?? resolvedMaxModels;
 
         this.maxSkinnedInstances = options.maxSkinnedInstances
             ?? (bucketStats
-                ? maxInstances * Math.max(1, Math.min(bucketStats.maxSkinnedParts, SKINNED_PARTS_PER_INSTANCE_DEFAULT_CAP))
+                ? resolvedMaxInstances * Math.max(1, Math.min(bucketStats.maxSkinnedParts, SKINNED_PARTS_PER_INSTANCE_DEFAULT_CAP))
                 : 5000);
         this.maxBonesPerSkin = options.maxBonesPerSkin
             ?? (bucketStats ? Math.max(1, bucketStats.maxJointCount) : 64);
@@ -383,14 +386,16 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         this.animationCullDistanceSq = cullDist * cullDist;
         this.maxTotalBones = this.maxSkinnedInstances * this.maxBonesPerSkin * 2;
         this.updatedBoneOffsets = new Uint8Array(this.maxTotalBones);
+        this.boneOffsetRefcount = new Uint32Array(this.maxTotalBones);
+        this.boneOffsetSkinIndex = new Uint32Array(this.maxTotalBones);
 
         // Non-skinned instance buffers
-        this.freeList = new FreeList(resolvedMaxModels);
-        this.batcher = new SparseBatcher(resolvedMaxModels);
-        this.dynamicData = new Float32Array(resolvedMaxModels * DYNAMIC_MESH_FLOATS);
-        this.staticData = new Float32Array(resolvedMaxModels * STATIC_MESH_FLOATS);
-        this.slotIndexData = new Uint32Array(resolvedMaxModels);
-        this.instanceModelIds = new Uint8Array(resolvedMaxModels);
+        this.freeList = new FreeList(resolvedMaxInstances);
+        this.batcher = new SparseBatcher(resolvedMaxInstances);
+        this.dynamicData = new Float32Array(resolvedMaxInstances * DYNAMIC_MESH_FLOATS);
+        this.staticData = new Float32Array(resolvedMaxInstances * STATIC_MESH_FLOATS);
+        this.slotIndexData = new Uint32Array(resolvedMaxInstances);
+        this.instanceModelIds = new Uint8Array(resolvedMaxInstances);
 
         // Skinned instance buffers
         const msi = this.maxSkinnedInstances;
@@ -453,7 +458,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         });
 
         // TypeGPU layouts + shaders
-        this.meshLayout = createMeshLayout(this.maxModels);
+        this.meshLayout = createMeshLayout(this.maxInstances);
 
         // Shared depth/stencil and primitive config
         const depthStencil: GPUDepthStencilState = {
@@ -509,10 +514,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         });
 
         // Buffers
-        this.dynamicBuffer = this.root.createBuffer(d.arrayOf(DynamicMesh, this.maxModels)).$usage('storage');
-        this.staticBuffer = this.root.createBuffer(d.arrayOf(StaticMesh, this.maxModels)).$usage('storage');
+        this.dynamicBuffer = this.root.createBuffer(d.arrayOf(DynamicMesh, this.maxInstances)).$usage('storage');
+        this.staticBuffer = this.root.createBuffer(d.arrayOf(StaticMesh, this.maxInstances)).$usage('storage');
         this.uniformBuffer = this.root.createBuffer(MeshUniforms).$usage('uniform');
-        this.slotIndexBuffer = this.root.createBuffer(d.arrayOf(d.u32, this.maxModels)).$usage('storage');
+        this.slotIndexBuffer = this.root.createBuffer(d.arrayOf(d.u32, this.maxInstances)).$usage('storage');
 
         // Bind group (raw, using TypeGPU layout)
         this.rawDynamicBuffer = this.root.unwrap(this.dynamicBuffer) as any;
@@ -726,6 +731,15 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     /** Current animation cull distance (in world units). See `setAnimationCullDistance`. */
     get animationCullDistance(): number {
         return Math.sqrt(this.animationCullDistanceSq);
+    }
+
+    /**
+     * Max skinned instances the renderer was sized for at construction.
+     * Independent budget from `maxInstances` since skinned characters use a
+     * separate set of GPU buffers. Read-only.
+     */
+    get maxSkinned(): number {
+        return this.maxSkinnedInstances;
     }
 
     /**
@@ -1206,7 +1220,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         }
 
         const slot = this.freeList.allocate();
-        if (slot === -1) throw new Error(`Max instances (${this.maxModels}) reached`);
+        if (slot === -1) throw new Error(`Max instances (${this.maxInstances}) reached`);
 
         const dynBase = slot * DYNAMIC_MESH_FLOATS;
         const statBase = slot * STATIC_MESH_FLOATS;
@@ -1240,8 +1254,12 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
         const dynamicData = this.dynamicData;
         const staticData = this.staticData;
+        const self = this;
+        let destroyed = false;
 
-        return {
+        const handle: MeshInstanceHandle = {
+            slot,
+            modelId: modelHandle.id,
             skinned: false,
             setPosition(nx: number, ny: number, nz: number) {
                 dynamicData[dynBase + DYN_CURR_PX] = nx;
@@ -1258,7 +1276,17 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 staticData[statBase + STAT_SY] = ny;
                 staticData[statBase + STAT_SZ] = nz;
             },
+            destroy() {
+                if (destroyed) return;
+                destroyed = true;
+                self.batcher.remove(0, modelHandle.id, slot);
+                self.freeList.free(slot);
+                dynamicData.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
+                staticData.fill(0, statBase, statBase + STATIC_MESH_FLOATS);
+                self.staticDirty = true;
+            },
         };
+        return handle;
     }
 
     private addGltfInstance(opts: MeshInstanceOptions, gltf: GltfModel): InstanceHandle {
@@ -1300,6 +1328,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             stop: skinnedHandle?.stop ? () => {
                 skinnedHandle.stop!();
             } : undefined,
+            destroy() {
+                for (const h of childHandles) h.destroy();
+            },
         };
     }
 
@@ -1361,6 +1392,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             setScale(x: number, y: number, z: number) {
                 for (const h of childHandles) h.setScale(x, y, z);
             },
+            destroy() {
+                for (const h of childHandles) h.destroy();
+            },
         };
     }
 
@@ -1375,21 +1409,38 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         let animState: SkeletalAnimState | null;
 
         if (linkedSlot !== undefined) {
-            // Share bone offset and animation state with linked slot
+            // Share bone offset and animation state with linked slot.
             boneOffset = this.skinnedInstanceBoneOffsets[linkedSlot];
             animState = this.skinnedAnimStates[linkedSlot];
+            this.boneOffsetRefcount[boneOffset]++;
         } else {
-            // Allocate new bone offset block
-            // Allocate 2x: [world matrices | final bone matrices]
-            // boneOffset points to the final section (vertex shader reads from here)
-            boneOffset = this.nextBoneOffset + jointCount;
-            this.nextBoneOffset += jointCount * 2;
+            // Reuse a freed bone-offset block for this skin if any, else grow.
+            // Layout: 2x jointCount [world matrices | final bone matrices].
+            // boneOffset points to the final section (vertex shader reads from here).
+            const pool = this.freedBoneOffsets.get(skinIndex);
+            if (pool && pool.length > 0) {
+                boneOffset = pool.pop()!;
+            } else {
+                boneOffset = this.nextBoneOffset + jointCount;
+                this.nextBoneOffset += jointCount * 2;
+            }
+            this.boneOffsetRefcount[boneOffset] = 1;
+            this.boneOffsetSkinIndex[boneOffset] = skinIndex;
 
-            // Write rest-pose bone matrices directly into boneMatrixData (zero-alloc)
-            skinModel.animation.computeRestPose(this.boneMatrixData, boneOffset * 16);
-            this.boneMatrixDirty = true;
+            // Compute rest pose into the CPU buffer and upload only the
+            // touched range. Full-buffer uploads (~90 MB at 4000 instances)
+            // would cause an 80-100ms frame hit per spawn.
+            const restOffsetFloats = boneOffset * 16;
+            const restLengthFloats = jointCount * 16;
+            skinModel.animation.computeRestPose(this.boneMatrixData, restOffsetFloats);
+            this.device.queue.writeBuffer(
+                this.rawBoneMatrixBuffer,
+                restOffsetFloats * 4,
+                this.boneMatrixData.buffer,
+                this.boneMatrixData.byteOffset + restOffsetFloats * 4,
+                restLengthFloats * 4,
+            );
 
-            // Create animation state (auto-plays first clip if available)
             animState = skinModel.animation.clipCount > 0
                 ? skinModel.animation.createState(0, 1, true)
                 : null;
@@ -1435,6 +1486,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const staticData = this.skinnedStaticData;
         const animStates = this.skinnedAnimStates;
         const animation = skinModel.animation;
+        const self = this;
+        const capturedBoneOffset = boneOffset;
+        const capturedSkinIndex = skinIndex;
+        let destroyed = false;
 
         return {
             slot,
@@ -1462,6 +1517,27 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             stop() {
                 const state = animStates[slot];
                 if (state) animation.stop(state);
+            },
+            destroy() {
+                if (destroyed) return;
+                destroyed = true;
+                self.skinnedBatcher.remove(0, modelHandle.id, slot);
+                self.skinnedFreeList.free(slot);
+                dynamicData.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
+                staticData.fill(0, statBase, statBase + SKINNED_STATIC_MESH_FLOATS);
+                animStates[slot] = null;
+                self.skinnedStaticDirty = true;
+
+                // Drop the per-block refcount and recycle the bone block if no
+                // other instance still references it (linked siblings share blocks).
+                if (--self.boneOffsetRefcount[capturedBoneOffset] === 0) {
+                    let pool = self.freedBoneOffsets.get(capturedSkinIndex);
+                    if (!pool) {
+                        pool = [];
+                        self.freedBoneOffsets.set(capturedSkinIndex, pool);
+                    }
+                    pool.push(capturedBoneOffset);
+                }
             },
         };
     }
@@ -1746,15 +1822,12 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         }
     }
 
-    removeInstance(handle: MeshInstanceHandle): void {
-        this.batcher.remove(0, handle.modelId, handle.slot);
-        this.freeList.free(handle.slot);
-
-        const dynBase = handle.slot * DYNAMIC_MESH_FLOATS;
-        const statBase = handle.slot * STATIC_MESH_FLOATS;
-        this.dynamicData.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
-        this.staticData.fill(0, statBase, statBase + STATIC_MESH_FLOATS);
-        this.staticDirty = true;
+    /**
+     * Free an instance's renderer slot. Equivalent to `handle.destroy()` -
+     * kept as a convenience for direct lookup. Safe to call multiple times.
+     */
+    removeInstance(handle: InstanceHandle): void {
+        handle.destroy();
     }
 
     storePreviousState(): void {
