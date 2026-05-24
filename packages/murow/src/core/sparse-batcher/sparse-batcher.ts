@@ -42,6 +42,9 @@ export class SparseBatcher {
 
         if (!this.buckets.has(key)) {
             this.buckets.set(key, new Uint32Array(this.BUCKET_INITIAL_SIZE));
+        }
+
+        if (this.bucketSizes[key] === 0) {
             this.activeBuckets[this.activeCount++] = key;
         }
 

@@ -104,6 +104,22 @@ describe('SparseBatcher', () => {
             expect(batcher.getActiveCount()).toBe(1);
         });
 
+        test('re-adding to an emptied bucket reactivates it', () => {
+            const batcher = new SparseBatcher(1000);
+            batcher.add(0, 0, 1);
+            batcher.remove(0, 0, 1);
+            expect(batcher.getActiveCount()).toBe(0);
+
+            batcher.add(0, 0, 2);
+            expect(batcher.getActiveCount()).toBe(1);
+
+            const collected: number[] = [];
+            batcher.each((_sheetId, instances, count) => {
+                for (let i = 0; i < count; i++) collected.push(instances[i]);
+            });
+            expect(collected).toEqual([2]);
+        });
+
         test('removes first element via swap-and-pop correctly', () => {
             const batcher = new SparseBatcher(1000);
             batcher.add(0, 0, 100);
