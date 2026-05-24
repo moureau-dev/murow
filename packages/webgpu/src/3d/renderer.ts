@@ -97,9 +97,20 @@ export interface MeshInstanceHandle {
     readonly slot: number;
     readonly modelId: number;
     readonly skinned: boolean;
+    /** Source prefab id, or `null` if spawned from a raw model handle. */
+    readonly prefabId: string | null;
     setPosition(x: number, y: number, z: number): void;
     setRotation(x: number, y: number, z: number): void;
     setScale(x: number, y: number, z: number): void;
+    /**
+     * Logical current position (what `setPosition` last wrote, not the interpolated render value).
+     * Returns a per-handle reusable tuple — do not retain across subsequent gets on the same handle.
+     */
+    readonly position: readonly [number, number, number];
+    /** Logical current rotation in radians. Reusable tuple; see `position`. */
+    readonly rotation: readonly [number, number, number];
+    /** Logical current scale. Reusable tuple; see `position`. */
+    readonly scale: readonly [number, number, number];
     play?(name: string, opts?: PlayOptions): void;
     stop?(): void;
     /** Free this instance's renderer slot. Safe to call once per handle. */
@@ -173,9 +184,20 @@ export interface InstanceHandle {
     setPosition(x: number, y: number, z: number): void;
     setRotation(x: number, y: number, z: number): void;
     setScale(x: number, y: number, z: number): void;
+    /**
+     * Logical current position (what `setPosition` last wrote, not the interpolated render value).
+     * Returns a per-handle reusable tuple — do not retain across subsequent gets on the same handle.
+     */
+    readonly position: readonly [number, number, number];
+    /** Logical current rotation in radians. Reusable tuple; see `position`. */
+    readonly rotation: readonly [number, number, number];
+    /** Logical current scale. Reusable tuple; see `position`. */
+    readonly scale: readonly [number, number, number];
     play?(name: string, opts?: PlayOptions): void;
     stop?(): void;
     readonly skinned: boolean;
+    /** Source prefab id, or `null` if spawned from a raw model handle. */
+    readonly prefabId: string | null;
     /** Free this instance's renderer slot(s). Safe to call once per handle. */
     destroy(): void;
 }
@@ -1197,6 +1219,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
      * with another instance (e.g., when spawning all parts of a character).
      */
     addInstance(opts: MeshInstanceOptions): InstanceHandle {
+        const userPrefabId = isPrefab3D(opts.model) ? opts.model.id : null;
+
         // Composite prefab: spawn each part with its baked offset composed
         // onto the instance transform.
         if (isPrefab3D(opts.model) && opts.model.type === 'composite') {
@@ -1208,7 +1232,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
         // GltfModel: spawn all parts as a linked group
         if ('parts' in modelOrGltf) {
-            return this.addGltfInstance(opts, modelOrGltf as GltfModel);
+            return this.addGltfInstance(opts, modelOrGltf as GltfModel, userPrefabId);
         }
 
         const modelHandle = modelOrGltf as ModelHandle;
@@ -1216,7 +1240,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
         // Route skinned models to the skinned instance path
         if (model?.skinned) {
-            return this.addSkinnedInstance(opts, modelHandle, model.skinIndex);
+            return this.addSkinnedInstance(opts, modelHandle, model.skinIndex, undefined, userPrefabId);
         }
 
         const slot = this.freeList.allocate();
@@ -1257,10 +1281,17 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const self = this;
         let destroyed = false;
 
+        // Reusable tuples for the readonly getters. Mutated on each read; callers
+        // must not retain the returned array across subsequent gets on the same handle.
+        const posOut: [number, number, number] = [0, 0, 0];
+        const rotOut: [number, number, number] = [0, 0, 0];
+        const sclOut: [number, number, number] = [0, 0, 0];
+
         const handle: MeshInstanceHandle = {
             slot,
             modelId: modelHandle.id,
             skinned: false,
+            prefabId: userPrefabId,
             setPosition(nx: number, ny: number, nz: number) {
                 dynamicData[dynBase + DYN_CURR_PX] = nx;
                 dynamicData[dynBase + DYN_CURR_PY] = ny;
@@ -1276,6 +1307,24 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 staticData[statBase + STAT_SY] = ny;
                 staticData[statBase + STAT_SZ] = nz;
             },
+            get position(): readonly [number, number, number] {
+                posOut[0] = dynamicData[dynBase + DYN_CURR_PX];
+                posOut[1] = dynamicData[dynBase + DYN_CURR_PY];
+                posOut[2] = dynamicData[dynBase + DYN_CURR_PZ];
+                return posOut;
+            },
+            get rotation(): readonly [number, number, number] {
+                rotOut[0] = dynamicData[dynBase + DYN_CURR_RX];
+                rotOut[1] = dynamicData[dynBase + DYN_CURR_RY];
+                rotOut[2] = dynamicData[dynBase + DYN_CURR_RZ];
+                return rotOut;
+            },
+            get scale(): readonly [number, number, number] {
+                sclOut[0] = staticData[statBase + STAT_SX];
+                sclOut[1] = staticData[statBase + STAT_SY];
+                sclOut[2] = staticData[statBase + STAT_SZ];
+                return sclOut;
+            },
             destroy() {
                 if (destroyed) return;
                 destroyed = true;
@@ -1289,7 +1338,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         return handle;
     }
 
-    private addGltfInstance(opts: MeshInstanceOptions, gltf: GltfModel): InstanceHandle {
+    private addGltfInstance(opts: MeshInstanceOptions, gltf: GltfModel, prefabId: string | null): InstanceHandle {
         const childHandles: MeshInstanceHandle[] = [];
         let firstSkinnedSlot: number | undefined;
 
@@ -1299,7 +1348,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
             let handle: MeshInstanceHandle;
             if (model?.skinned) {
-                handle = this.addSkinnedInstance(partOpts, part, model.skinIndex, firstSkinnedSlot);
+                handle = this.addSkinnedInstance(partOpts, part, model.skinIndex, firstSkinnedSlot, prefabId);
                 if (firstSkinnedSlot === undefined) firstSkinnedSlot = handle.slot;
             } else {
                 // Re-use the single-part non-skinned path directly
@@ -1311,8 +1360,12 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         // Find the first skinned handle for animation control
         const skinnedHandle = childHandles.find(h => h.skinned);
 
+        // The user-facing handle reads transforms from the first child (all children share the same logical pose).
+        const lead = childHandles[0];
+
         return {
             skinned: gltf.skinned,
+            prefabId,
             setPosition(x: number, y: number, z: number) {
                 for (const h of childHandles) h.setPosition(x, y, z);
             },
@@ -1322,6 +1375,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             setScale(x: number, y: number, z: number) {
                 for (const h of childHandles) h.setScale(x, y, z);
             },
+            get position() { return lead.position; },
+            get rotation() { return lead.rotation; },
+            get scale() { return lead.scale; },
             play: skinnedHandle?.play ? (name: string, opts?: PlayOptions) => {
                 skinnedHandle.play!(name, opts);
             } : undefined,
@@ -1362,6 +1418,16 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         }));
 
         const childHandles: InstanceHandle[] = [];
+        // Track the logical (un-offset) pose set by the user. Children carry their
+        // offsets, so reading position back from any child would include the offset.
+        // Reusable tuples for getters; mutated on each read.
+        const posOut: [number, number, number] = [basePos[0], basePos[1], basePos[2]];
+        const rotOut: [number, number, number] = [baseRot[0], baseRot[1], baseRot[2]];
+        const sclOut: [number, number, number] = [1, 1, 1];
+        const initialScale = opts.scale;
+        if (typeof initialScale === 'number') { sclOut[0] = sclOut[1] = sclOut[2] = initialScale; }
+        else if (initialScale) { sclOut[0] = initialScale[0]; sclOut[1] = initialScale[1]; sclOut[2] = initialScale[2]; }
+
         for (let i = 0; i < composite.parts.length; i++) {
             const part = composite.parts[i];
             const off = offsets[i];
@@ -1377,28 +1443,35 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
         return {
             skinned: childHandles.some((h) => h.skinned),
+            prefabId: composite.id,
             setPosition(x: number, y: number, z: number) {
+                posOut[0] = x; posOut[1] = y; posOut[2] = z;
                 for (let i = 0; i < childHandles.length; i++) {
                     const o = offsets[i];
                     childHandles[i].setPosition(x + o.px, y + o.py, z + o.pz);
                 }
             },
             setRotation(x: number, y: number, z: number) {
+                rotOut[0] = x; rotOut[1] = y; rotOut[2] = z;
                 for (let i = 0; i < childHandles.length; i++) {
                     const o = offsets[i];
                     childHandles[i].setRotation(x + o.rx, y + o.ry, z + o.rz);
                 }
             },
             setScale(x: number, y: number, z: number) {
+                sclOut[0] = x; sclOut[1] = y; sclOut[2] = z;
                 for (const h of childHandles) h.setScale(x, y, z);
             },
+            get position() { return posOut as readonly [number, number, number]; },
+            get rotation() { return rotOut as readonly [number, number, number]; },
+            get scale() { return sclOut as readonly [number, number, number]; },
             destroy() {
                 for (const h of childHandles) h.destroy();
             },
         };
     }
 
-    private addSkinnedInstance(opts: MeshInstanceOptions, modelHandle: ModelHandle, skinIndex: number, linkedSlot?: number): MeshInstanceHandle {
+    private addSkinnedInstance(opts: MeshInstanceOptions, modelHandle: ModelHandle, skinIndex: number, linkedSlot?: number, prefabId: string | null = null): MeshInstanceHandle {
         const slot = this.skinnedFreeList.allocate();
         if (slot === -1) throw new Error(`Max skinned instances (${this.maxSkinnedInstances}) reached`);
 
@@ -1491,10 +1564,16 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const capturedSkinIndex = skinIndex;
         let destroyed = false;
 
+        // Reusable tuples for the readonly getters. Mutated on each read.
+        const posOut: [number, number, number] = [0, 0, 0];
+        const rotOut: [number, number, number] = [0, 0, 0];
+        const sclOut: [number, number, number] = [0, 0, 0];
+
         return {
             slot,
             modelId: modelHandle.id,
             skinned: true,
+            prefabId,
             setPosition(nx: number, ny: number, nz: number) {
                 dynamicData[dynBase + DYN_CURR_PX] = nx;
                 dynamicData[dynBase + DYN_CURR_PY] = ny;
@@ -1509,6 +1588,24 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 staticData[statBase + SSTAT_SX] = nx;
                 staticData[statBase + SSTAT_SY] = ny;
                 staticData[statBase + SSTAT_SZ] = nz;
+            },
+            get position(): readonly [number, number, number] {
+                posOut[0] = dynamicData[dynBase + DYN_CURR_PX];
+                posOut[1] = dynamicData[dynBase + DYN_CURR_PY];
+                posOut[2] = dynamicData[dynBase + DYN_CURR_PZ];
+                return posOut;
+            },
+            get rotation(): readonly [number, number, number] {
+                rotOut[0] = dynamicData[dynBase + DYN_CURR_RX];
+                rotOut[1] = dynamicData[dynBase + DYN_CURR_RY];
+                rotOut[2] = dynamicData[dynBase + DYN_CURR_RZ];
+                return rotOut;
+            },
+            get scale(): readonly [number, number, number] {
+                sclOut[0] = staticData[statBase + SSTAT_SX];
+                sclOut[1] = staticData[statBase + SSTAT_SY];
+                sclOut[2] = staticData[statBase + SSTAT_SZ];
+                return sclOut;
             },
             play(name: string, opts?: PlayOptions) {
                 const state = animStates[slot];
