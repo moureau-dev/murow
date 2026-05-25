@@ -103,6 +103,14 @@ export interface MeshInstanceHandle {
     setRotation(x: number, y: number, z: number): void;
     setScale(x: number, y: number, z: number): void;
     /**
+     * Set position WITHOUT GPU interpolation from the previous frame.
+     * Writes both PREV and CURR to the same value, so the next render
+     * produces no lerp slide. Use after teleports, network snapshot
+     * snaps, or any time the entity should appear at the new location
+     * immediately rather than smoothly moving toward it.
+     */
+    teleport(x: number, y: number, z: number): void;
+    /**
      * Logical current position (what `setPosition` last wrote, not the interpolated render value).
      * Returns a per-handle reusable tuple — do not retain across subsequent gets on the same handle.
      */
@@ -184,6 +192,14 @@ export interface InstanceHandle {
     setPosition(x: number, y: number, z: number): void;
     setRotation(x: number, y: number, z: number): void;
     setScale(x: number, y: number, z: number): void;
+    /**
+     * Set position WITHOUT GPU interpolation from the previous frame.
+     * Writes both PREV and CURR to the same value, so the next render
+     * produces no lerp slide. Use after teleports, network snapshot
+     * snaps, or any time the entity should appear at the new location
+     * immediately.
+     */
+    teleport(x: number, y: number, z: number): void;
     /**
      * Logical current position (what `setPosition` last wrote, not the interpolated render value).
      * Returns a per-handle reusable tuple — do not retain across subsequent gets on the same handle.
@@ -1307,6 +1323,14 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 staticData[statBase + STAT_SY] = ny;
                 staticData[statBase + STAT_SZ] = nz;
             },
+            teleport(nx: number, ny: number, nz: number) {
+                dynamicData[dynBase + DYN_PREV_PX] = nx;
+                dynamicData[dynBase + DYN_PREV_PY] = ny;
+                dynamicData[dynBase + DYN_PREV_PZ] = nz;
+                dynamicData[dynBase + DYN_CURR_PX] = nx;
+                dynamicData[dynBase + DYN_CURR_PY] = ny;
+                dynamicData[dynBase + DYN_CURR_PZ] = nz;
+            },
             get position(): readonly [number, number, number] {
                 posOut[0] = dynamicData[dynBase + DYN_CURR_PX];
                 posOut[1] = dynamicData[dynBase + DYN_CURR_PY];
@@ -1374,6 +1398,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             },
             setScale(x: number, y: number, z: number) {
                 for (const h of childHandles) h.setScale(x, y, z);
+            },
+            teleport(x: number, y: number, z: number) {
+                for (const h of childHandles) h.teleport(x, y, z);
             },
             get position() { return lead.position; },
             get rotation() { return lead.rotation; },
@@ -1461,6 +1488,13 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             setScale(x: number, y: number, z: number) {
                 sclOut[0] = x; sclOut[1] = y; sclOut[2] = z;
                 for (const h of childHandles) h.setScale(x, y, z);
+            },
+            teleport(x: number, y: number, z: number) {
+                posOut[0] = x; posOut[1] = y; posOut[2] = z;
+                for (let i = 0; i < childHandles.length; i++) {
+                    const o = offsets[i];
+                    childHandles[i].teleport(x + o.px, y + o.py, z + o.pz);
+                }
             },
             get position() { return posOut as readonly [number, number, number]; },
             get rotation() { return rotOut as readonly [number, number, number]; },
@@ -1588,6 +1622,14 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 staticData[statBase + SSTAT_SX] = nx;
                 staticData[statBase + SSTAT_SY] = ny;
                 staticData[statBase + SSTAT_SZ] = nz;
+            },
+            teleport(nx: number, ny: number, nz: number) {
+                dynamicData[dynBase + DYN_PREV_PX] = nx;
+                dynamicData[dynBase + DYN_PREV_PY] = ny;
+                dynamicData[dynBase + DYN_PREV_PZ] = nz;
+                dynamicData[dynBase + DYN_CURR_PX] = nx;
+                dynamicData[dynBase + DYN_CURR_PY] = ny;
+                dynamicData[dynBase + DYN_CURR_PZ] = nz;
             },
             get position(): readonly [number, number, number] {
                 posOut[0] = dynamicData[dynBase + DYN_CURR_PX];
