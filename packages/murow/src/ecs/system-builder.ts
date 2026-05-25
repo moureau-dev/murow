@@ -313,6 +313,14 @@ export class ExecutableSystem {
   // Reusable proxy entity
   private proxyEntity: any;
 
+  /**
+   * Indices of queried components that have `__sync` metadata. Cached at
+   * construction so `execute()` can flip dirty bits without re-checking
+   * each tick. Empty for systems whose query touches no synced components,
+   * which keeps the hot path zero-overhead.
+   */
+  private syncedComponentIndices: number[] = [];
+
   constructor(
     private world: World,
     private components: Component<any>[],
@@ -324,10 +332,24 @@ export class ExecutableSystem {
   ) {
     // Create proxy entity once and reuse
     this.proxyEntity = this.createProxyEntity();
+
+    // Pre-collect synced component indices so execute() can flip dirty
+    // bits without per-tick metadata lookups.
+    for (const c of components) {
+      if (c.__sync !== undefined && c.__worldIndex !== undefined) {
+        this.syncedComponentIndices.push(c.__worldIndex);
+      }
+    }
   }
 
   /**
    * Execute the system for all matching entities.
+   *
+   * If the system's query includes any synced components, every entity
+   * touched by the system is marked dirty for those components after the
+   * callback runs (coarse strategy. the network layer assumes any
+   * entity that flowed through a system whose query included its synced
+   * component may have changed).
    *
    * @param deltaTime - Time delta to pass to system callback
    */
@@ -337,22 +359,51 @@ export class ExecutableSystem {
     const world = this.world;
     const entity = this.proxyEntity;
     const length = entities.length;
+    const syncedIndices = this.syncedComponentIndices;
+    const syncedCount = syncedIndices.length;
 
-    // Fast path: no predicate
-    if (!this.conditionPredicate) {
+    // Fast path: no predicate, no synced components.
+    if (!this.conditionPredicate && syncedCount === 0) {
       for (let i = 0; i < length; i++) {
         entity.eid = entities[i]!;
-
         callback(entity, deltaTime, world);
       }
-    } else {
-      // Filtered path: with predicate
-      const predicate = this.conditionPredicate;
+      return;
+    }
+
+    // Fast path: synced components but no predicate.
+    if (!this.conditionPredicate) {
+      for (let i = 0; i < length; i++) {
+        const eid = entities[i]!;
+        entity.eid = eid;
+        callback(entity, deltaTime, world);
+        for (let s = 0; s < syncedCount; s++) {
+          world.markDirty(eid, syncedIndices[s]);
+        }
+      }
+      return;
+    }
+
+    // Filtered path: with predicate.
+    const predicate = this.conditionPredicate;
+    if (syncedCount === 0) {
       for (let i = 0; i < length; i++) {
         entity.eid = entities[i]!;
 
         if (predicate(entity)) {
           callback(entity, deltaTime, world);
+        }
+      }
+      return;
+    }
+
+    for (let i = 0; i < length; i++) {
+      const eid = entities[i]!;
+      entity.eid = eid;
+      if (predicate(entity)) {
+        callback(entity, deltaTime, world);
+        for (let s = 0; s < syncedCount; s++) {
+          world.markDirty(eid, syncedIndices[s]);
         }
       }
     }

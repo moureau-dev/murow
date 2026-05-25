@@ -93,6 +93,14 @@ export class World extends WorldSystems {
     private despawnedBuffer: Uint32Array;
     private despawnedCount: number = 0;
 
+    /**
+     * Per-component dirty bitmask, indexed by [componentIndex][entity>>>5].
+     * `null` for components without `__sync` metadata: no overhead when
+     * networking isn't in play. Higher-level packages might read these
+     * to build per-peer snapshot deltas.
+     */
+    private dirtyBitsByComponent: (Uint32Array | null)[] = [];
+
     // Debug ID
     private worldId = generateId({ prefix: "world_" });
 
@@ -134,6 +142,10 @@ export class World extends WorldSystems {
         // Pre-allocate arrays for component stores
         this.componentStoresArray = new Array(config.components.length);
 
+        // Per-component dirty bitmap allocator: one Uint32Array per
+        // synced component (32 entities per word).
+        const dirtyWordsPerComponent = Math.ceil(this.maxEntities / 32);
+
         // Register components
         config.components.forEach((component, index) => {
             this.components.push(component);
@@ -143,6 +155,12 @@ export class World extends WorldSystems {
             // Create component store with selected backend
             const store = new ComponentStore(component, this.maxEntities);
             this.componentStoresArray[index] = store;
+
+            // Synced components get a dirty bitmap; others stay null.
+            this.dirtyBitsByComponent[index] =
+                component.__sync !== undefined
+                    ? new Uint32Array(dirtyWordsPerComponent)
+                    : null;
         });
     }
 
@@ -564,6 +582,76 @@ export class World extends WorldSystems {
     }
 
     /**
+     * Mark an entity dirty for a given component index. No-op for
+     * components without `__sync` metadata. Called internally by every
+     * write path (`add`, `set`, `update`, `system-builder` field setters).
+     */
+    markDirty(entity: Entity, componentIndex: number): void {
+        const bits = this.dirtyBitsByComponent[componentIndex];
+        if (bits === null || bits === undefined) return;
+        bits[entity >>> 5] |= 1 << (entity & 31);
+    }
+
+    /**
+     * Test whether an entity is currently marked dirty for a component.
+     * Used by snapshot builders.
+     */
+    isDirty(entity: Entity, component: Component<any>): boolean {
+        const index = component.__worldIndex;
+        if (index === undefined) return false;
+        const bits = this.dirtyBitsByComponent[index];
+        if (bits === null || bits === undefined) return false;
+        return (bits[entity >>> 5] & (1 << (entity & 31))) !== 0;
+    }
+
+    /**
+     * Clear the dirty bit for an entity/component pair. Called by the
+     * snapshot builder after a delta for the entity has been acknowledged
+     * by all peers.
+     */
+    clearDirty(entity: Entity, component: Component<any>): void {
+        const index = component.__worldIndex;
+        if (index === undefined) return;
+        const bits = this.dirtyBitsByComponent[index];
+        if (bits === null || bits === undefined) return;
+        bits[entity >>> 5] &= ~(1 << (entity & 31));
+    }
+
+    /**
+     * Iterate dirty entities for a synced component. Calls `cb` for each
+     * entity whose dirty bit is set. Returns immediately for unsynced
+     * components.
+     */
+    forEachDirty(component: Component<any>, cb: (entity: Entity) => void): void {
+        const index = component.__worldIndex;
+        if (index === undefined) return;
+        const bits = this.dirtyBitsByComponent[index];
+        if (bits === null || bits === undefined) return;
+        for (let w = 0; w < bits.length; w++) {
+            let word = bits[w];
+            if (word === 0) continue;
+            const base = w << 5;
+            while (word !== 0) {
+                const bit = word & -word; // lowest set bit
+                const lsb = 31 - Math.clz32(bit);
+                cb(base + lsb);
+                word ^= bit;
+            }
+        }
+    }
+
+    /**
+     * Clear all dirty bits across all components. Usually the snapshot
+     * pipeline clears bits per-entity as it processes them.
+     */
+    clearAllDirty(): void {
+        for (let i = 0; i < this.dirtyBitsByComponent.length; i++) {
+            const bits = this.dirtyBitsByComponent[i];
+            if (bits !== null && bits !== undefined) bits.fill(0);
+        }
+    }
+
+    /**
      * Add a component to an entity with initial data.
      */
     add<T extends object>(
@@ -584,6 +672,7 @@ export class World extends WorldSystems {
 
         this.setComponentBit(entity, index);
         store.set(entity, data);
+        this.markDirty(entity, index);
 
         // Invalidate query cache since archetype changed
         this.invalidateQueryCache();
@@ -694,6 +783,7 @@ export class World extends WorldSystems {
         }
 
         this.componentStoresArray[index]!.set(entity, data);
+        this.markDirty(entity, index);
     }
 
     /**
@@ -723,6 +813,7 @@ export class World extends WorldSystems {
         }
 
         this.componentStoresArray[index]!.update(entity, partial);
+        this.markDirty(entity, index);
     }
 
     /**

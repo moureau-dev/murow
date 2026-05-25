@@ -33,6 +33,13 @@ export type Component<T extends object = any> = ComponentMeta<T> & {
 
   /** Internal: Index assigned by World when registered */
   __worldIndex?: number;
+
+  /**
+   * Opaque metadata attached by higher-level packages (e.g. `murow/netcode`
+   * stores `SyncSpec` here to mark a component as networked). Core never
+   * interprets this; readers narrow it to the shape they own.
+   */
+  __sync?: unknown;
 };
 
 /**
@@ -52,26 +59,66 @@ function calculateSchemaSize<T extends object>(schema: Schema<T>): number {
 }
 
 /**
+ * Descriptor form of `defineComponent`. Pass `{ schema, sync }` to attach
+ * opaque sync metadata (consumed by `murow/netcode` to mark the component
+ * as networked).
+ */
+export interface ComponentDescriptor<T extends object> {
+  schema: Schema<T>;
+  sync: unknown;
+}
+
+/**
  * Define a component type with its binary schema.
  *
- * @example
+ * Two call shapes are supported:
+ * - Bare schema (the common case): `defineComponent(name, schema)`
+ * - Descriptor with sync metadata: `defineComponent(name, { schema, sync })`
+ *
+ * The descriptor form attaches `__sync` to the returned component. Core
+ * doesn't interpret `__sync`; it's read by higher-level packages such as
+ * `murow/netcode`. The check for descriptor form is `'schema' in arg &&
+ * 'sync' in arg`, which is unambiguous because real component field names
+ * never collide with both keys at once.
+ *
+ * @example Bare schema
  * ```typescript
  * const Transform = defineComponent('Transform', {
  *   x: BinaryCodec.f32,
  *   y: BinaryCodec.f32,
  *   rotation: BinaryCodec.f32,
  * });
+ * ```
  *
- * const Health = defineComponent('Health', {
- *   current: BinaryCodec.u16,
- *   max: BinaryCodec.u16,
+ * @example Descriptor with sync
+ * ```typescript
+ * const Position = defineComponent('Position', {
+ *   schema: { x: f32, y: f32 },
+ *   sync: { rate: 'every-tick', interest: 'aoi' },
  * });
  * ```
  */
 export function defineComponent<T extends object>(
   name: string,
   schema: Schema<T>
+): Component<T>;
+export function defineComponent<T extends object>(
+  name: string,
+  def: ComponentDescriptor<T>
+): Component<T>;
+export function defineComponent<T extends object>(
+  name: string,
+  arg: Schema<T> | ComponentDescriptor<T>
 ): Component<T> {
+  const isDescriptor =
+    typeof arg === 'object' &&
+    arg !== null &&
+    'schema' in arg &&
+    'sync' in arg;
+
+  const schema: Schema<T> = (isDescriptor ? (arg as ComponentDescriptor<T>).schema : arg) as Schema<T>;
+  const sync = isDescriptor ? (arg as ComponentDescriptor<T>).sync : undefined;
+
   const size = calculateSchemaSize(schema);
   const fieldNames = Object.keys(schema) as (keyof T)[];
   const fieldCount = fieldNames.length;
@@ -79,7 +126,7 @@ export function defineComponent<T extends object>(
   // Create PooledCodec for array serialization
   const arrayCodec = PooledCodec.array(schema);
 
-  return {
+  const component: Component<T> = {
     name,
     schema,
     size,
@@ -87,4 +134,6 @@ export function defineComponent<T extends object>(
     fieldNames,
     arrayCodec,
   };
+  if (sync !== undefined) component.__sync = sync;
+  return component;
 }
