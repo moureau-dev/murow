@@ -1,0 +1,49 @@
+{
+  "name": "@murow/netcode",
+  "version": "0.0.1",
+  "description": "Opinionated netcode layer for murow - state sync, prediction, interpolation, interest management.",
+  "type": "module",
+  "types": "dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "source": "./src/index.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/types/index.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "npm run build:types && npm run build:js",
+    "build:js": "bun run esbuild.config.ts",
+    "build:types": "tsc --emitDeclarationOnly --project tsconfig.json",
+    "test": "bun test ./src"
+  },
+  "keywords": [
+    "multiplayer",
+    "networking",
+    "state-sync",
+    "prediction",
+    "interpolation",
+    "aoi",
+    "game-engine",
+    "murow"
+  ],
+  "author": "Luiz Felipe Moureau",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/moureau-dev/murow.git",
+    "directory": "packages/netcode"
+  },
+  "peerDependencies": {
+    "murow": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.16",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.0.0"
+  }
+}
