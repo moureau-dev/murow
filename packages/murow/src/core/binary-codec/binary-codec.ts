@@ -521,3 +521,21 @@ export class BinaryCodec extends BaseBinaryCodec {
     return this.decodeInto(schema, buf, target);
   }
 }
+
+export const u8 = BinaryPrimitives.u8;
+export const u16 = BinaryPrimitives.u16;
+export const u32 = BinaryPrimitives.u32;
+export const i8 = BinaryPrimitives.i8;
+export const i16 = BinaryPrimitives.i16;
+export const i32 = BinaryPrimitives.i32;
+export const f16 = BinaryPrimitives.f16;
+export const f32 = BinaryPrimitives.f32;
+export const f64 = BinaryPrimitives.f64;
+export const bool = BinaryPrimitives.bool;
+export const string = BinaryPrimitives.string;
+export const vec2 = BinaryPrimitives.vec2;
+export const vec3 = BinaryPrimitives.vec3;
+export const vec2_le = BinaryPrimitives.vec2_le;
+export const vec3_le = BinaryPrimitives.vec3_le;
+export const vec4_le = BinaryPrimitives.vec4_le;
+export const color = BinaryPrimitives.color;
