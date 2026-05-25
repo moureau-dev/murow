@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Cube Arena</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #0c1020; color: #e0e6f0; font-family: system-ui, sans-serif; }
+        #gameCanvas { display: block; width: 100vw; height: 100vh; }
+        #hud {
+            position: absolute; top: 12px; left: 12px;
+            padding: 10px 14px; background: rgba(0,0,0,0.45);
+            border: 1px solid rgba(78, 205, 196, 0.35);
+            border-radius: 6px; font-size: 13px; line-height: 1.5;
+            pointer-events: none; user-select: none;
+        }
+        #hud b { color: #4ECDC4; }
+        #status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 12px; }
+        #status.connecting { background: #FFA500; color: #000; }
+        #status.connected { background: #4ECDC4; color: #000; }
+        #status.disconnected { background: #FF6B6B; color: #fff; }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="hud">
+        <div><b>Multiplayer Cube Arena</b></div>
+        <div>WASD to move &middot; Mouse to orbit camera</div>
+        <div>Status: <span id="status" class="connecting">connecting...</span></div>
+        <div>Players: <span id="playerCount">0</span></div>
+    </div>
+    <script type="module" src="/index.ts"></script>
+</body>
+</html>
