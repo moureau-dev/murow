@@ -190,18 +190,15 @@ export class BunWebSocketServerTransport implements ServerTransportAdapter<BunWe
 	}
 
 	/**
-	 * Internal: Register a new peer (called from Bun server fetch handler)
+	 * Internal: Register a new peer. Records the peer in the internal map
+	 * but does NOT fire connection handlers: that's `_handlePeerConnection`'s
+	 * job, called separately by the `open` callback. Splitting registration
+	 * from notification keeps the handler count to exactly one per connect.
 	 */
 	_registerPeer(socket: ServerWebSocket<unknown>): string {
 		const peerId = generateId({ prefix: "peer_" });
 		const peer = new BunWebSocketPeerTransport(socket);
 		this.peers.set(peerId, peer);
-
-		// Notify connection handlers
-		for (const handler of this.connectionHandlers) {
-			handler(peer, peerId);
-		}
-
 		return peerId;
 	}
 
@@ -241,30 +238,51 @@ export class BunWebSocketServerTransport implements ServerTransportAdapter<BunWe
 	}
 
 	/**
-	 * Static factory method to create a Bun WebSocket server
+	 * Static factory method to create a Bun WebSocket server.
+	 *
+	 * @param port - Port to listen on.
+	 * @param opts - Optional configuration:
+	 *   - `path`: If set, only requests to this URL pathname are upgraded
+	 *     (e.g., `/ws`). Other paths fall through to `fetch`. Defaults to
+	 *     accepting any path.
+	 *   - `fetch`: Handler for non-upgrade HTTP requests on the same port.
+	 *     Useful for serving a static bundle alongside the WS endpoint so
+	 *     the whole app runs on one port. If omitted, non-upgrade requests
+	 *     get a 400 response (matches the previous WS-only behavior).
 	 */
-	static create(port: number): BunWebSocketServerTransport {
+	static create(
+		port: number,
+		opts?: {
+			path?: string;
+			fetch?: (req: Request, server: Server<unknown>) => Response | Promise<Response>;
+		},
+	): BunWebSocketServerTransport {
 		// Peer ID tracking per socket
 		const socketToPeerId = new WeakMap<ServerWebSocket<unknown>, string>();
+
+		const upgradePath = opts?.path;
+		const fallback = opts?.fetch;
 
 		let transport: BunWebSocketServerTransport;
 
 		const server = Bun.serve({
 			port,
 			fetch(req, server) {
-				// Upgrade HTTP request to WebSocket
-				if (server.upgrade(req)) {
-					return; // Connection upgraded
+				// If a path filter is set, only attempt the WS upgrade for
+				// that pathname. Other URLs go straight to the fallback.
+				if (upgradePath === undefined || new URL(req.url).pathname === upgradePath) {
+					if (server.upgrade(req)) {
+						return; // Connection upgraded
+					}
 				}
+				if (fallback !== undefined) return fallback(req, server);
 				return new Response("Expected WebSocket connection", { status: 400 });
 			},
 			websocket: {
-				open(ws) {
-					// Register peer on connection
-					const peerId = transport._registerPeer(ws);
+        open(ws) {
+          const peerId = transport._registerPeer(ws);
 					socketToPeerId.set(ws, peerId);
 					transport._handlePeerConnection(peerId);
-					transport.connectionHandlers.forEach((handler) => handler(transport.getPeer(peerId)!, peerId));
 				},
 				message(ws, message) {
 					// Handle incoming message
