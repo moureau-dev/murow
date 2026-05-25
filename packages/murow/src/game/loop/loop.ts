@@ -54,6 +54,7 @@ export class GameLoop<T extends GameLoopType = DriverType> {
         this._isManual = MANUAL_TYPES.has(this.options.type);
 
         const eventNames = [
+            "sync",
             "pre-tick",
             "tick",
             "post-tick",
@@ -87,6 +88,7 @@ export class GameLoop<T extends GameLoopType = DriverType> {
                 this._tickData.input = input;
 
 
+                baseEvents.emit("sync", this._tickData);
                 baseEvents.emit("pre-tick", this._tickData);
                 this.options.onTick?.(dt, tick, input);
                 baseEvents.emit("tick", this._tickData);
@@ -253,6 +255,25 @@ type BaseEvents = [
              * Timestamp when the loop was started.
              */
             startedAt: number;
+        },
+    ],
+    [
+        "sync",
+        {
+            /**
+             * Current tick number.
+             */
+            tick: number;
+            /**
+             * Delta time since the last tick.
+             */
+            deltaTime: number;
+            /**
+             * Input snapshot at the start of the tick.
+             *
+             * **Only available in client loops.**
+             */
+            input: ReturnType<InputManager["snapshot"]>;
         },
     ],
     [
