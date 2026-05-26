@@ -126,7 +126,7 @@ function connectClient(
         // Tests assert World state immediately after a snapshot tick.
         // delay=0 makes the interpolation buffer emit the newest value
         // on the next 'sync' phase rather than rendering 100ms behind.
-        interpolation: { delay: 0 },
+        strategy: { kind: 'snapshot-interpolation', delay: 0 },
     });
     if (opts?.useDefaultPredictions !== false) client.use(ctx.predictions);
 

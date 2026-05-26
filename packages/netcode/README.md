@@ -130,7 +130,7 @@ const loop = new GameLoop({ tickRate: 20, type: 'client' });
 const client = new GameClient({
   world, loop, transport: yourTransport,
   protocol: { intents, rpcs },
-  interpolation: { delay: 100 },
+  strategy: { kind: 'snapshot-interpolation', delay: 100 },
 });
 client.use(predictions);
 
@@ -294,15 +294,19 @@ Defaults: `snapshot.rate = min(20, tickRate)`, `kick.ackTimeout = 2000`.
 new GameClient({
   world, loop, transport,
   protocol: { intents, rpcs },
-  interpolation: { delay: 100, staleWindow: 300 },
+  strategy: { kind: 'snapshot-interpolation', delay: 100, staleWindow: 300 },
   prediction: { bufferSize: 64 },
 });
 ```
 
-Defaults: `interpolation.delay = 100`, `staleWindow = delay * 2 + 100`,
-`prediction.bufferSize = 64`.
+Defaults: `strategy = { kind: 'snapshot-interpolation', delay: 100 }`,
+`staleWindow = delay * 2 + 100`, `prediction.bufferSize = 64`.
 
-- `delay`: ms behind newest snapshot the buffer renders.
+- `strategy.kind`: peer-rendering strategy. Only
+  `'snapshot-interpolation'` ships today; extrapolation and rollback
+  will slot in here.
+- `delay`: ms behind newest snapshot the buffer renders (snapshot-interp
+  strategy only).
 - `staleWindow`: max ms gap between snapshots before history is dropped
   as stale. Tuned for the normal cadence + jitter slop.
 - `bufferSize`: max buffered unacked predictions kept for rollback.

@@ -26,6 +26,34 @@ interface PredictedIntent {
     dt: number;
 }
 
+/**
+ * Snapshot interpolation strategy. The client holds the last few
+ * snapshots and renders peer entities `delay` ms behind newest, lerping
+ * between the two snapshots straddling that past time. This is the
+ * Source-engine model and the right default for action games, MMOs,
+ * MOBAs, and `.io` titles.
+ */
+export interface SnapshotInterpolationStrategy {
+    kind: 'snapshot-interpolation';
+    /** Snapshot interpolation delay, ms. Default 100. */
+    delay?: number;
+    /**
+     * Max ms between snapshots before history is dropped as stale.
+     * Defaults to `delay * 2 + 100`.
+     */
+    staleWindow?: number;
+}
+
+/**
+ * How peer entities are rendered on the client. Local-player rendering
+ * is driven by `prediction` (separate axis) and is independent of the
+ * peer strategy.
+ *
+ * Today only `snapshot-interpolation` ships. Extrapolation and rollback
+ * variants will slot in here without protocol changes.
+ */
+export type PeerRenderStrategy = SnapshotInterpolationStrategy;
+
 export interface GameClientOptions<
     I extends IntentSchemaMap,
     R extends RpcSchemaMap,
@@ -37,15 +65,11 @@ export interface GameClientOptions<
         intents: DefinedIntents<I>;
         rpcs: DefinedRpcs<R>;
     };
-    interpolation?: {
-        /** Snapshot interpolation delay, ms. Default 100. */
-        delay?: number;
-        /**
-         * Max ms between snapshots before history is dropped as stale.
-         * Defaults to `delay * 2 + 100`.
-         */
-        staleWindow?: number;
-    };
+    /**
+     * Peer-rendering strategy. Defaults to snapshot interpolation with
+     * a 100 ms delay.
+     */
+    strategy?: PeerRenderStrategy;
     prediction?: {
         /** Max buffered unacked predictions kept for rollback. Default 64. */
         bufferSize?: number;
@@ -100,8 +124,9 @@ export class GameClient<
         this.transport = opts.transport;
         this.intents = opts.protocol.intents;
         this.rpcs = opts.protocol.rpcs;
-        this.interpolationDelay = opts.interpolation?.delay ?? 100;
-        const staleWindowMs = opts.interpolation?.staleWindow ?? this.interpolationDelay * 2 + 100;
+        const strategy: PeerRenderStrategy = opts.strategy ?? { kind: 'snapshot-interpolation' };
+        this.interpolationDelay = strategy.delay ?? 100;
+        const staleWindowMs = strategy.staleWindow ?? this.interpolationDelay * 2 + 100;
         this.predictionBufferSize = opts.prediction?.bufferSize ?? 64;
         this.rng = new SimpleRNG(1);
         this.lastDt = opts.loop.ticker.intervalMs / 1000;
