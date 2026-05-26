@@ -28,38 +28,31 @@ import { GameServer, GameClient } from 'murow/netcode';
 
 ## Minimal example
 
-A complete top-down skeleton in about 60 lines.
+Top-down movement. One networked component, one intent, one prediction
+shared between server and client.
 
 <details>
-<summary><b>shared/protocol.ts</b> (components, intents, RPCs)</summary>
+<summary><b>shared/protocol.ts</b></summary>
 
 ```ts
-import { defineComponent, f32, u16 } from 'murow';
+import { defineComponent, f32 } from 'murow';
 import { defineIntents, defineRpcs, networked } from 'murow/netcode';
 
 export const Position = defineComponent('Position', {
   schema: { x: f32, y: f32 },
-  sync: networked({ rate: 'every-tick', interest: 'aoi', interp: 'lerp' }),
-});
-
-export const Health = defineComponent('Health', {
-  schema: { hp: u16 },
-  sync: networked({ rate: 'on-change', interest: 'global', interp: 'step' }),
+  sync: networked({ rate: 'every-tick', interest: 'global', interp: 'lerp' }),
 });
 
 export const intents = defineIntents({
-  move:  { dx: f32, dy: f32 },
-  shoot: { fromX: f32, fromY: f32, dirX: f32, dirY: f32 },
+  move: { dx: f32, dy: f32 },
 });
 
-export const rpcs = defineRpcs({
-  matchStart: { countdownSec: u16 },
-});
+export const rpcs = defineRpcs({});
 ```
 </details>
 
 <details>
-<summary><b>shared/predictions.ts</b> (shared deterministic logic)</summary>
+<summary><b>shared/predictions.ts</b></summary>
 
 ```ts
 import { definePredictions } from 'murow/netcode';
@@ -67,9 +60,6 @@ import { intents, Position } from './protocol';
 
 export const predictions = definePredictions(intents, {
   move: ({ dx, dy }, ctx) => {
-    // ctx.fields returns the typed-array bundle for ctx.entity and
-    // auto-marks the entity dirty so the snapshot codec picks it up.
-    // Zero allocation, RAW-speed reads/writes.
     const pos = ctx.fields(Position);
     pos.x[ctx.entity] += dx * ctx.deltaTime;
     pos.y[ctx.entity] += dy * ctx.deltaTime;
@@ -79,39 +69,26 @@ export const predictions = definePredictions(intents, {
 </details>
 
 <details>
-<summary><b>server.ts</b> (authoritative side)</summary>
+<summary><b>server.ts</b></summary>
 
 ```ts
 import { GameLoop, World } from 'murow';
-import { GameServer, defineHandlers, AoiGrid, LagCompensation } from 'murow/netcode';
-import { intents, rpcs, Position, Health } from './shared/protocol';
+import { GameServer } from 'murow/netcode';
+import { intents, rpcs, Position } from './shared/protocol';
 import { predictions } from './shared/predictions';
 
-const world = new World({ maxEntities: 1000, components: [Position, Health] });
+const world = new World({ maxEntities: 64, components: [Position] });
 const loop = new GameLoop({ tickRate: 20, type: 'server-timeout' });
 const server = new GameServer({
   world, loop, transport: yourTransport,
   protocol: { intents, rpcs },
-  snapshot: { rate: 20 },
-});
-
-const handlers = defineHandlers(intents, {
-  shoot: ({ fromX, fromY, dirX, dirY }, ctx) => {
-    ctx.lagCompensated(() => {
-      // Hit detection here runs against the world as the shooter saw it.
-    });
-  },
 });
 
 server.use(predictions);
-server.use(handlers);
-server.use(new AoiGrid({ cellSize: 32, radius: 50, positionComponent: Position }));
-server.use(new LagCompensation({ tickRate: 20, historyMs: 500, components: [Position] }));
 
 server.on('connection', ({ peer }) => {
   const e = world.spawn();
   world.add(e, Position, { x: 0, y: 0 });
-  world.add(e, Health, { hp: 100 });
   server.assignEntity(peer, e);
 });
 
@@ -120,21 +97,21 @@ loop.start();
 </details>
 
 <details>
-<summary><b>client.ts</b> (predicted side with interpolated peers)</summary>
+<summary><b>client.ts</b></summary>
 
 ```ts
 import { GameLoop, World } from 'murow';
 import { GameClient } from 'murow/netcode';
-import { intents, rpcs, Position, Health } from './shared/protocol';
+import { intents, rpcs, Position } from './shared/protocol';
 import { predictions } from './shared/predictions';
 
-const world = new World({ maxEntities: 1000, components: [Position, Health] });
+const world = new World({ maxEntities: 64, components: [Position] });
 const loop = new GameLoop({ tickRate: 20, type: 'client' });
 const client = new GameClient({
   world, loop, transport: yourTransport,
   protocol: { intents, rpcs },
-  strategy: { kind: 'snapshot-interpolation', delay: 100 },
 });
+
 client.use(predictions);
 
 let me: number | null = null;
@@ -454,6 +431,25 @@ Predictions replay during rollback. Same input must produce same output.
    local-only state from a prediction means rollback can corrupt UI.
 
 Server-only handlers can do anything.
+
+## Not wired up yet
+
+Some `networked()` fields are in the type but not honored at runtime
+yet. Setting them compiles; the component still syncs with default
+behavior.
+
+- `rate: 'on-change'` and `rate: { every: N }` behave as `'every-tick'`.
+  To approximate `'on-change'`, only mutate the component when the
+  value actually changed.
+- `interest` is not read. Server plugins (`AoiGrid`, etc.) run their
+  `filterSnapshot` against every dirty entity regardless of what each
+  component says. To limit a component to a subset of peers today,
+  write a plugin whose `filterSnapshot` inspects it.
+- `interp: 'slerp'` falls through to `'lerp'`. `'lerp'`, `'step'`, and
+  `'none'` work.
+- `snapThreshold` is unread.
+
+Interp dispatch is per-component, not per-field.
 
 ## Tick rates
 
