@@ -1,16 +1,27 @@
 import type { InputSnapshot } from "../types";
 
+export interface AxisOptions {
+    /** Initial value, radians. Default 0. */
+    initial?: number;
+    /** Lower clamp, radians. Default -Infinity (unbounded). */
+    min?: number;
+    /** Upper clamp, radians. Default +Infinity (unbounded). */
+    max?: number;
+}
+
 export interface MouseLookOptions {
     /** Radians per pixel of mouse motion. Default 0.002. */
     sensitivity?: number;
-    /** Lower pitch clamp, radians. Default -PI/2 + 0.01. */
-    pitchMin?: number;
-    /** Upper pitch clamp, radians. Default PI/2 - 0.01. */
-    pitchMax?: number;
-    /** Initial yaw, radians. Default 0. */
-    initialYaw?: number;
-    /** Initial pitch, radians. Default 0. */
-    initialPitch?: number;
+    /**
+     * Yaw axis config. Default: unbounded (yaw wraps freely around the
+     * vertical axis). Clamp it for cameras that don't rotate fully.
+     */
+    yaw?: AxisOptions;
+    /**
+     * Pitch axis config. Default min/max: ±PI/2 - 0.01 (just shy of
+     * straight up/down so the basis vectors stay well-defined).
+     */
+    pitch?: AxisOptions;
     /**
      * Flip horizontal look direction. With the default (false), moving
      * the mouse right rotates the view right; set true to invert.
@@ -40,7 +51,7 @@ export interface MouseLookOptions {
  *
  * Zero-alloc: each output has its own backing `Float32Array(3)` reused
  * across calls. Don't hold a reference past the next call to the same
- * accessor — the values will overwrite. Copy if you need to persist.
+ * accessor; the values will overwrite. Copy if you need to persist.
  *
  * Usage:
  * ```ts
@@ -69,6 +80,8 @@ export class MouseLook {
     yaw: number;
     pitch: number;
     sensitivity: number;
+    yawMin: number;
+    yawMax: number;
     pitchMin: number;
     pitchMax: number;
     invertX: boolean;
@@ -89,10 +102,17 @@ export class MouseLook {
 
     constructor(opts: MouseLookOptions = {}) {
         this.sensitivity = opts.sensitivity ?? 0.002;
-        this.pitchMin = opts.pitchMin ?? -Math.PI / 2 + 0.01;
-        this.pitchMax = opts.pitchMax ?? Math.PI / 2 - 0.01;
-        this.yaw = opts.initialYaw ?? 0;
-        this.pitch = opts.initialPitch ?? 0;
+
+        const yaw = opts.yaw ?? {};
+        this.yaw = yaw.initial ?? 0;
+        this.yawMin = yaw.min ?? -Infinity;
+        this.yawMax = yaw.max ?? Infinity;
+
+        const pitch = opts.pitch ?? {};
+        this.pitch = pitch.initial ?? 0;
+        this.pitchMin = pitch.min ?? -Math.PI / 2 + 0.01;
+        this.pitchMax = pitch.max ?? Math.PI / 2 - 0.01;
+
         this.invertX = opts.invertX ?? false;
         this.invertY = opts.invertY ?? false;
         this.drag = opts.drag ?? true;
@@ -115,6 +135,8 @@ export class MouseLook {
         // dx > 0 when the mouse moves right. Default (invertX=false)
         // rotates yaw negative -> camera turns right.
         this.yaw -= dx * this.sensitivity * (this.invertX ? -1 : 1);
+        if (this.yaw < this.yawMin) this.yaw = this.yawMin;
+        else if (this.yaw > this.yawMax) this.yaw = this.yawMax;
         // dy > 0 when the mouse moves down (screen coordinates). Default
         // (invertY=false) maps mouse-up to look-up.
         this.pitch -= dy * this.sensitivity * (this.invertY ? -1 : 1);

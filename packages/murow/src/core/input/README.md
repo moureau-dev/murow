@@ -76,10 +76,8 @@ loop.events.on('tick', ({ input }) => {
 ```ts
 const look = new MouseLook({
     sensitivity: 0.0035,
-    pitchMin: 0.15,
-    pitchMax: Math.PI / 2 - 0.05,
-    initialYaw: Math.PI * 0.25,
-    initialPitch: 0.6,
+    yaw: { initial: Math.PI * 0.25 },
+    pitch: { initial: 0.6, min: 0.15, max: Math.PI / 2 - 0.05 },
 });
 
 loop.events.on('tick', ({ input }) => {
@@ -95,10 +93,10 @@ loop.events.on('tick', ({ input }) => {
 | Option | Default | Notes |
 |---|---|---|
 | `sensitivity` | `0.002` | radians per pixel of motion |
-| `pitchMin` | `-PI/2 + 0.01` | lower clamp |
-| `pitchMax` | `PI/2 - 0.01` | upper clamp |
-| `initialYaw` | `0` | |
-| `initialPitch` | `0` | |
+| `yaw.initial` | `0` | starting yaw |
+| `yaw.min` / `yaw.max` | unbounded | clamp range; yaw wraps freely by default |
+| `pitch.initial` | `0` | starting pitch |
+| `pitch.min` / `pitch.max` | `±PI/2 - 0.01` | clamp just shy of straight up/down |
 | `invertX` | `false` | flip horizontal direction |
 | `invertY` | `false` | flip vertical direction (flight-sim style) |
 | `drag` | `true` | allow drag-to-look as a Pointer Lock fallback |

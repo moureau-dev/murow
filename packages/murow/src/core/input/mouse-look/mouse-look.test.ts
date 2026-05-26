@@ -57,7 +57,7 @@ describe("MouseLook", () => {
     test("default (invertY=false): mouse-up tilts pitch up", () => {
         const look = new MouseLook({
             sensitivity: 1, drag: true,
-            pitchMin: -10, pitchMax: 10,
+            pitch: { min: -10, max: 10 },
         });
         // Mouse up = negative dy (screen y grows downward).
         look.update(makeInput({ dy: -3, leftDown: true }));
@@ -67,21 +67,38 @@ describe("MouseLook", () => {
     test("invertY=true: mouse-up tilts pitch down", () => {
         const look = new MouseLook({
             sensitivity: 1, drag: true, invertY: true,
-            pitchMin: -10, pitchMax: 10,
+            pitch: { min: -10, max: 10 },
         });
         look.update(makeInput({ dy: -3, leftDown: true }));
         expect(look.pitch).toBeCloseTo(-3);
     });
 
-    test("pitch clamps to [pitchMin, pitchMax]", () => {
+    test("pitch clamps to [pitch.min, pitch.max]", () => {
         const look = new MouseLook({
             sensitivity: 1, drag: true,
-            pitchMin: -0.5, pitchMax: 0.5,
+            pitch: { min: -0.5, max: 0.5 },
         });
         look.update(makeInput({ dy: -100, leftDown: true })); // tries pitch += 100
         expect(look.pitch).toBeCloseTo(0.5);
         look.update(makeInput({ dy: 1000, leftDown: true }));
         expect(look.pitch).toBeCloseTo(-0.5);
+    });
+
+    test("yaw clamps to [yaw.min, yaw.max] when configured", () => {
+        const look = new MouseLook({
+            sensitivity: 1, drag: true,
+            yaw: { min: -1, max: 1 },
+        });
+        look.update(makeInput({ dx: -100, leftDown: true })); // tries yaw += 100
+        expect(look.yaw).toBeCloseTo(1);
+        look.update(makeInput({ dx: 1000, leftDown: true }));
+        expect(look.yaw).toBeCloseTo(-1);
+    });
+
+    test("yaw is unbounded by default", () => {
+        const look = new MouseLook({ sensitivity: 1, drag: true });
+        look.update(makeInput({ dx: -100, leftDown: true }));
+        expect(look.yaw).toBeCloseTo(100);
     });
 
     test("drag=false: drag button is ignored, only lock drives", () => {
@@ -91,7 +108,7 @@ describe("MouseLook", () => {
     });
 
     test("forward / right / up are unit vectors", () => {
-        const look = new MouseLook({ initialYaw: 0.7, initialPitch: 0.3 });
+        const look = new MouseLook({ yaw: { initial: 0.7 }, pitch: { initial: 0.3 } });
         const norm = (v: [number, number, number]) =>
             Math.hypot(v[0], v[1], v[2]);
         expect(norm(look.forward)).toBeCloseTo(1);
@@ -100,7 +117,7 @@ describe("MouseLook", () => {
     });
 
     test("forward / right / up are pairwise orthogonal", () => {
-        const look = new MouseLook({ initialYaw: 0.7, initialPitch: 0.3 });
+        const look = new MouseLook({ yaw: { initial: 0.7 }, pitch: { initial: 0.3 } });
         const dot = (
             a: [number, number, number],
             b: [number, number, number],
@@ -111,12 +128,12 @@ describe("MouseLook", () => {
     });
 
     test("right lies in the XZ plane (y component is 0)", () => {
-        const look = new MouseLook({ initialYaw: 0.7, initialPitch: 0.5 });
+        const look = new MouseLook({ yaw: { initial: 0.7 }, pitch: { initial: 0.5 } });
         expect(look.right[1]).toBeCloseTo(0);
     });
 
     test("orbit puts camera at `distance` from target", () => {
-        const look = new MouseLook({ initialYaw: 0.5, initialPitch: 0.4 });
+        const look = new MouseLook({ yaw: { initial: 0.5 }, pitch: { initial: 0.4 } });
         const target: [number, number, number] = [1, 2, 3];
         const [cx, cy, cz] = look.orbit(target, 8);
         const dist = Math.hypot(cx - 1, cy - 2, cz - 3);
@@ -130,7 +147,7 @@ describe("MouseLook", () => {
     });
 
     test("accessors reuse their backing buffer (zero-alloc contract)", () => {
-        const look = new MouseLook({ initialYaw: 0.7, initialPitch: 0.3 });
+        const look = new MouseLook({ yaw: { initial: 0.7 }, pitch: { initial: 0.3 } });
         // Same accessor returns the same instance across reads.
         expect(look.forward).toBe(look.forward);
         expect(look.right).toBe(look.right);
