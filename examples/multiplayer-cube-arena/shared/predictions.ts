@@ -9,7 +9,7 @@ import { ARENA_HALF, MOVE_SPEED } from './constants';
  * state on both sides.
  *
  * The intent's `dx` / `dz` are normalized direction components. We multiply
- * by MOVE_SPEED and `ctx.dt` to get the per-tick displacement.
+ * by MOVE_SPEED and `ctx.deltaTime` to get the per-tick displacement.
  *
  * Deterministic: no Math.random, no Date.now, no module-level state.
  */
@@ -17,8 +17,8 @@ export const predictions = definePredictions(intents, {
     move: ({ dx, dz }, ctx) => {
         if (!ctx.world.has(ctx.entity, Components.Position)) return;
         const p = ctx.world.get(ctx.entity, Components.Position);
-        const nx = p.x + dx * MOVE_SPEED * ctx.dt;
-        const nz = p.z + dz * MOVE_SPEED * ctx.dt;
+        const nx = p.x + dx * MOVE_SPEED * ctx.deltaTime;
+        const nz = p.z + dz * MOVE_SPEED * ctx.deltaTime;
 
         // Clamp to the arena bounds. Same logic both sides → no
         // disagreement at the boundaries.

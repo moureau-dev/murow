@@ -131,7 +131,7 @@ const mouseLook = new MouseLook({
     sensitivity: 0.0035,
     yaw: { initial: Math.PI * 0.25 },
     pitch: { initial: 0.6, min: 0.15, max: Math.PI / 2 - 0.05 },
-    drag: true,
+    drag: true, // allows mobile
 });
 
 const zoom = new ScrollZoom({
@@ -189,7 +189,7 @@ arena.loop.events.on('tick', ({ input }) => {
     }
 });
 
-// sync entities net -> world
+// sync entities world -> renderer (automatically lerps)
 arena.loop.events.on('tick', () => {
     for (const [entity, handle] of handles) {
         if (!arena.world.has(entity, Components.Position)) continue;
