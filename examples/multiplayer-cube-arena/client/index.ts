@@ -153,10 +153,13 @@ renderer.camera.far = 100;
 // Game loop wiring.
 // ──────────────────────────────────────────────────────────────────────
 
-// pre-tick: capture the renderer's previous state so the GPU lerp has
-// something to interpolate from at frame rate.
+// prepare gpu lerp
 arena.loop.events.on('pre-tick', () => {
     renderer.storePreviousState();
+});
+// execute gpu lerp
+arena.loop.events.on('render', ({ alpha }) => {
+    renderer.render(alpha);
 });
 
 // controls
@@ -182,7 +185,6 @@ arena.loop.events.on('tick', ({ input }) => {
     const ndz = mag > 0 ? localDz / mag : 0;
 
     if (ndx !== 0 || ndz !== 0) {
-        // No `entity` opt: the server-assigned entity is the default.
         client.sendIntent('move', { dx: ndx, dz: ndz });
     }
 });
@@ -209,11 +211,6 @@ arena.loop.events.on('tick', ({ input }) => {
     const [cx, cy, cz] = mouseLook.orbit([tx, ty, tz], zoom.value);
     renderer.camera.setPosition(cx, cy, cz);
     renderer.camera.setTarget(tx, ty, tz);
-});
-
-// render: GPU lerps mix(prev, curr, alpha) per instance.
-arena.loop.events.on('render', ({ alpha }) => {
-    renderer.render(alpha);
 });
 
 arena.loop.start();
