@@ -12,8 +12,8 @@ import { LoopDriver } from "../driver";
  *
  * @example
  * ```typescript
- * const driver = new ImmediateDriver((dt) => {
- *   world.tick(dt);
+ * const driver = new ImmediateDriver((deltaTime) => {
+ *   world.tick(deltaTime);
  *   broadcastState();
  * });
  * driver.start();
@@ -23,7 +23,7 @@ export class ImmediateDriver implements LoopDriver {
     /**
      * @param update - Callback invoked each tick with delta time in seconds
      */
-    constructor(public update: (dt: number) => void) { }
+    constructor(public update: (deltaTime: number) => void) { }
 
     private last = performance.now();
     private running = false;
@@ -57,10 +57,10 @@ export class ImmediateDriver implements LoopDriver {
         if (!this.running) return;
 
         const now = performance.now();
-        const dt = (now - this.last) / 1000;
+        const deltaTime = (now - this.last) / 1000;
         this.last = now;
 
-        this.update(dt);
+        this.update(deltaTime);
         setImmediate(this.loop);
     };
 }

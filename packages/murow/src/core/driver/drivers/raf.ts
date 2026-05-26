@@ -10,8 +10,8 @@ import { LoopDriver } from "../driver";
  *
  * @example
  * ```typescript
- * const driver = new RafDriver((dt) => {
- *   player.update(dt);
+ * const driver = new RafDriver((deltaTime) => {
+ *   player.update(deltaTime);
  *   renderer.render();
  * });
  * driver.start();
@@ -24,12 +24,12 @@ export class RafDriver implements LoopDriver {
      * frame on resume. Clamping keeps the engine from trying to "catch up"
      * by replaying that lost time at high speed.
      */
-    private static readonly MAX_DT_MS = 250;
+    private static readonly MAX_DELTA_MS = 250;
 
     /**
      * @param update - Callback invoked each frame with delta time in seconds
      */
-    constructor(public update: (dt: number) => void) { }
+    constructor(public update: (deltaTime: number) => void) { }
 
     private last = performance.now();
     private running = false;
@@ -73,18 +73,18 @@ export class RafDriver implements LoopDriver {
     /**
      * Internal loop method that calculates delta time and schedules the next frame.
      *
-     * Delta time is provided in seconds, clamped to `MAX_DT_MS` so a paused
+     * Delta time is provided in seconds, clamped to `MAX_DELTA_MS` so a paused
      * tab doesn't deliver a multi-second frame.
      */
     loop = () => {
         if (!this.running) return;
 
         const now = performance.now();
-        const rawDt = now - this.last;
+        const rawDelta = now - this.last;
         this.last = now;
-        const dt = Math.min(rawDt, RafDriver.MAX_DT_MS) / 1000;
+        const deltaTime = Math.min(rawDelta, RafDriver.MAX_DELTA_MS) / 1000;
 
-        this.update(dt);
+        this.update(deltaTime);
         requestAnimationFrame(this.loop);
     };
 }

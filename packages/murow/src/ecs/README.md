@@ -336,7 +336,7 @@ entity.isAlive();
 // ✓ RAW API: Critical hot paths
 const entities = world.query(Transform, Velocity);
 for (let i = 0; i < entities.length; i++) {
-  transformX[entities[i]!]! += velocityVx[entities[i]!]! * dt;
+  transformX[entities[i]!]! += velocityVx[entities[i]!]! * deltaTime;
 }
 
 // ✓ Hybrid API: Production systems
@@ -415,7 +415,7 @@ The system builder API exists because **raw queries don't give you field access*
 for (const eid of world.query(Transform, Velocity)) {
   const t = world.get(eid, Transform);  // Object allocation
   const v = world.get(eid, Velocity);   // Object allocation
-  world.update(eid, Transform, { x: t.x + v.vx * dt });
+  world.update(eid, Transform, { x: t.x + v.vx * deltaTime });
 }
 
 // ✓ System builder: Pre-cached field arrays
@@ -425,12 +425,12 @@ world.addSystem()
     { transform: ['x', 'y'] },
     { velocity: ['vx', 'vy'] }
   ])
-  .run((entity, dt) => {
+  .run((entity, deltaTime) => {
     // HYBRID: Direct array access
-    entity.transform_x_array[entity.eid] += entity.velocity_vx_array[entity.eid] * dt;
+    entity.transform_x_array[entity.eid] += entity.velocity_vx_array[entity.eid] * deltaTime;
 
     // ERGONOMIC: Cached getter/setter (looks like a field, but isn't)
-    entity.transform_x += entity.velocity_vx * dt;
+    entity.transform_x += entity.velocity_vx * deltaTime;
   });
 ```
 

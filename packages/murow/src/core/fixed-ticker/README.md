@@ -25,7 +25,7 @@ const ticker = new FixedTicker({
   onTick: (deltaTime, tick) => {
     // Your fixed-step game logic here
     // deltaTime = 1 / rate
-    console.log(`Tick ${tick} - dt: ${deltaTime}`);
+    console.log(`Tick ${tick} - deltaTime: ${deltaTime}`);
   },
   onTickSkipped: (skipped) => {
     console.warn(`Skipped ${skipped} ticks due to high delta time`);

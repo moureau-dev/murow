@@ -11,7 +11,7 @@ describe('GameLoop sync phase', () => {
     loop.events.on('tick', () => order.push('tick'));
     loop.events.on('post-tick', () => order.push('post-tick'));
 
-    // Manual loop: advance the ticker by exactly one tick worth of dt.
+    // Manual loop: advance the ticker by exactly one tick worth of deltaTime.
     loop.step(1 / 60 + 0.001);
 
     // Expect sync first, then pre-tick, then tick, then post-tick.
@@ -36,7 +36,7 @@ describe('GameLoop sync phase', () => {
     let syncs = 0;
     loop.events.on('sync', () => { syncs++; });
 
-    // Three ticks worth of dt — expect 3 syncs.
+    // Three ticks worth of deltaTime — expect 3 syncs.
     loop.step(3 / 60 + 0.001);
     expect(syncs).toBe(3);
   });

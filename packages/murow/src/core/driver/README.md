@@ -10,7 +10,7 @@ Provides variable delta time that should be consumed by `FixedTicker` for determ
 - **Environment-Specific**: Uses `requestAnimationFrame` (client) or `setImmediate` (server)
 - **Automatic Delta Time**: Calculates delta in seconds between frames
 - **Simple API**: Start and stop with a single method call
-- **Designed for FixedTicker**: Provides variable dt that FixedTicker converts to fixed timesteps
+- **Designed for FixedTicker**: Provides variable deltaTime that FixedTicker converts to fixed timesteps
 
 ---
 
@@ -31,15 +31,15 @@ const ticker = new FixedTicker({
 });
 
 // Client: RAF driver with interpolation
-const clientDriver = createDriver('client', (dt) => {
-  ticker.tick(dt);
+const clientDriver = createDriver('client', (deltaTime) => {
+  ticker.tick(deltaTime);
   render(ticker.alpha); // Smooth 60 FPS rendering of 30 TPS simulation
 });
 clientDriver.start();
 
 // Server: Immediate driver for high-frequency updates
-const serverDriver = createDriver('server', (dt) => {
-  ticker.tick(dt);
+const serverDriver = createDriver('server', (deltaTime) => {
+  ticker.tick(deltaTime);
   broadcastState();
 });
 serverDriver.start();
@@ -51,8 +51,8 @@ serverDriver.start();
 import { createDriver } from '@/core/loop';
 
 // ⚠️ Variable delta time - not suitable for multiplayer
-const driver = createDriver('client', (dt) => {
-  player.update(dt);
+const driver = createDriver('client', (deltaTime) => {
+  player.update(deltaTime);
   renderer.render();
 });
 driver.start();
@@ -77,7 +77,7 @@ driver.start();
 ## API
 
 ```typescript
-createDriver(type: 'client' | 'server', update: (dt: number) => void): LoopDriver
+createDriver(type: 'client' | 'server', update: (deltaTime: number) => void): LoopDriver
 ```
 
 ```typescript
@@ -91,7 +91,7 @@ interface LoopDriver {
 
 ## Notes
 
-- Delta time (`dt`) is always in **seconds**, not milliseconds
+- Delta time (`deltaTime`) is always in **seconds**, not milliseconds
 - **Always use with FixedTicker** for multiplayer/deterministic games
 - Direct usage without FixedTicker only suitable for single-player scenarios
 - `ImmediateDriver` requires Node.js (uses `setImmediate`)

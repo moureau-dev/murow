@@ -16,7 +16,7 @@ export interface LoopDriver {
     /** Internal loop iteration method */
     loop(): void;
     /** Update callback invoked each frame with delta time in seconds */
-    update(dt: number): void;
+    update(deltaTime: number): void;
 }
 
 /**
@@ -40,27 +40,27 @@ export type DriverType = 'server-immediate' | 'client' | 'server-timeout';
  * @example
  * ```typescript
  * // Client
- * const clientDriver = createDriver('client', (dt) => {
- *   game.update(dt);
+ * const clientDriver = createDriver('client', (deltaTime) => {
+ *   game.update(deltaTime);
  *   renderer.render();
  * });
  * clientDriver.start();
  *
  * // Server (maximum performance)
- * const serverDriver = createDriver('server', (dt) => {
- *   simulation.tick(dt);
+ * const serverDriver = createDriver('server', (deltaTime) => {
+ *   simulation.tick(deltaTime);
  * });
  * serverDriver.start();
  *
  * // Server (balanced with I/O)
- * const balancedDriver = createDriver('server-timeout', (dt) => {
- *   simulation.tick(dt);
+ * const balancedDriver = createDriver('server-timeout', (deltaTime) => {
+ *   simulation.tick(deltaTime);
  *   handleNetworkIO();
  * });
  * balancedDriver.start();
  * ```
  */
-export function createDriver(type: DriverType, update: (dt: number) => void) {
+export function createDriver(type: DriverType, update: (deltaTime: number) => void) {
     if (type === 'server-immediate') {
         return new ImmediateDriver(update);
     } else if (type === 'server-timeout') {

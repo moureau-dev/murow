@@ -118,7 +118,7 @@ export class EntityHandle {
    * const velocityVx = entity.field(Velocity, 'vx');
    *
    * // Direct array access - same as RAW API!
-   * transformX[entity.id] += velocityVx[entity.id] * dt;
+   * transformX[entity.id] += velocityVx[entity.id] * deltaTime;
    * ```
    */
   field<T extends object, K extends keyof T>(
@@ -204,8 +204,8 @@ export class EntityHandle {
    * const velocity = entity.get(Velocity);    // Uses cached data
    *
    * entity
-   *   .setField(Transform, 'x', transform.x + velocity.vx * dt)
-   *   .setField(Transform, 'y', transform.y + velocity.vy * dt)
+   *   .setField(Transform, 'x', transform.x + velocity.vx * deltaTime)
+   *   .setField(Transform, 'y', transform.y + velocity.vy * deltaTime)
    *   .flush();
    * ```
    */
@@ -273,8 +273,8 @@ export class EntityHandle {
    * ```typescript
    * // Mutate fields directly
    * entity.setFields(Transform, function (t) {
-   *   t.x += velocity.vx * dt;
-   *   t.y += velocity.vy * dt;
+   *   t.x += velocity.vx * deltaTime;
+   *   t.y += velocity.vy * deltaTime;
    * });
    *
    * // Conditional mutation

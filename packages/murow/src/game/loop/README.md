@@ -38,9 +38,9 @@ loop.resume();
 
 `manual-client` and `manual-server` do not start an internal [driver](../../core/driver).
 
-You must manually advance the loop(s) through the `.step(dt)` method.
+You must manually advance the loop(s) through the `.step(deltaTime)` method.
 
-In other modes, `.step(dt)` is automatically called internally by the [driver](../../core/driver).
+In other modes, `.step(deltaTime)` is automatically called internally by the [driver](../../core/driver).
 
 This is ideal for multiple instances ticking at once or if you want to own the
 clock yourself:

@@ -75,8 +75,8 @@ describe("Driver", () => {
 
     beforeEach(() => {
       updateCalls = [];
-      driver = new ImmediateDriver((dt) => {
-        updateCalls.push(dt);
+      driver = new ImmediateDriver((deltaTime) => {
+        updateCalls.push(deltaTime);
       });
     });
 
@@ -98,9 +98,9 @@ describe("Driver", () => {
       expect(updateCalls.length).toBeGreaterThan(0);
 
       // Delta times should be positive and in seconds
-      for (const dt of updateCalls) {
-        expect(dt).toBeGreaterThan(0);
-        expect(dt).toBeLessThan(1); // Should be less than 1 second
+      for (const deltaTime of updateCalls) {
+        expect(deltaTime).toBeGreaterThan(0);
+        expect(deltaTime).toBeLessThan(1); // Should be less than 1 second
       }
     });
 
@@ -125,7 +125,7 @@ describe("Driver", () => {
       driver.stop();
 
       // Sum of all deltas should approximately equal wall time
-      const totalTime = updateCalls.reduce((sum, dt) => sum + dt, 0);
+      const totalTime = updateCalls.reduce((sum, deltaTime) => sum + deltaTime, 0);
       expect(totalTime).toBeGreaterThan(0.04); // At least 40ms
       expect(totalTime).toBeLessThan(0.1); // Less than 100ms
     });
@@ -152,8 +152,8 @@ describe("Driver", () => {
 
     beforeEach(() => {
       updateCalls = [];
-      driver = new RafDriver((dt) => {
-        updateCalls.push(dt);
+      driver = new RafDriver((deltaTime) => {
+        updateCalls.push(deltaTime);
       });
     });
 
@@ -175,9 +175,9 @@ describe("Driver", () => {
       expect(updateCalls.length).toBeGreaterThan(0);
 
       // Delta times should be positive and reasonable for 60fps
-      for (const dt of updateCalls) {
-        expect(dt).toBeGreaterThan(0);
-        expect(dt).toBeLessThan(0.1); // Less than 100ms per frame
+      for (const deltaTime of updateCalls) {
+        expect(deltaTime).toBeGreaterThan(0);
+        expect(deltaTime).toBeLessThan(0.1); // Less than 100ms per frame
       }
     });
 
@@ -202,7 +202,7 @@ describe("Driver", () => {
       driver.stop();
 
       // Sum of all deltas should approximately equal wall time
-      const totalTime = updateCalls.reduce((sum, dt) => sum + dt, 0);
+      const totalTime = updateCalls.reduce((sum, deltaTime) => sum + deltaTime, 0);
       expect(totalTime).toBeGreaterThan(0.08); // At least 80ms
       expect(totalTime).toBeLessThan(0.15); // Less than 150ms
     });
@@ -240,8 +240,8 @@ describe("Driver", () => {
 
     beforeEach(() => {
       updateCalls = [];
-      driver = new TimeoutDriver((dt) => {
-        updateCalls.push(dt);
+      driver = new TimeoutDriver((deltaTime) => {
+        updateCalls.push(deltaTime);
       });
     });
 
@@ -263,9 +263,9 @@ describe("Driver", () => {
       expect(updateCalls.length).toBeGreaterThan(0);
 
       // Delta times should be positive and in seconds
-      for (const dt of updateCalls) {
-        expect(dt).toBeGreaterThan(0);
-        expect(dt).toBeLessThan(1); // Should be less than 1 second
+      for (const deltaTime of updateCalls) {
+        expect(deltaTime).toBeGreaterThan(0);
+        expect(deltaTime).toBeLessThan(1); // Should be less than 1 second
       }
     });
 
@@ -290,7 +290,7 @@ describe("Driver", () => {
       driver.stop();
 
       // Sum of all deltas should approximately equal wall time
-      const totalTime = updateCalls.reduce((sum, dt) => sum + dt, 0);
+      const totalTime = updateCalls.reduce((sum, deltaTime) => sum + deltaTime, 0);
       expect(totalTime).toBeGreaterThan(0.04); // At least 40ms
       expect(totalTime).toBeLessThan(0.1); // Less than 100ms
     });
@@ -391,8 +391,8 @@ describe("Driver", () => {
 
     test("should reset timing on restart to prevent large delta", async () => {
       let firstDelta = 0;
-      const driver = new ImmediateDriver((dt) => {
-        if (firstDelta === 0) firstDelta = dt;
+      const driver = new ImmediateDriver((deltaTime) => {
+        if (firstDelta === 0) firstDelta = deltaTime;
       });
 
       driver.start();

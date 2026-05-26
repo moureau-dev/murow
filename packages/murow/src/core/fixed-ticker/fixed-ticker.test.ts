@@ -11,8 +11,8 @@ describe("FixedTicker", () => {
     let calledDelta = 0;
     const ticker = new FixedTicker({
       rate: 60,
-      onTick: (dt) => {
-        calledDelta = dt;
+      onTick: (deltaTime) => {
+        calledDelta = deltaTime;
       },
     });
 

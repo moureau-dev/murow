@@ -829,8 +829,8 @@ export class World extends WorldSystems {
      *   const t = world.get(entity, Transform);
      *   const v = world.get(entity, Velocity);
      *   world.update(entity, Transform, {
-     *     x: t.x + v.vx * dt,
-     *     y: t.y + v.vy * dt
+     *     x: t.x + v.vx * deltaTime,
+     *     y: t.y + v.vy * deltaTime
      *   });
      * }
      * ```
@@ -1024,8 +1024,8 @@ export class World extends WorldSystems {
      * const velocityVy = world.getFieldArray(Velocity, 'vy');
      *
      * for (const entity of world.query(Transform, Velocity)) {
-     *   transformX[entity] += velocityVx[entity] * dt;
-     *   transformY[entity] += velocityVy[entity] * dt;
+     *   transformX[entity] += velocityVx[entity] * deltaTime;
+     *   transformY[entity] += velocityVy[entity] * deltaTime;
      * }
      * ```
      */

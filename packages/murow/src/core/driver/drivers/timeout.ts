@@ -23,8 +23,8 @@ const TIMEOUT_DELAY = 1;
  *
  * @example
  * ```typescript
- * const driver = new TimeoutDriver((dt) => {
- *   world.tick(dt);
+ * const driver = new TimeoutDriver((deltaTime) => {
+ *   world.tick(deltaTime);
  *   broadcastState();
  * });
  * driver.start();
@@ -34,7 +34,7 @@ export class TimeoutDriver implements LoopDriver {
     /**
      * @param update - Callback invoked each tick with delta time in seconds
      */
-    constructor(public update: (dt: number) => void) { }
+    constructor(public update: (deltaTime: number) => void) { }
 
     private last = performance.now();
     private running = false;
@@ -68,10 +68,10 @@ export class TimeoutDriver implements LoopDriver {
         if (!this.running) return;
 
         const now = performance.now();
-        const dt = (now - this.last) / 1000;
+        const deltaTime = (now - this.last) / 1000;
         this.last = now;
 
-        this.update(dt);
+        this.update(deltaTime);
         setTimeout(this.loop, TIMEOUT_DELAY);
     };
 }

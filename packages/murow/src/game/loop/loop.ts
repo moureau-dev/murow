@@ -79,18 +79,18 @@ export class GameLoop<T extends GameLoopType = DriverType> {
 
         this.ticker = new FixedTicker({
             rate: this.options.tickRate,
-            onTick: (dt, tick = 0) => {
+            onTick: (deltaTime, tick = 0) => {
                 const input = this._input.snapshot();
 
                 // Reuse the same object for all three tick events because I'm a freak
-                this._tickData.deltaTime = dt;
+                this._tickData.deltaTime = deltaTime;
                 this._tickData.tick = tick;
                 this._tickData.input = input;
 
 
                 baseEvents.emit("sync", this._tickData);
                 baseEvents.emit("pre-tick", this._tickData);
-                this.options.onTick?.(dt, tick, input);
+                this.options.onTick?.(deltaTime, tick, input);
                 baseEvents.emit("tick", this._tickData);
                 baseEvents.emit("post-tick", this._tickData);
             },
@@ -103,8 +103,8 @@ export class GameLoop<T extends GameLoopType = DriverType> {
         if (!this._isManual) {
             this._driver = createDriver(
                 this.options.type as DriverType,
-                (dt: number) => {
-                    this.step(dt);
+                (deltaTime: number) => {
+                    this.step(deltaTime);
                 },
             );
         }
@@ -124,10 +124,10 @@ export class GameLoop<T extends GameLoopType = DriverType> {
                 currTick = (currTick + 1) % TICK_LOOP;
 
                 const now = performance.now();
-                const dt = now - lastStatsTime;
+                const elapsedMs = now - lastStatsTime;
 
-                if (dt > 0) {
-                    const fps = frameCount * 1000 / dt;
+                if (elapsedMs > 0) {
+                    const fps = frameCount * 1000 / elapsedMs;
                     fpsArray[currTick] = fps;
 
                     if (samples < TICK_LOOP) samples++;
@@ -236,12 +236,12 @@ interface GameLoopOptions<T extends GameLoopType> {
     tickRate: number;
     type: T;
     onTick?: (
-        dt: number,
+        deltaTime: number,
         tick: number,
         input: ReturnType<InputManager["snapshot"]>,
     ) => void;
     onRender?: (
-        dt: number,
+        deltaTime: number,
         alpha: number,
         input: ReturnType<InputManager["peek"]>,
     ) => void;
