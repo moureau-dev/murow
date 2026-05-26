@@ -18,6 +18,8 @@ import { GameServer, GameClient } from 'murow/netcode';
 | `definePredictions` | Deterministic logic that runs identically on both sides. Server is authoritative, client predicts + rolls back. |
 | `defineHandlers` | Server-only logic with `peer`, `clientTick`, `lagCompensated()`. Never runs on the client. |
 | `networked()` | Type-checked `sync` block for `defineComponent`. Controls rate, interest, interp, snapThreshold. |
+| `ctx.fields(C)` | Inside predictions/handlers, returns the typed-array bundle for the active entity and auto-marks it dirty for synced components. RAW-speed reads/writes, zero allocation. |
+| `ctx.markDirty(C \| Cs, entity?)` | Explicit dirty-mark for cross-entity writes or no-op-path skipping when reaching into `ctx.world.fields()` directly. Accepts a single component or an array. |
 | `InterpolationBuffer` (internal) | Renders behind newest snapshot to absorb jitter. Tunable via `interpolation.delay`. |
 | `assignEntity` / `'assigned'` | Server tells the client which entity is theirs. Client auto-marks it predicted. |
 | `AoiGrid` | Spatial interest plugin. Filters per-peer snapshots by radius. |
@@ -65,11 +67,12 @@ import { intents, Position } from './protocol';
 
 export const predictions = definePredictions(intents, {
   move: ({ dx, dy }, ctx) => {
-    const p = ctx.world.get(ctx.entity, Position);
-    ctx.world.update(ctx.entity, Position, {
-      x: p.x + dx * ctx.deltaTime,
-      y: p.y + dy * ctx.deltaTime,
-    });
+    // ctx.fields returns the typed-array bundle for ctx.entity and
+    // auto-marks the entity dirty so the snapshot codec picks it up.
+    // Zero allocation, RAW-speed reads/writes.
+    const pos = ctx.fields(Position);
+    pos.x[ctx.entity] += dx * ctx.deltaTime;
+    pos.y[ctx.entity] += dy * ctx.deltaTime;
   },
 });
 ```
