@@ -2,11 +2,17 @@ import { Schema } from "../core/binary-codec";
 import { PooledCodec, ArrayField } from "../core/pooled-codec";
 
 /**
- * Metadata for a component definition
+ * Metadata for a component definition.
+ *
+ * The second type parameter `S` carries the precise schema literal type
+ * (e.g. `{ x: Field<number, Float32Array>, y: Field<number, Uint8Array> }`)
+ * so that `world.fields(component)` can return a per-field typed-array
+ * map without casts. Defaults to the loose `Schema<T>` for compatibility
+ * with callers that don't preserve the narrow schema.
  */
-export interface ComponentMeta<T extends object> {
+export interface ComponentMeta<T extends object, S extends Schema<T> = Schema<T>> {
   /** Schema defining the component's binary layout */
-  schema: Schema<T>;
+  schema: S;
 
   /** Unique name for this component type */
   name: string;
@@ -25,9 +31,18 @@ export interface ComponentMeta<T extends object> {
 }
 
 /**
- * Component type returned by defineComponent
+ * Component type returned by defineComponent.
+ *
+ * `T` is the value-shape inferred from the schema. `S` is the precise
+ * schema literal type, used by `world.fields()` to return per-field
+ * typed-array maps with exact element types (Float32Array vs Uint8Array
+ * vs ...). When omitted, `S` defaults to the loose `Schema<T>` and
+ * `world.fields()` falls back to a broad TypedArray union per field.
  */
-export type Component<T extends object = any> = ComponentMeta<T> & {
+export type Component<
+  T extends object = any,
+  S extends Schema<T> = Schema<T>,
+> = ComponentMeta<T, S> & {
   /** Type marker for TypeScript inference */
   __type?: T;
 
@@ -45,7 +60,7 @@ export type Component<T extends object = any> = ComponentMeta<T> & {
 /**
  * Infer the data type from a Component
  */
-export type InferComponentType<C> = C extends Component<infer T> ? T : never;
+export type InferComponentType<C> = C extends Component<infer T, any> ? T : never;
 
 /**
  * Calculate the byte size of a schema
@@ -63,10 +78,18 @@ function calculateSchemaSize<T extends object>(schema: Schema<T>): number {
  * opaque sync metadata (consumed by `murow/netcode` to mark the component
  * as networked).
  */
-export interface ComponentDescriptor<T extends object> {
-  schema: Schema<T>;
+export interface ComponentDescriptor<T extends object, S extends Schema<T> = Schema<T>> {
+  schema: S;
   sync: unknown;
 }
+
+/**
+ * Helper: derive the value-shape `T` from a narrowly-typed schema literal.
+ * Each entry must be a `Field<T[K], any>`, and we extract the `T[K]` per key.
+ */
+type InferSchemaShape<S> = {
+  [K in keyof S]: S[K] extends import("../core/binary-codec").Field<infer V, any> ? V : never;
+};
 
 /**
  * Define a component type with its binary schema.
@@ -80,6 +103,10 @@ export interface ComponentDescriptor<T extends object> {
  * `murow/netcode`. The check for descriptor form is `'schema' in arg &&
  * 'sync' in arg`, which is unambiguous because real component field names
  * never collide with both keys at once.
+ *
+ * The schema literal type is preserved through inference so that
+ * `world.fields(component)` returns precisely-typed typed arrays per
+ * field (Float32Array vs Uint8Array vs Uint16Array etc.) without casts.
  *
  * @example Bare schema
  * ```typescript
@@ -98,14 +125,14 @@ export interface ComponentDescriptor<T extends object> {
  * });
  * ```
  */
-export function defineComponent<T extends object>(
+export function defineComponent<S extends Record<string, import("../core/binary-codec").Field<any, any>>>(
   name: string,
-  schema: Schema<T>
-): Component<T>;
-export function defineComponent<T extends object>(
+  schema: S
+): Component<InferSchemaShape<S> & object, S extends Schema<InferSchemaShape<S> & object> ? S : never>;
+export function defineComponent<S extends Record<string, import("../core/binary-codec").Field<any, any>>>(
   name: string,
-  def: ComponentDescriptor<T>
-): Component<T>;
+  def: { schema: S; sync: unknown }
+): Component<InferSchemaShape<S> & object, S extends Schema<InferSchemaShape<S> & object> ? S : never>;
 export function defineComponent<T extends object>(
   name: string,
   arg: Schema<T> | ComponentDescriptor<T>

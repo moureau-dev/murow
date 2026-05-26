@@ -1,3 +1,4 @@
+import type { ArrayFromField, Schema } from "../core/binary-codec";
 import { generateId } from "../core/generate-id";
 import { Component } from "./component";
 import { ComponentStore } from "./component-store";
@@ -101,6 +102,15 @@ export class World extends WorldSystems {
      */
     private dirtyBitsByComponent: (Uint32Array | null)[] = [];
 
+    /**
+     * Per-component field bundle: a frozen object whose keys are the
+     * component's field names and whose values are the same typed-array
+     * references returned by `getFieldArray`. Built once at registration,
+     * shared forever — `world.fields(C)` returns the same object on every
+     * call (zero garbage). Indexed by `component.__worldIndex`.
+     */
+    private fieldsByComponent: Record<string, Float32Array | Int32Array | Uint32Array | Uint16Array | Uint8Array>[] = [];
+
     // Debug ID
     private worldId = generateId({ prefix: "world_" });
 
@@ -146,6 +156,9 @@ export class World extends WorldSystems {
         // synced component (32 entities per word).
         const dirtyWordsPerComponent = Math.ceil(this.maxEntities / 32);
 
+        // Pre-allocate field-bundle array
+        this.fieldsByComponent = new Array(config.components.length);
+
         // Register components
         config.components.forEach((component, index) => {
             this.components.push(component);
@@ -161,6 +174,18 @@ export class World extends WorldSystems {
                 component.__sync !== undefined
                     ? new Uint32Array(dirtyWordsPerComponent)
                     : null;
+
+            // Build the field bundle: { fieldName: typedArray } for every
+            // field in the schema. Frozen so users can't accidentally
+            // reassign field arrays. The typed arrays themselves are not
+            // frozen — writes go straight to their underlying memory.
+            const bundle: Record<string, Float32Array | Int32Array | Uint32Array | Uint16Array | Uint8Array> = {};
+            for (let i = 0; i < component.fieldNames.length; i++) {
+                const fieldName = component.fieldNames[i];
+                bundle[fieldName as string] = store.getFieldArray(fieldName);
+            }
+            Object.freeze(bundle);
+            this.fieldsByComponent[index] = bundle;
         });
     }
 
@@ -1035,6 +1060,34 @@ export class World extends WorldSystems {
     ): Float32Array | Int32Array | Uint32Array | Uint16Array | Uint8Array {
         const index = this.getComponentIndex(component);
         return this.componentStoresArray[index]!.getFieldArray(fieldName);
+    }
+
+    /**
+     * Get a typed-array bundle for every field of a component.
+     *
+     * Returns the same frozen object on every call - built once at component
+     * registration and shared forever. Each field name maps to its underlying
+     * typed array, with the EXACT element type inferred from the schema:
+     * `f32 -> Float32Array`, `u8 -> Uint8Array`, `u16 -> Uint16Array`, etc.
+     * No casts needed in caller code.
+     *
+     * Use this when you want RAW-speed per-entity reads/writes without the
+     * `world.update({...})` allocation + `for...in` overhead. Bypasses dirty
+     * tracking: for networked components, see `ctx.fields()` in `murow/netcode`
+     * which auto-marks dirty, or call `world.markDirty(entity, index)` yourself.
+     *
+     * @example
+     * ```ts
+     * const pos = world.fields(Position);   // pos.x, pos.z typed as Float32Array
+     * pos.x[entity] += velocity.x * dt;
+     * pos.z[entity] += velocity.z * dt;
+     * ```
+     */
+    fields<T extends object, S extends Schema<T>>(
+        component: Component<T, S>,
+    ): Readonly<{ [K in keyof S]: ArrayFromField<S[K]> }> {
+        const index = this.getComponentIndex(component);
+        return this.fieldsByComponent[index] as Readonly<{ [K in keyof S]: ArrayFromField<S[K]> }>;
     }
 
     /**

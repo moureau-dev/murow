@@ -2,8 +2,19 @@
  * A binary field descriptor.
  * Defines how a single value is serialized/deserialized
  * at a fixed byte size.
+ *
+ * The second type parameter `A` is a compile-time-only marker for the
+ * typed array kind used when this field is stored in an ECS World's
+ * Structure-of-Arrays column. Tagging `f32 → Float32Array`, `u8 →
+ * Uint8Array`, etc. lets `world.fields(Component)` return precisely
+ * typed Float32Array / Int32Array / ... per field without casts. The
+ * parameter is purely structural — it never appears at runtime.
+ *
+ * Defaults to `unknown` so existing call sites continue to compile.
+ * Composite fields (vec2/vec3/color/string) leave `A` defaulted; only
+ * the scalar primitives narrow it.
  */
-export type Field<T> = {
+export type Field<T, A = unknown> = {
   /** Size of the field in bytes */
   size: number;
 
@@ -26,6 +37,14 @@ export type Field<T> = {
    * Returns the nil value
    */
   toNil(): T;
+
+  /**
+   * Compile-time-only phantom marker for the SoA typed array kind. Never
+   * read at runtime; never written by any of the primitives. Exists so
+   * `Field<number, Float32Array>` and `Field<number, Uint8Array>` are
+   * structurally distinguishable to TypeScript.
+   */
+  readonly __array?: A;
 };
 
 /**
@@ -37,8 +56,24 @@ export type Field<T> = {
  * Do not rely on computed or dynamic keys.
  */
 export type Schema<T> = {
-  [K in keyof T]: Field<T[K]>;
+  [K in keyof T]: Field<T[K], any>;
 };
+
+/**
+ * Helper for extracting the per-field typed-array kind from a schema.
+ *
+ * Given a precise schema literal like `{ x: BinaryCodec.f32, y: BinaryCodec.u8 }`
+ * (inferred narrowly, not widened to `Schema<T>`), this maps each field to
+ * its tagged array kind: `{ x: Float32Array, y: Uint8Array }`.
+ *
+ * Fields whose `A` is `unknown` (composites: vec/color/string) fall back
+ * to the broad TypedArray union.
+ */
+export type ArrayFromField<F> = F extends Field<any, infer A>
+  ? unknown extends A
+    ? Float32Array | Int32Array | Uint32Array | Uint16Array | Uint8Array | Int8Array | Int16Array | Float64Array
+    : A
+  : never;
 
 /**
  * Internal symbol used to cache computed schema byte size.
@@ -141,7 +176,7 @@ export class BaseBinaryCodec {
  */
 export class BinaryPrimitives {
   /** Unsigned 8-bit integer */
-  static readonly u8: Field<number> = {
+  static readonly u8: Field<number, Uint8Array> = {
     size: 1,
     write: (dv, o, v) => dv.setUint8(o, v),
     read: (dv, o) => dv.getUint8(o),
@@ -149,7 +184,7 @@ export class BinaryPrimitives {
   };
 
   /** Unsigned 16-bit integer (big-endian) */
-  static readonly u16: Field<number> = {
+  static readonly u16: Field<number, Uint16Array> = {
     size: 2,
     write: (dv, o, v) => dv.setUint16(o, v, false),
     read: (dv, o) => dv.getUint16(o, false),
@@ -157,7 +192,7 @@ export class BinaryPrimitives {
   };
 
   /** Unsigned 32-bit integer (big-endian) */
-  static readonly u32: Field<number> = {
+  static readonly u32: Field<number, Uint32Array> = {
     size: 4,
     write: (dv, o, v) => dv.setUint32(o, v, false),
     read: (dv, o) => dv.getUint32(o, false),
@@ -165,7 +200,7 @@ export class BinaryPrimitives {
   };
 
   /** Signed 8-bit integer */
-  static readonly i8: Field<number> = {
+  static readonly i8: Field<number, Int8Array> = {
     size: 1,
     write: (dv, o, v) => dv.setInt8(o, v),
     read: (dv, o) => dv.getInt8(o),
@@ -173,7 +208,7 @@ export class BinaryPrimitives {
   };
 
   /** Signed 16-bit integer (big-endian) */
-  static readonly i16: Field<number> = {
+  static readonly i16: Field<number, Int16Array> = {
     size: 2,
     write: (dv, o, v) => dv.setInt16(o, v, false),
     read: (dv, o) => dv.getInt16(o, false),
@@ -181,15 +216,15 @@ export class BinaryPrimitives {
   };
 
   /** Signed 32-bit integer (big-endian) */
-  static readonly i32: Field<number> = {
+  static readonly i32: Field<number, Int32Array> = {
     size: 4,
     write: (dv, o, v) => dv.setInt32(o, v, false),
     read: (dv, o) => dv.getInt32(o, false),
     toNil: () => 0,
   };
 
-  /** 16-bit floating point number (IEEE 754, big-endian) */
-  static readonly f16: Field<number> = {
+  /** 16-bit floating point number (IEEE 754, big-endian) — stored as raw u16 bits */
+  static readonly f16: Field<number, Uint16Array> = {
     size: 2,
     write: (dv, o, v) => {
       // Convert f32 to f16
@@ -262,7 +297,7 @@ export class BinaryPrimitives {
   };
 
   /** 32-bit floating point number (IEEE 754, big-endian) */
-  static readonly f32: Field<number> = {
+  static readonly f32: Field<number, Float32Array> = {
     size: 4,
     write: (dv, o, v) => dv.setFloat32(o, v, false),
     read: (dv, o) => dv.getFloat32(o, false),
@@ -270,7 +305,7 @@ export class BinaryPrimitives {
   };
 
   /** 64-bit floating point number (double, big-endian) */
-  static readonly f64: Field<number> = {
+  static readonly f64: Field<number, Float64Array> = {
     size: 8,
     write: (dv, o, v) => dv.setFloat64(o, v, false),
     read: (dv, o) => dv.getFloat64(o, false),
@@ -278,7 +313,7 @@ export class BinaryPrimitives {
   };
 
   /** Boolean stored as 1 byte (0 = false, 1 = true) */
-  static readonly bool: Field<boolean> = {
+  static readonly bool: Field<boolean, Uint8Array> = {
     size: 1,
     write: (dv, o, v) => dv.setUint8(o, v ? 1 : 0),
     read: (dv, o) => dv.getUint8(o) !== 0,
@@ -363,7 +398,7 @@ export class BinaryPrimitives {
   };
 
   /** 32-bit floating point number (IEEE 754, little-endian) */
-  static readonly f32_le: Field<number> = {
+  static readonly f32_le: Field<number, Float32Array> = {
     size: 4,
     write: (dv, o, v) => dv.setFloat32(o, v, true),
     read: (dv, o) => dv.getFloat32(o, true),
@@ -371,7 +406,7 @@ export class BinaryPrimitives {
   };
 
   /** 64-bit floating point number (double, little-endian) */
-  static readonly f64_le: Field<number> = {
+  static readonly f64_le: Field<number, Float64Array> = {
     size: 8,
     write: (dv, o, v) => dv.setFloat64(o, v, true),
     read: (dv, o) => dv.getFloat64(o, true),
@@ -379,7 +414,7 @@ export class BinaryPrimitives {
   };
 
   /** Unsigned 16-bit integer (little-endian) */
-  static readonly u16_le: Field<number> = {
+  static readonly u16_le: Field<number, Uint16Array> = {
     size: 2,
     write: (dv, o, v) => dv.setUint16(o, v, true),
     read: (dv, o) => dv.getUint16(o, true),
@@ -387,7 +422,7 @@ export class BinaryPrimitives {
   };
 
   /** Unsigned 32-bit integer (little-endian) */
-  static readonly u32_le: Field<number> = {
+  static readonly u32_le: Field<number, Uint32Array> = {
     size: 4,
     write: (dv, o, v) => dv.setUint32(o, v, true),
     read: (dv, o) => dv.getUint32(o, true),
@@ -395,7 +430,7 @@ export class BinaryPrimitives {
   };
 
   /** Signed 16-bit integer (little-endian) */
-  static readonly i16_le: Field<number> = {
+  static readonly i16_le: Field<number, Int16Array> = {
     size: 2,
     write: (dv, o, v) => dv.setInt16(o, v, true),
     read: (dv, o) => dv.getInt16(o, true),
@@ -403,7 +438,7 @@ export class BinaryPrimitives {
   };
 
   /** Signed 32-bit integer (little-endian) */
-  static readonly i32_le: Field<number> = {
+  static readonly i32_le: Field<number, Int32Array> = {
     size: 4,
     write: (dv, o, v) => dv.setInt32(o, v, true),
     read: (dv, o) => dv.getInt32(o, true),
