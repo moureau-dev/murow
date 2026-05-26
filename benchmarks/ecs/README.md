@@ -68,17 +68,65 @@ Uses ergonomic field access with caching for convenience.
 
 ---
 
+## Murow ECS — FIELDS API (TypeScript / Bun)
+
+**11 systems — 5-run average**
+
+Uses `world.fields(C)` to grab the per-component typed-array bundle once
+outside the system loop, then reads and writes typed-array slots directly
+(e.g. `transform.x[eid] += velocity.vx[eid] * deltaTime`). Bundle objects
+are built at component-registration time and shared for the World's
+lifetime, so the hot path is identical to RAW: indexed loads and stores
+into `Float32Array` / `Int32Array` / `Uint16Array` / `Uint8Array`.
+
+This is the API style recommended for prediction/handler bodies in
+`murow/netcode` via `ctx.fields(C)`, which additionally auto-marks the
+entity dirty for the snapshot codec.
+
+| Entities | Avg Frame Time |     Approx FPS | P50      | P95      | P99      | Max      | StdDev   |
+| -------: | -------------: | -------------: | -------: | -------: | -------: | -------: | -------: |
+|      500 |    **0.16 ms** | **~6,250 FPS** | **0.14** | **0.25** | **0.79** | **2.14** | **0.09** |
+|    1,000 |    **0.15 ms** | **~6,670 FPS** | **0.13** | **0.31** | **0.64** | **0.92** | **0.08** |
+|    5,000 |    **0.90 ms** | **~1,110 FPS** | **0.66** | **2.24** | **3.30** | **4.93** | **0.56** |
+|   10,000 |    **1.45 ms** |   **~690 FPS** | **1.52** | **1.87** | **4.12** | **4.60** | **0.52** |
+|   15,000 |    **2.58 ms** |   **~388 FPS** | **2.32** | **3.53** | **5.60** | **6.06** | **0.67** |
+|   25,000 |    **5.89 ms** |   **~170 FPS** | **5.74** | **6.89** | **9.59** |**10.00** | **0.67** |
+|   50,000 |   **11.78 ms** |    **~85 FPS** |**11.45** |**13.52** |**19.08** |**19.97** | **1.29** |
+|  100,000 |   **25.44 ms** |    **~39 FPS** |**25.42** |**30.89** |**38.82** |**39.21** | **3.85** |
+
+**Takeaways:**
+
+- ~30% slower than RAW at 10k entities (1.45 ms vs 1.12 ms). The extra
+  cost is one property load per typed-array access (`pos.x[eid]` vs the
+  bare `transformX[eid]`); JIT inlines most of it but not all.
+- ~35% faster than Hybrid at 10k (1.45 ms vs 2.23 ms). At small/mid
+  entity counts where most games operate, this is the sweet spot for
+  hand-written systems.
+- Holds 60 FPS up to 25k entities. ~92% of frames stay under 16.67 ms at
+  50k (the rest spill ~3 ms over). At 100k entities lands at ~25 ms,
+  3.4x faster than Direct.
+- Tail variance stays controlled (max/P50 ~1.5-3x), no GC stalls.
+- Predictions and handlers in `murow/netcode` get this performance
+  by default via `ctx.fields(C)`, with the bonus of automatic dirty
+  marking on networked components.
+
+---
+
 ## Murow ECS — DIRECT API (TypeScript / Bun)
 
 **11 systems — 5-run average**
 
-Plain `world.query()` + `world.has()` + `world.get()` + `world.update()` per
-entity — same style as `definePredictions` handlers in `murow/netcode`. No
-`addSystem` builder, no cached typed-array references. **Slowest tier by
-design** — included so users can see the cost of the per-entity object
-allocation that the System Builder avoids. Predictions use this style
-because they run once per intent (not per-frame across thousands of
-entities), where the overhead is negligible.
+Plain `world.query()` + `world.get()` + `world.update()` per entity. No
+`addSystem` builder, no cached typed-array references, no `world.fields`
+bundle. **Slowest tier by design** — included so users can see the cost
+of the per-entity object allocation `world.update({...})` performs and
+the read-view repopulation `world.get` does.
+
+Use this style when ergonomics matter more than speed (test setup,
+debug tooling, one-off scripts). For per-frame systems use the System
+Builder. For prediction/handler bodies in `murow/netcode`, use
+`ctx.fields(C)` instead — that has its own benchmark below (FIELDS API)
+landing close to RAW.
 
 | Entities | Avg Frame Time |     Approx FPS | P50      | P95      | P99      | Max      | StdDev   |
 | -------: | -------------: | -------------: | -------: | -------: | -------: | -------: | -------: |
