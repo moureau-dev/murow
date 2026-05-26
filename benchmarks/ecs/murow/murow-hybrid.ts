@@ -1,6 +1,6 @@
-import { defineComponent } from "../../../src/ecs/component";
-import { BinaryCodec } from "../../../src/core/binary-codec";
-import { World } from "../../../src/ecs/world";
+import { defineComponent } from "murow/ecs";
+import { BinaryCodec } from "murow/core/binary-codec";
+import { World } from "murow/ecs";
 
 // Define components matching Bevy's benchmark
 const Transform2D = defineComponent("Transform2D", {

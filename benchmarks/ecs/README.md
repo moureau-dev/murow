@@ -68,6 +68,37 @@ Uses ergonomic field access with caching for convenience.
 
 ---
 
+## Murow ECS — DIRECT API (TypeScript / Bun)
+
+**11 systems — 5-run average**
+
+Plain `world.query()` + `world.has()` + `world.get()` + `world.update()` per
+entity — same style as `definePredictions` handlers in `murow/netcode`. No
+`addSystem` builder, no cached typed-array references. **Slowest tier by
+design** — included so users can see the cost of the per-entity object
+allocation that the System Builder avoids. Predictions use this style
+because they run once per intent (not per-frame across thousands of
+entities), where the overhead is negligible.
+
+| Entities | Avg Frame Time |     Approx FPS | P50      | P95      | P99      | Max      | StdDev   |
+| -------: | -------------: | -------------: | -------: | -------: | -------: | -------: | -------: |
+|      500 |    **0.47 ms** | **~2,130 FPS** | **0.43** | **0.66** | **1.78** | **4.00** | **0.19** |
+|    1,000 |    **0.71 ms** | **~1,410 FPS** | **0.67** | **0.98** | **1.41** | **1.85** | **0.13** |
+|    5,000 |    **3.42 ms** |   **~292 FPS** | **3.16** | **4.27** | **7.20** |**10.40** | **0.68** |
+|   10,000 |    **6.91 ms** |   **~145 FPS** | **6.64** | **8.70** |**11.18** |**11.51** | **0.84** |
+|   15,000 |   **12.50 ms** |    **~80 FPS** |**12.40** |**14.90** |**15.39** |**15.76** | **1.05** |
+|   25,000 |   **18.21 ms** |    **~55 FPS** |**17.64** |**21.89** |**28.08** |**30.44** | **1.88** |
+|   50,000 |   **42.70 ms** |    **~23 FPS** |**41.52** |**49.16** |**55.82** |**70.43** | **3.17** |
+|  100,000 |   **77.47 ms** |    **~13 FPS** |**75.69** |**92.94** |**107.90**|**116.62**| **7.46** |
+
+**Takeaways:**
+- ~6× slower than RAW at 10k entities (6.91 ms vs 1.12 ms).
+- Falls off the 60 FPS budget around 25k entities.
+- Tail variance remains controlled (~1.5× max/P50) — same GC story as the other Murow tiers.
+- **Use freely for predictions (one entity per call). Use the System Builder for hot per-frame loops.**
+
+---
+
 ## bitECS (JavaScript)
 
 **11 systems — 5-run average**

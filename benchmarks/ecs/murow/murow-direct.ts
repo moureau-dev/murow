@@ -2,7 +2,30 @@ import { defineComponent } from "murow/ecs";
 import { BinaryCodec } from "murow/core/binary-codec";
 import { World } from "murow/ecs";
 
-// Define components matching Bevy's benchmark
+/**
+ * "Direct" API variant.
+ *
+ * Same workload as `murow.ts` (RAW) / `murow-hybrid.ts` / `murow-ergonomic.ts`,
+ * but every system uses the plain `world.query()` + `world.get()` +
+ * `world.update()` pattern — no `addSystem` builder, no cached
+ * typed-array references.
+ *
+ * Note: `world.get` already runs an internal `hasComponentBit` check
+ * and throws if the component is missing — there's no need to call
+ * `world.has(eid, C)` before `world.get(eid, C)` for an entity that
+ * came out of `world.query(C, ...)`. The only `world.has` calls in
+ * this file guard CROSS-ENTITY lookups (combat system checks the
+ * target entity's Health/Armor, which weren't part of the query).
+ *
+ * This is the API style used by `definePredictions` handlers in
+ * `murow/netcode`, where each prediction runs against ONE entity per
+ * intent, so per-call object allocation cost is negligible. The
+ * benchmark exists to measure what happens when you accidentally use
+ * this style in a per-frame system over thousands of entities — it's
+ * the slowest tier by design.
+ */
+
+// Define components matching the other ECS benchmarks
 const Transform2D = defineComponent("Transform2D", {
   x: BinaryCodec.f32,
   y: BinaryCodec.f32,
@@ -104,23 +127,6 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     ],
   });
 
-  // Get direct array access (bitECS-style)
-  const transformX = world.getFieldArray(Transform2D, 'x');
-  const transformY = world.getFieldArray(Transform2D, 'y');
-  const transformRot = world.getFieldArray(Transform2D, 'rotation');
-  const velocityVx = world.getFieldArray(Velocity, 'vx');
-  const velocityVy = world.getFieldArray(Velocity, 'vy');
-  const healthCurrent = world.getFieldArray(Health, 'current');
-  const healthMax = world.getFieldArray(Health, 'max');
-  const armorValue = world.getFieldArray(Armor, 'value');
-  const damageAmount = world.getFieldArray(Damage, 'amount');
-  const cooldownCurrent = world.getFieldArray(Cooldown, 'current');
-  const cooldownMax = world.getFieldArray(Cooldown, 'max');
-  const targetEntityId = world.getFieldArray(Target, 'entityId');
-  const statusStunned = world.getFieldArray(Status, 'stunned');
-  const statusSlowed = world.getFieldArray(Status, 'slowed');
-  const lifetimeRemaining = world.getFieldArray(Lifetime, 'remaining');
-
   // Setup entities
   const rng = new SimpleRng(12345);
 
@@ -141,31 +147,20 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
         max: 100,
       });
 
-    // 80% have armor
     if (rng.nextF32() > 0.2) {
-      entity.add(Armor, {
-        value: Math.floor(rng.nextF32() * 50),
-      });
+      entity.add(Armor, { value: Math.floor(rng.nextF32() * 50) });
     }
 
-    // 60% can deal damage
     if (rng.nextF32() > 0.4) {
       const targetEntity = Math.floor(rng.nextF32() * entityCount);
       entity
-        .add(Damage, {
-          amount: Math.floor(rng.nextF32() * 20) + 10,
-        })
-        .add(Cooldown, {
-          current: 0,
-          max: 1.0,
-        })
+        .add(Damage, { amount: Math.floor(rng.nextF32() * 20) + 10 })
+        .add(Cooldown, { current: 0, max: 1.0 })
         .add(Target, { entityId: targetEntity });
     }
 
-    // Assign to teams
     entity.add(Team, { id: Math.floor(rng.nextF32() * 4) });
 
-    // 20% have status effects
     if (rng.nextF32() > 0.8) {
       entity.add(Status, {
         stunned: rng.nextF32() > 0.5 ? 1 : 0,
@@ -173,11 +168,8 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
       });
     }
 
-    // 15% are temporary entities
     if (rng.nextF32() > 0.85) {
-      entity.add(Lifetime, {
-        remaining: rng.nextF32() * 5,
-      });
+      entity.add(Lifetime, { remaining: rng.nextF32() * 5 });
     }
   }
 
@@ -189,22 +181,24 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
   for (let frame = 0; frame < frameCount; frame++) {
     const frameStart = performance.now();
 
-    // Movement system (raw array access)
+    // Movement system — plain get/update pattern (predictions-style)
     const movementEntities = world.query(Transform2D, Velocity);
     for (let i = 0; i < movementEntities.length; i++) {
       const eid = movementEntities[i]!;
-      transformX[eid]! += velocityVx[eid]! * deltaTime;
-      transformY[eid]! += velocityVy[eid]! * deltaTime;
+      const t = world.get(eid, Transform2D);
+      const v = world.get(eid, Velocity);
+      world.update(eid, Transform2D, {
+        x: t.x + v.vx * deltaTime,
+        y: t.y + v.vy * deltaTime,
+      });
     }
 
     // Rotation system
     for (let i = 0; i < movementEntities.length; i++) {
       const eid = movementEntities[i]!;
-      const vx = velocityVx[eid]!;
-      const vy = velocityVy[eid]!;
-
-      if (vx !== 0 || vy !== 0) {
-        transformRot[eid] = Math.atan2(vy, vx);
+      const v = world.get(eid, Velocity);
+      if (v.vx !== 0 || v.vy !== 0) {
+        world.update(eid, Transform2D, { rotation: Math.atan2(v.vy, v.vx) });
       }
     }
 
@@ -212,24 +206,29 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     const boundaryEntities = world.query(Transform2D);
     for (let i = 0; i < boundaryEntities.length; i++) {
       const eid = boundaryEntities[i]!;
-      if (transformX[eid]! < 0) transformX[eid]! = 1000;
-      if (transformX[eid]! > 1000) transformX[eid]! = 0;
-      if (transformY[eid]! < 0) transformY[eid]! = 1000;
-      if (transformY[eid]! > 1000) transformY[eid]! = 0;
+      const t = world.get(eid, Transform2D);
+      let nx = t.x;
+      let ny = t.y;
+      if (nx < 0) nx = 1000;
+      if (nx > 1000) nx = 0;
+      if (ny < 0) ny = 1000;
+      if (ny > 1000) ny = 0;
+      if (nx !== t.x || ny !== t.y) {
+        world.update(eid, Transform2D, { x: nx, y: ny });
+      }
     }
 
     // Health regen system
     if (frame % 30 === 0) {
       const healthEntities = world.query(Health);
-
       for (let i = 0; i < healthEntities.length; i++) {
         const eid = healthEntities[i]!;
-        const current = healthCurrent[eid]!;
-        const max = healthMax[eid]!;
-
-        if (current > 0 && current < max) {
-          const newHealth = current + 5;
-          healthCurrent[eid] = newHealth > max ? max : newHealth;
+        const h = world.get(eid, Health);
+        if (h.current > 0 && h.current < h.max) {
+          const newHealth = h.current + 5;
+          world.update(eid, Health, {
+            current: newHealth > h.max ? h.max : newHealth,
+          });
         }
       }
     }
@@ -238,10 +237,12 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     const cooldownEntities = world.query(Cooldown);
     for (let i = 0; i < cooldownEntities.length; i++) {
       const eid = cooldownEntities[i]!;
-
-      if (cooldownCurrent[eid]! > 0) {
-        const newCooldown = cooldownCurrent[eid]! - deltaTime;
-        cooldownCurrent[eid] = newCooldown < 0 ? 0 : newCooldown;
+      const c = world.get(eid, Cooldown);
+      if (c.current > 0) {
+        const newCooldown = c.current - deltaTime;
+        world.update(eid, Cooldown, {
+          current: newCooldown < 0 ? 0 : newCooldown,
+        });
       }
     }
 
@@ -252,34 +253,33 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
 
       for (let i = 0; i < combatEntities.length; i++) {
         const eid = combatEntities[i]!;
-        const cooldown = cooldownCurrent[eid]!;
-        const damage = damageAmount[eid]!;
-        const targetId = targetEntityId[eid]!;
+        const cd = world.get(eid, Cooldown);
+        const dmg = world.get(eid, Damage);
+        const tgt = world.get(eid, Target);
+        const targetId = tgt.entityId;
 
-        if (cooldown === 0 && world.isAlive(targetId) && world.has(targetId, Health)) {
-          const targetHealth = healthCurrent[targetId]!;
-          let damageDealt = damage;
+        if (cd.current === 0 && world.isAlive(targetId) && world.has(targetId, Health)) {
+          const targetHealth = world.get(targetId, Health);
+          let damageDealt = dmg.amount;
 
-          // Apply armor reduction
           if (world.has(targetId, Armor)) {
-            const armor = armorValue[targetId]!;
-            const reduced = damage - armor * 0.1;
+            const armor = world.get(targetId, Armor);
+            const reduced = dmg.amount - armor.value * 0.1;
             damageDealt = reduced < 1 ? 1 : Math.floor(reduced);
           }
 
-          const newHealth = targetHealth > damageDealt ? targetHealth - damageDealt : 0;
+          const newHealth =
+            targetHealth.current > damageDealt ? targetHealth.current - damageDealt : 0;
           updates.push({ targetId, newHealth, attackerId: eid });
         }
       }
 
-      // Apply all updates
       for (const { targetId, newHealth, attackerId } of updates) {
         if (world.isAlive(targetId)) {
-          healthCurrent[targetId] = newHealth;
+          world.update(targetId, Health, { current: newHealth });
         }
-
-        // Reset cooldown
-        cooldownCurrent[attackerId] = cooldownMax[attackerId]!;
+        const c = world.get(attackerId, Cooldown);
+        world.update(attackerId, Cooldown, { current: c.max });
       }
     }
 
@@ -288,8 +288,8 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     const toRemove: number[] = [];
     for (let i = 0; i < deathEntities.length; i++) {
       const eid = deathEntities[i]!;
-
-      if (healthCurrent[eid] === 0) {
+      const h = world.get(eid, Health);
+      if (h.current === 0) {
         toRemove.push(eid);
       }
     }
@@ -301,15 +301,12 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     const statusEntities = world.query(Status, Velocity);
     for (let i = 0; i < statusEntities.length; i++) {
       const eid = statusEntities[i]!;
-      const stunned = statusStunned[eid];
-      const slowed = statusSlowed[eid];
-
-      if (stunned === 1) {
-        velocityVx[eid] = 0;
-        velocityVy[eid] = 0;
-      } else if (slowed === 1) {
-        velocityVx[eid]! *= 0.5;
-        velocityVy[eid]! *= 0.5;
+      const s = world.get(eid, Status);
+      if (s.stunned === 1) {
+        world.update(eid, Velocity, { vx: 0, vy: 0 });
+      } else if (s.slowed === 1) {
+        const v = world.get(eid, Velocity);
+        world.update(eid, Velocity, { vx: v.vx * 0.5, vy: v.vy * 0.5 });
       }
     }
 
@@ -318,15 +315,14 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     const expiredEntities: number[] = [];
     for (let i = 0; i < lifetimeEntities.length; i++) {
       const eid = lifetimeEntities[i]!;
-      const remaining = lifetimeRemaining[eid]! - deltaTime;
-
+      const l = world.get(eid, Lifetime);
+      const remaining = l.remaining - deltaTime;
       if (remaining <= 0) {
         expiredEntities.push(eid);
       } else {
-        lifetimeRemaining[eid] = remaining;
+        world.update(eid, Lifetime, { remaining });
       }
     }
-
     for (const eid of expiredEntities) {
       world.despawn(eid);
     }
@@ -335,20 +331,21 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     const velocityEntities = world.query(Velocity);
     for (let i = 0; i < velocityEntities.length; i++) {
       const eid = velocityEntities[i]!;
-
-      velocityVx[eid]! *= 0.99;
-      velocityVy[eid]! *= 0.99;
+      const v = world.get(eid, Velocity);
+      world.update(eid, Velocity, { vx: v.vx * 0.99, vy: v.vy * 0.99 });
     }
 
     // AI behavior system
     if (frame % 20 === 0) {
-      const rng = new SimpleRng(frame);
+      const aiRng = new SimpleRng(frame);
       for (let i = 0; i < velocityEntities.length; i++) {
         const eid = velocityEntities[i]!;
-
-        if (rng.nextF32() > 0.9) {
-          velocityVx[eid]! += (rng.nextF32() - 0.5) * 2;
-          velocityVy[eid]! += (rng.nextF32() - 0.5) * 2;
+        if (aiRng.nextF32() > 0.9) {
+          const v = world.get(eid, Velocity);
+          world.update(eid, Velocity, {
+            vx: v.vx + (aiRng.nextF32() - 0.5) * 2,
+            vy: v.vy + (aiRng.nextF32() - 0.5) * 2,
+          });
         }
       }
     }
@@ -357,7 +354,7 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     frameTimes.push(frameTime);
   }
 
-  // Calculate enhanced metrics
+  // Calculate metrics (same as other variants)
   const endMem = process.memoryUsage();
   const heapUsedMB = (endMem.heapUsed - startMem.heapUsed) / 1024 / 1024;
 
@@ -365,26 +362,23 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
   const min = Math.min(...frameTimes);
   const max = Math.max(...frameTimes);
 
-  // Calculate percentiles
   const sorted = [...frameTimes].sort((a, b) => a - b);
   const p50 = sorted[Math.floor(sorted.length * 0.50)]!;
   const p95 = sorted[Math.floor(sorted.length * 0.95)]!;
   const p99 = sorted[Math.floor(sorted.length * 0.99)]!;
 
-  // Standard deviation
-  const variance = frameTimes.reduce((sum, val) => sum + Math.pow(val - avg, 2), 0) / frameTimes.length;
+  const variance =
+    frameTimes.reduce((sum, val) => sum + Math.pow(val - avg, 2), 0) / frameTimes.length;
   const stdDev = Math.sqrt(variance);
 
-  // Frame budget analysis
-  const frames60fps = frameTimes.filter(t => t <= 16.67).length;
-  const frames30fps = frameTimes.filter(t => t <= 33.33).length;
+  const frames60fps = frameTimes.filter((t) => t <= 16.67).length;
+  const frames30fps = frameTimes.filter((t) => t <= 33.33).length;
   const percent60 = (frames60fps / frameTimes.length) * 100;
   const percent30 = (frames30fps / frameTimes.length) * 100;
 
-  // Jank score (consecutive slow frames)
   let jankScore = 0;
   let consecutiveSlow = 0;
-  frameTimes.forEach(t => {
+  frameTimes.forEach((t) => {
     if (t > 33.33) {
       consecutiveSlow++;
       jankScore += consecutiveSlow;
@@ -397,7 +391,8 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
 }
 
 function main() {
-  console.log("Murow RAW API Benchmark - Complex Game Simulation (11 Systems)\n");
+  console.log("Murow DIRECT API Benchmark - Complex Game Simulation (11 Systems)\n");
+  console.log("Using plain world.query/has/get/update — same style as definePredictions handlers.\n");
   console.log("Running 5 iterations per entity count for averaging...\n");
 
   const entityCounts = [500, 1_000, 5_000, 10_000, 15_000, 25_000, 50_000, 100_000];
@@ -406,20 +401,17 @@ function main() {
   console.log("|----------|-------|-------|-------|-------|-------|--------|--------|--------|------|-------|");
 
   for (const count of entityCounts) {
-    // Run 5 times and collect all metrics
     const runs: BenchmarkMetrics[] = [];
-
     for (let run = 0; run < 5; run++) {
       console.error(`  Run ${run + 1}/5 for ${count} entities...`);
       runs.push(runBenchmark(count));
     }
 
-    // Average all metrics across runs
     const avgAvg = runs.reduce((sum, r) => sum + r.avg, 0) / runs.length;
     const avgP50 = runs.reduce((sum, r) => sum + r.p50, 0) / runs.length;
     const avgP95 = runs.reduce((sum, r) => sum + r.p95, 0) / runs.length;
     const avgP99 = runs.reduce((sum, r) => sum + r.p99, 0) / runs.length;
-    const maxMax = Math.max(...runs.map(r => r.max));
+    const maxMax = Math.max(...runs.map((r) => r.max));
     const avgStdDev = runs.reduce((sum, r) => sum + r.stdDev, 0) / runs.length;
     const avgPercent60 = runs.reduce((sum, r) => sum + r.percent60, 0) / runs.length;
     const avgPercent30 = runs.reduce((sum, r) => sum + r.percent30, 0) / runs.length;

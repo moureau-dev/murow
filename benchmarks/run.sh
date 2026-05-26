@@ -38,6 +38,26 @@ for i in {1..5}; do
 done
 echo ""
 
+# Run Fields Murow benchmark 5 times
+
+echo "Running Fields Murow ECS Benchmark (TypeScript/Bun) - 5 runs..."
+echo "-----------------------------------------"
+for i in {1..5}; do
+    echo "Murow run $i/5..."
+    bun run ecs/murow/murow-fields.ts 2>/dev/null
+done
+echo ""
+
+# Run Direct Murow benchmark 5 times
+
+echo "Running Direct Murow ECS Benchmark (TypeScript/Bun) - 5 runs..."
+echo "-----------------------------------------"
+for i in {1..5}; do
+    echo "Murow run $i/5..."
+    bun run ecs/murow/murow-direct.ts 2>/dev/null
+done
+echo ""
+
 # Check if Rust/Cargo is available
 if command -v cargo &> /dev/null; then
     echo ""
