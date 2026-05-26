@@ -16,14 +16,13 @@ import { ARENA_HALF, MOVE_SPEED } from './constants';
 export const predictions = definePredictions(intents, {
     move: ({ dx, dz }, ctx) => {
         if (!ctx.world.has(ctx.entity, Components.Position)) return;
-        const p = ctx.world.get(ctx.entity, Components.Position);
-        const nx = p.x + dx * MOVE_SPEED * ctx.deltaTime;
-        const nz = p.z + dz * MOVE_SPEED * ctx.deltaTime;
 
-        // Clamp to the arena bounds. Same logic both sides → no
-        // disagreement at the boundaries.
-        const cx = Math.max(-ARENA_HALF, Math.min(ARENA_HALF, nx));
-        const cz = Math.max(-ARENA_HALF, Math.min(ARENA_HALF, nz));
-        ctx.world.update(ctx.entity, Components.Position, { x: cx, z: cz });
+        const pos = ctx.fields(Components.Position);
+        const x = pos.x[ctx.entity] + dx * MOVE_SPEED * ctx.deltaTime;
+        const z = pos.z[ctx.entity] + dz * MOVE_SPEED * ctx.deltaTime;
+
+        // Clamp to the arena bounds.
+        pos.x[ctx.entity] = Math.max(-ARENA_HALF, Math.min(ARENA_HALF, x));
+        pos.z[ctx.entity] = Math.max(-ARENA_HALF, Math.min(ARENA_HALF, z));
     },
 });
