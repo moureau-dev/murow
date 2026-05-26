@@ -65,7 +65,11 @@ const client = new GameClient({
     loop: arena.loop,
     transport,
     protocol: { intents, rpcs },
-    strategy: { kind: 'snapshot-interpolation', delay: 200 },
+    strategy: {
+        kind: 'snapshot-interpolation',
+        delay: 200,
+        staleWindow: 500,
+    },
 });
 client.use(predictions);
 
