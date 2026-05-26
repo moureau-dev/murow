@@ -316,7 +316,7 @@ export class GameServer<
             world: this.world,
             entity: peer.entity,
             tick: this.tickCounter,
-            dt: this.lastDt,
+            deltaTime: this.lastDt,
             rng: this.rng,
             peer,
             clientTick: intent.tick,

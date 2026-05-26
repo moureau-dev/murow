@@ -5,7 +5,7 @@ export interface ServerPlugin {
     readonly name: string;
     onMount?(server: any): void;
     onUnmount?(server: any): void;
-    onTick?(world: World, dt: number): void;
+    onTick?(world: World, deltaTime: number): void;
     /** Observe-only. Return value is ignored. */
     onIntent?(
         peer: Peer,
@@ -32,6 +32,6 @@ export interface ClientPlugin {
     readonly name: string;
     onMount?(client: any): void;
     onUnmount?(client: any): void;
-    onTick?(world: World, dt: number): void;
+    onTick?(world: World, deltaTime: number): void;
     onSnapshot?(tick: number): void;
 }

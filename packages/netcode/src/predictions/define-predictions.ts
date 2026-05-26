@@ -34,7 +34,7 @@ export interface DefinedPredictions<I extends IntentSchemaMap> {
  * locally and rolls back on disagreement.
  *
  * Predictions must be deterministic: no `Math.random`, no `Date.now`, no
- * I/O. Use `ctx.rng`, `ctx.tick`, `ctx.dt`.
+ * I/O. Use `ctx.rng`, `ctx.tick`, `ctx.deltaTime`.
  *
  * @example
  * const predictions = definePredictions(intents, {

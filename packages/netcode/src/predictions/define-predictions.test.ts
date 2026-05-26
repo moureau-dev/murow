@@ -31,7 +31,7 @@ describe('definePredictions / defineHandlers', () => {
             world,
             entity,
             tick: 0,
-            dt: 0.016,
+            deltaTime: 0.016,
             rng: new SimpleRNG(1),
         });
 

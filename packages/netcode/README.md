@@ -67,8 +67,8 @@ export const predictions = definePredictions(intents, {
   move: ({ dx, dy }, ctx) => {
     const p = ctx.world.get(ctx.entity, Position);
     ctx.world.update(ctx.entity, Position, {
-      x: p.x + dx * ctx.dt,
-      y: p.y + dy * ctx.dt,
+      x: p.x + dx * ctx.deltaTime,
+      y: p.y + dy * ctx.deltaTime,
     });
   },
 });
@@ -444,7 +444,7 @@ server.use(defineHandlers(intents, { /* ... */ }));
 Predictions replay during rollback. Same input must produce same output.
 
 1. No `Math.random()`. Use `ctx.rng`.
-2. No `Date.now()` / `performance.now()`. Use `ctx.tick` or `ctx.dt`.
+2. No `Date.now()` / `performance.now()`. Use `ctx.tick` or `ctx.deltaTime`.
 3. No network, audio, file I/O, or DOM.
 4. No reads from module-level mutable state. Keep state in components.
 5. Predictions should only write to networked components. Touching
@@ -455,11 +455,11 @@ Server-only handlers can do anything.
 ## Tick rates
 
 `GameServer` and `GameClient` read the tick rate from `loop.ticker.rate`.
-Snapshot scheduling, `ctx.dt`, and lag-compensation history sizing all
-adapt to it.
+Snapshot scheduling, `ctx.deltaTime`, and lag-compensation history
+sizing all adapt to it.
 
 Server and client should share the same tick rate when predictions are
-in use. Predictions assume both sides advance at the same `dt`.
+in use. Predictions assume both sides advance at the same `deltaTime`.
 
 ## Transport
 

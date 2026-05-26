@@ -6,7 +6,7 @@ export interface PredictionContext {
     entity: Entity;
     tick: number;
     /** Seconds since last tick. */
-    dt: number;
+    deltaTime: number;
     /** Deterministic per-tick RNG. Don't use Math.random in predictions. */
     rng: SimpleRNG;
 }

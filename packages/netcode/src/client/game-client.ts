@@ -23,7 +23,7 @@ interface PredictedIntent {
     name: string;
     payload: any;
     entity: Entity;
-    dt: number;
+    deltaTime: number;
 }
 
 /**
@@ -327,7 +327,7 @@ export class GameClient<
                 world: this.world,
                 entity: pred.entity,
                 tick: pred.tick,
-                dt: pred.dt,
+                deltaTime: pred.deltaTime,
                 rng: this.rng,
             };
             (predFn as any)(pred.payload, ctx);
@@ -385,12 +385,12 @@ export class GameClient<
         const predFn = this.predictionMap?.[name as keyof typeof this.predictionMap];
         if (predFn !== undefined) {
             const entity = this.assignedEntity ?? (0 as Entity);
-            const dt = this.lastDt;
+            const deltaTime = this.lastDt;
             const ctx: PredictionContext = {
                 world: this.world,
                 entity,
                 tick: this.localTick,
-                dt,
+                deltaTime,
                 rng: this.rng,
             };
             (predFn as any)(payload, ctx);
@@ -399,7 +399,7 @@ export class GameClient<
                 name,
                 payload,
                 entity,
-                dt,
+                deltaTime,
             });
             if (entity > 0) this.predictedEntities.add(entity);
             while (this.predictionHistory.length > this.predictionBufferSize) {

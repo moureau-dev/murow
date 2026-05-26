@@ -18,7 +18,7 @@ async function flushTransport(times = 4): Promise<void> {
  * Most games run at 10-30Hz logic, not 60Hz. These tests verify the
  * multiplayer layer honors the loop's actual tickRate everywhere:
  * - Snapshot scheduling.
- * - dt threaded into prediction/handler contexts.
+ * - deltaTime threaded into prediction/handler contexts.
  * - Default snapshot rate adapts (never exceeds tickRate).
  */
 
@@ -60,15 +60,15 @@ describe('low tick rate', () => {
         expect(server).toBeDefined();
     });
 
-    test('prediction context dt matches the loop\'s actual dt at 15Hz', async () => {
+    test('prediction context deltaTime matches the loop\'s actual deltaTime at 15Hz', async () => {
         const intents = defineIntents({ tick: {} });
         const rpcs = defineRpcs({});
 
-        // Record every dt the prediction sees.
-        const observedDts: number[] = [];
+        // Record every deltaTime the prediction sees.
+        const observedDeltas: number[] = [];
         const predictions = definePredictions(intents, {
             tick: (_, ctx) => {
-                observedDts.push(ctx.dt);
+                observedDeltas.push(ctx.deltaTime);
             },
         });
 
@@ -89,25 +89,25 @@ describe('low tick rate', () => {
         (clientLoop as any).step(1 / 15 + 0.001);
         await flushTransport();
 
-        // Fire an intent — the prediction reads ctx.dt.
+        // Fire an intent — the prediction reads ctx.deltaTime.
         client.sendIntent('tick', {});
         await flushTransport();
 
-        // dt should be roughly 1/15 (~0.067), not 1/60 (~0.017).
-        expect(observedDts.length).toBe(1);
-        const dt = observedDts[0];
-        expect(dt).toBeGreaterThan(0.06);
-        expect(dt).toBeLessThan(0.08);
+        // deltaTime should be roughly 1/15 (~0.067), not 1/60 (~0.017).
+        expect(observedDeltas.length).toBe(1);
+        const deltaTime = observedDeltas[0];
+        expect(deltaTime).toBeGreaterThan(0.06);
+        expect(deltaTime).toBeLessThan(0.08);
     });
 
-    test('server handler dt matches the loop\'s actual dt at 10Hz', async () => {
+    test('server handler deltaTime matches the loop\'s actual deltaTime at 10Hz', async () => {
         const intents = defineIntents({ tick: {} });
         const rpcs = defineRpcs({});
 
-        const observedDts: number[] = [];
+        const observedDeltas: number[] = [];
         const handlers = defineHandlers(intents, {
             tick: (_, ctx) => {
-                observedDts.push(ctx.dt);
+                observedDeltas.push(ctx.deltaTime);
             },
         });
 
@@ -140,9 +140,9 @@ describe('low tick rate', () => {
         client.sendIntent('tick', {});
         await flushTransport();
 
-        expect(observedDts.length).toBe(1);
-        const dt = observedDts[0];
-        expect(dt).toBeGreaterThan(0.09);
-        expect(dt).toBeLessThan(0.12);
+        expect(observedDeltas.length).toBe(1);
+        const deltaTime = observedDeltas[0];
+        expect(deltaTime).toBeGreaterThan(0.09);
+        expect(deltaTime).toBeLessThan(0.12);
     });
 });
