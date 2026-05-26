@@ -1,4 +1,5 @@
 import { PrefabBucket, type Entity } from 'murow';
+import { MouseLook, ScrollZoom } from 'murow/core/input';
 import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-websocket';
 import { GameClient } from 'murow/netcode';
 import { WebGPU3DRenderer, type InstanceHandle } from 'murow/webgpu';
@@ -126,27 +127,22 @@ client.on('error', ({ error, context }) => {
 // Third-person orbit camera (local state only — not networked).
 // ──────────────────────────────────────────────────────────────────────
 
-const camera = {
-    /** Yaw in radians (rotation around Y). */
-    yaw: Math.PI * 0.25,
-    /** Pitch in radians (clamped). */
-    pitch: 0.6,
-    /** Distance from the local entity. */
-    distance: 8,
-};
-
-const LOOK_SENSITIVITY = 0.0035;
-const MIN_PITCH = 0.15;
-const MAX_PITCH = Math.PI / 2 - 0.05;
-
-let pointerLocked = false;
-canvas.addEventListener('click', () => {
-    if (!pointerLocked && typeof canvas.requestPointerLock === 'function') {
-        canvas.requestPointerLock();
-    }
+const mouseLook = new MouseLook({
+    sensitivity: 0.0035,
+    yaw: { initial: Math.PI * 0.25 },
+    pitch: { initial: 0.6, min: 0.15, max: Math.PI / 2 - 0.05 },
+    drag: true,
 });
-document.addEventListener('pointerlockchange', () => {
-    pointerLocked = document.pointerLockElement === canvas;
+
+const zoom = new ScrollZoom({
+    initial: 8,
+    min: 3,
+    max: 20,
+    sensitivity: 0.005,
+});
+
+canvas.addEventListener('click', () => {
+    mouseLook.lock(canvas).catch(() => { /* iOS: drag-to-look takes over */ });
 });
 
 renderer.camera.fov = 65;
@@ -163,11 +159,7 @@ arena.loop.events.on('pre-tick', () => {
     renderer.storePreviousState();
 });
 
-// tick: sample input, send the intent, then push each entity's current
-// World position into the renderer. The interpolation buffer wrote
-// interpolated values into World during the 'sync' phase, and the
-// prediction handler wrote the local player's predicted value during
-// sendIntent below — so World is the right source either way.
+// controls
 arena.loop.events.on('tick', ({ input }) => {
     // Read WASD into a 2D direction.
     let dx = 0;
@@ -179,8 +171,8 @@ arena.loop.events.on('tick', ({ input }) => {
 
     // Rotate the WASD vector by the camera yaw so "W" always moves away
     // from the camera, "A" always strafes left, etc.
-    const yawCos = Math.cos(camera.yaw);
-    const yawSin = Math.sin(camera.yaw);
+    const yawCos = Math.cos(mouseLook.yaw);
+    const yawSin = Math.sin(mouseLook.yaw);
     const localDx = dx * yawCos + dz * yawSin;
     const localDz = -dx * yawSin + dz * yawCos;
 
@@ -193,35 +185,28 @@ arena.loop.events.on('tick', ({ input }) => {
         // No `entity` opt: the server-assigned entity is the default.
         client.sendIntent('move', { dx: ndx, dz: ndz });
     }
+});
 
-    // Mouselook (only when pointer is locked).
-    if (pointerLocked) {
-        camera.yaw -= input.mouse.delta.position.x * LOOK_SENSITIVITY;
-        camera.pitch -= input.mouse.delta.position.y * LOOK_SENSITIVITY;
-        camera.pitch = Math.max(MIN_PITCH, Math.min(MAX_PITCH, camera.pitch));
-    }
-
-    // Push every networked entity's World position into the renderer.
-    // `setPosition` only writes CURR — the renderer's `storePreviousState`
-    // captured PREV at the start of this tick, so the next render frames
-    // will GPU-lerp PREV → CURR across this tick interval.
+// sync entities net -> world
+arena.loop.events.on('tick', () => {
     for (const [entity, handle] of handles) {
         if (!arena.world.has(entity, Components.Position)) continue;
         const p = arena.world.get(entity, Components.Position);
         handle.setPosition(p.x, 0.45, p.z);
     }
+});
 
-    // Orbit the camera around the local entity (or the origin if not
-    // spawned yet).
+// camera orbit
+arena.loop.events.on('tick', ({ input }) => {
+    mouseLook.update(input);
+    zoom.update(input);
+
     let tx = 0, ty = 0.45, tz = 0;
     if (localEntity !== null && arena.world.has(localEntity, Components.Position)) {
-        const lp = arena.world.get(localEntity, Components.Position);
-        tx = lp.x; tz = lp.z;
+      const lp = arena.world.get(localEntity, Components.Position);
+      tx = lp.x; tz = lp.z;
     }
-    const cy = ty + camera.distance * Math.sin(camera.pitch);
-    const horiz = camera.distance * Math.cos(camera.pitch);
-    const cx = tx + horiz * Math.sin(camera.yaw);
-    const cz = tz + horiz * Math.cos(camera.yaw);
+    const [cx, cy, cz] = mouseLook.orbit([tx, ty, tz], zoom.value);
     renderer.camera.setPosition(cx, cy, cz);
     renderer.camera.setTarget(tx, ty, tz);
 });
