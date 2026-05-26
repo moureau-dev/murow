@@ -1,4 +1,5 @@
 import { GameLoop, PrefabBucket, SimpleRNG, type GltfPrefab } from 'murow';
+import { MouseLook } from 'murow/core/input';
 import { InstanceHandle, WebGPU3DRenderer } from 'murow/webgpu';
 
 import type { Control, ControlValues, Program, ProgramHandle } from '..';
@@ -137,23 +138,21 @@ export const gltf: Program = {
         renderer.camera.near = values.near ?? DEFAULT_NEAR;
         renderer.camera.far = values.far ?? DEFAULT_FAR;
 
-        // Pointer lock for FPS mouse look
-        let locked = false;
+        // FPS mouselook. `drag: true` keeps it working on touch / iOS
+        // where Pointer Lock isn't supported -- the user can hold the
+        // left button and drag to look around.
+        const mouseLook = new MouseLook({
+            sensitivity: 0.002,
+            yaw: { initial: Math.PI }, // looking toward -Z
+            drag: true,
+        });
 
         canvas.addEventListener('click', () => {
-            if (!locked && typeof canvas.requestPointerLock === 'function') {
-                canvas.requestPointerLock();
-            }
-        });
-        document.addEventListener('pointerlockchange', () => {
-            locked = document.pointerLockElement === canvas;
+            mouseLook.lock(canvas).catch(() => { /* drag-to-look fallback */ });
         });
 
         const loop = new GameLoop({ tickRate: 15, type: 'client' });
 
-        let yaw = Math.PI; // looking toward -Z
-        let pitch = 0;
-        const LOOK_SENSITIVITY = 0.002;
         const MOVE_SPEED = 1.5;
 
         // prepare GPU lerp
@@ -194,18 +193,11 @@ export const gltf: Program = {
 
         // camera mouselook
         loop.events.on('tick', ({ input }) => {
-            const driveLook = locked || input.mouse.left.down;
-            if (driveLook) {
-                yaw -= input.mouse.delta.position.x * LOOK_SENSITIVITY;
-                pitch -= input.mouse.delta.position.y * LOOK_SENSITIVITY;
-                pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
-            }
+            mouseLook.update(input);
 
             const pos = renderer.camera.position;
-            const lookX = Math.sin(yaw) * Math.cos(pitch);
-            const lookY = Math.sin(pitch);
-            const lookZ = Math.cos(yaw) * Math.cos(pitch);
-            renderer.camera.setTarget(pos[0] + lookX, pos[1] + lookY, pos[2] + lookZ);
+            const f = mouseLook.forward;
+            renderer.camera.setTarget(pos[0] + f[0], pos[1] + f[1], pos[2] + f[2]);
         });
 
         // camera WASD movement
@@ -236,6 +228,7 @@ export const gltf: Program = {
             },
             destroy() {
                 loop.stop();
+                mouseLook.destroy();
                 renderer.destroy();
             },
         };
