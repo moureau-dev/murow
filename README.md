@@ -6,6 +6,7 @@ Monorepo for the murow game engine — a lightweight TypeScript framework for se
 
 - **[murow](./packages/murow)** — Core game engine (ECS, networking, protocol, game loop)
 - **[murow/webgpu](./packages/webgpu)** — WebGPU 2D/3D renderer (bundled with murow)
+- **[murow/netcode](./packages/netcode)** — Opinionated multiplayer layer: snapshot sync, prediction with rollback, interest management (bundled with murow)
 
 ## Installation
 
@@ -13,11 +14,12 @@ Monorepo for the murow game engine — a lightweight TypeScript framework for se
 npm install murow
 ```
 
-The WebGPU renderer is **included by default**:
+The WebGPU renderer and netcode layer are **included by default**:
 
 ```typescript
 import { GameLoop, PrefabBucket, World, defineComponent } from 'murow';
 import { WebGPU2DRenderer, WebGPU3DRenderer, d } from 'murow/webgpu';
+import { GameServer, GameClient, defineIntents } from 'murow/netcode';
 ```
 
 ## Quick Examples
@@ -110,6 +112,7 @@ Full example: [benchmarks/renderer/programs/gpu-particles.ts](./benchmarks/rende
 
 - [Murow Core Package](./packages/murow/README.md) — ECS, networking, protocol, game loop
 - [WebGPU Renderer Package](./packages/webgpu/README.md) — 2D/3D rendering, compute shaders, TypeGPU
+- [Netcode Package](./packages/netcode/README.md) — Snapshot sync, prediction, interpolation, plugins
 
 ## Development
 

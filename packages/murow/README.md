@@ -42,7 +42,7 @@ High-performance ECS with **SoA (Structure of Arrays)** storage, bitmask queries
 - `EntityHandle` — Fluent chainable entity API
 
 ### [Game](./src/game) — Game loop abstractions
-- [`GameLoop`](./src/game/loop) — Client/server tick loop with rendering, input tracking, and interpolation
+- [`GameLoop`](./src/game/loop) — Client/server tick loop with `sync` / `pre-tick` / `tick` / `post-tick` / `render` phases, plus input tracking and frame interpolation
 
 ### [Protocol](./src/protocol) — Networking primitives
 Minimalist networking primitives:
@@ -79,6 +79,20 @@ import { WebGPU2DRenderer, WebGPU3DRenderer } from 'murow/webgpu';
 ```
 
 See [WebGPU README](../webgpu/README.md) for full documentation.
+
+### [Netcode](./src/../netcode) — Multiplayer layer
+Opinionated multiplayer layer built on the `Protocol` and `Network`
+primitives above. Adds snapshot-based state sync, client-side prediction
+with rollback, jitter interpolation, server-pushed entity assignment,
+and spatial-interest plugins.
+
+```typescript
+import { GameServer, GameClient, defineIntents, definePredictions } from 'murow/netcode';
+```
+
+See [Netcode README](../netcode/README.md) for full documentation. If
+its opinions don't fit, drop down to the `Protocol` and `Network`
+primitives directly.
 
 ## Building
 
