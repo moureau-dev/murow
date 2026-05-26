@@ -49,9 +49,14 @@ export class AoiGrid implements ServerPlugin {
             return;
         }
 
-        const peerPos = world.get(peer.entity, this.positionComponent);
-        const px = peerPos.x;
-        const py = peerPos.y;
+        // Hoist the typed-array bundle once. Hot-path reads below are
+        // direct indexed loads (Float32Array[eid]), no per-entity
+        // world.get object population.
+        const fields = world.fields(this.positionComponent);
+        const xs = fields.x;
+        const ys = fields.y;
+        const px = xs[peer.entity];
+        const py = ys[peer.entity];
         const maxR = this.radius + this.hysteresisRadius;
         const maxR2 = maxR * maxR;
 
@@ -62,9 +67,8 @@ export class AoiGrid implements ServerPlugin {
                 out.push(eid);
                 continue;
             }
-            const ep = world.get(eid, this.positionComponent);
-            const dx = ep.x - px;
-            const dy = ep.y - py;
+            const dx = xs[eid] - px;
+            const dy = ys[eid] - py;
             if (dx * dx + dy * dy <= maxR2) out.push(eid);
         }
     }

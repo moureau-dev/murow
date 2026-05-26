@@ -8,7 +8,7 @@ import { InterpolationBuffer } from './interpolation-buffer';
 import type { DefinedIntents, IntentPayload, IntentSchemaMap } from '../intents/define-intents';
 import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs';
 import type { DefinedPredictions } from '../predictions/define-predictions';
-import type { PredictionContext } from '../ctx';
+import { makeFieldsAccessor, makeMarkDirty, type PredictionContext } from '../ctx';
 
 const MSG_SNAPSHOT = 0x80;
 const MSG_RPC = 0x81;
@@ -329,6 +329,8 @@ export class GameClient<
                 tick: pred.tick,
                 deltaTime: pred.deltaTime,
                 rng: this.rng,
+                fields: makeFieldsAccessor(this.world, pred.entity),
+                markDirty: makeMarkDirty(this.world, pred.entity),
             };
             (predFn as any)(pred.payload, ctx);
         }
@@ -392,6 +394,8 @@ export class GameClient<
                 tick: this.localTick,
                 deltaTime,
                 rng: this.rng,
+                fields: makeFieldsAccessor(this.world, entity),
+                markDirty: makeMarkDirty(this.world, entity),
             };
             (predFn as any)(payload, ctx);
             this.predictionHistory.push({

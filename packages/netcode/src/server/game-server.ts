@@ -10,7 +10,7 @@ import type { DefinedPredictions } from '../predictions/define-predictions';
 import type { DefinedHandlers } from '../handlers/define-handlers';
 import type { ServerPlugin } from './plugins/plugin';
 import type { LagCompensation } from './plugins/lag-compensation';
-import type { Peer, ServerHandlerContext } from '../ctx';
+import { makeFieldsAccessor, makeMarkDirty, type Peer, type ServerHandlerContext } from '../ctx';
 
 // Server -> client frames. Reserved range to not collide with user
 // intent kinds (which start at 1 in `defineIntents`).
@@ -318,6 +318,8 @@ export class GameServer<
             tick: this.tickCounter,
             deltaTime: this.lastDt,
             rng: this.rng,
+            fields: makeFieldsAccessor(this.world, peer.entity),
+            markDirty: makeMarkDirty(this.world, peer.entity),
             peer,
             clientTick: intent.tick,
             lagCompensated: <T>(fn: () => T): T => {

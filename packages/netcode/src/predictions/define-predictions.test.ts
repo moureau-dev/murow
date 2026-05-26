@@ -4,6 +4,7 @@ import { SimpleRNG } from 'murow/core/simple-rng';
 import { defineComponent, World } from 'murow/ecs';
 import { defineIntents } from '../intents/define-intents';
 import { definePredictions } from './define-predictions';
+import { makeFieldsAccessor, makeMarkDirty } from '../ctx';
 
 describe('definePredictions / defineHandlers', () => {
     const Velocity = defineComponent('Velocity', {
@@ -33,6 +34,8 @@ describe('definePredictions / defineHandlers', () => {
             tick: 0,
             deltaTime: 0.016,
             rng: new SimpleRNG(1),
+            fields: makeFieldsAccessor(world, entity),
+            markDirty: makeMarkDirty(world, entity),
         });
 
         expect(captured.payload.dx).toBe(1);

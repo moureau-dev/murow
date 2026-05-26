@@ -53,6 +53,36 @@ export function encodeDelta(
     dv.setUint16(off, entities.length, true); off += 2;
     dv.setUint16(off, despawned.length, true); off += 2;
 
+    // Pre-resolve per-component metadata so the hot inner loop avoids
+    // re-allocating a Readonly<T> view via `world.get(eid, c)` for every
+    // entity. Each component gets:
+    //   - fieldArrays: the typed-array bundle (world.fields(c))
+    //   - allScalar: true if every field is single-element-per-entity, so
+    //                we can read via `fieldArrays[name][eid]` directly.
+    //                false if any field is composite (vec/string) - in
+    //                which case we fall back to `world.get` for that
+    //                component (still allocation-free thanks to the
+    //                ComponentStore reusable-object pattern).
+    const componentFieldArrays: (Record<string, any>)[] = new Array(components.length);
+    const componentSchemas: (Record<string, any>)[] = new Array(components.length);
+    const componentAllScalar: boolean[] = new Array(components.length);
+    const maxEntities = world.getMaxEntities();
+    for (let ci = 0; ci < components.length; ci++) {
+        const c = components[ci];
+        const fieldArrays = world.fields(c) as Record<string, any>;
+        componentFieldArrays[ci] = fieldArrays;
+        componentSchemas[ci] = c.schema as Record<string, any>;
+        let allScalar = true;
+        for (let fi = 0; fi < c.fieldNames.length; fi++) {
+            const fname = c.fieldNames[fi] as string;
+            if (fieldArrays[fname].length !== maxEntities) {
+                allScalar = false;
+                break;
+            }
+        }
+        componentAllScalar[ci] = allScalar;
+    }
+
     for (let i = 0; i < entities.length; i++) {
         const eid = entities[i];
         const mask = perEntityMasks[i];
@@ -69,11 +99,27 @@ export function encodeDelta(
             if ((mask[wordIndex] & (1 << bitIndex)) === 0) continue;
 
             const c = components[ci];
-            const data = world.get(eid, c) as Record<string, unknown>;
-            for (const fieldName of c.fieldNames as (keyof typeof data)[]) {
-                const field = (c.schema as any)[fieldName];
-                field.write(dv, off, data[fieldName]);
-                off += field.size;
+            const fieldArrays = componentFieldArrays[ci];
+            const schema = componentSchemas[ci];
+            const fieldNames = c.fieldNames as string[];
+
+            if (componentAllScalar[ci]) {
+                // Fast path: direct typed-array reads per field.
+                for (let fi = 0; fi < fieldNames.length; fi++) {
+                    const fieldName = fieldNames[fi];
+                    const field = schema[fieldName];
+                    field.write(dv, off, fieldArrays[fieldName][eid]);
+                    off += field.size;
+                }
+            } else {
+                // Composite-field fallback: assemble the value via world.get.
+                const data = world.get(eid, c) as Record<string, unknown>;
+                for (let fi = 0; fi < fieldNames.length; fi++) {
+                    const fieldName = fieldNames[fi];
+                    const field = schema[fieldName];
+                    field.write(dv, off, data[fieldName]);
+                    off += field.size;
+                }
             }
         }
     }
