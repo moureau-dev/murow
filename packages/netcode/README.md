@@ -69,18 +69,20 @@ export const predictions = definePredictions(intents, {
 </details>
 
 <details>
-<summary><b>server.ts</b></summary>
+<summary><b>server.ts</b> (run with Bun)</summary>
 
 ```ts
-import { GameLoop, World } from 'murow';
+import { BunWebSocketServerTransport, GameLoop, World } from 'murow';
 import { GameServer } from 'murow/netcode';
 import { intents, rpcs, Position } from './shared/protocol';
 import { predictions } from './shared/predictions';
 
+const transport = BunWebSocketServerTransport.create(3000, { path: '/ws' });
+
 const world = new World({ maxEntities: 64, components: [Position] });
 const loop = new GameLoop({ tickRate: 20, type: 'server-timeout' });
 const server = new GameServer({
-  world, loop, transport: yourTransport,
+  world, loop, transport,
   protocol: { intents, rpcs },
 });
 
@@ -97,30 +99,32 @@ loop.start();
 </details>
 
 <details>
-<summary><b>client.ts</b></summary>
+<summary><b>client.ts</b> (runs in the browser)</summary>
 
 ```ts
 import { GameLoop, World } from 'murow';
+import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-websocket';
 import { GameClient } from 'murow/netcode';
 import { intents, rpcs, Position } from './shared/protocol';
 import { predictions } from './shared/predictions';
 
+const transport = new BrowserWebSocketClientTransport(`ws://${location.host}/ws`);
+
 const world = new World({ maxEntities: 64, components: [Position] });
 const loop = new GameLoop({ tickRate: 20, type: 'client' });
 const client = new GameClient({
-  world, loop, transport: yourTransport,
+  world, loop, transport,
   protocol: { intents, rpcs },
 });
 
 client.use(predictions);
 
-let me: number | null = null;
-client.on('assigned', ({ entity }) => { me = entity; });
-
 loop.events.on('tick', ({ input }) => {
   const dx = (input.keys['KeyD']?.down ? 1 : 0) - (input.keys['KeyA']?.down ? 1 : 0);
   const dy = (input.keys['KeyS']?.down ? 1 : 0) - (input.keys['KeyW']?.down ? 1 : 0);
-  if (me !== null && (dx !== 0 || dy !== 0)) client.sendIntent('move', { dx, dy });
+  if (dx !== 0 || dy !== 0) client.sendIntent('move', { dx, dy });
+  // sendIntent returns false until the server assigns an entity; the
+  // engine drops the call rather than mis-firing the prediction.
 });
 
 loop.start();
@@ -168,87 +172,177 @@ server tick) to drop confirmed predictions.
 [type=0x84][serverEid: u32]
 ```
 
-Sent on every `server.assignEntity(peer, e)` call. The client buffers
-the assignment if the entity isn't yet known locally, then resolves it
-on the matching spawn.
+Sent once per `server.assignEntity(peer, e)` call. See the
+"Entity assignment" concept section below.
 </details>
 
 ## Concepts
 
 ### Intents
 
-One-shot client-to-server messages: player actions. Numeric kinds are
-auto-assigned starting at 1 (0 is reserved for engine control frames).
+Client-to-server messages. Define a schema, pass it to the
+`GameClient` / `GameServer` constructor, and `sendIntent` is typed
+against every name and payload.
 
 ```ts
-client.sendIntent('move', { dx: 1, dy: 0 });
-```
+import { defineIntents } from 'murow/netcode';
+import { f32, u32 } from 'murow';
 
-`ctx.entity` is the server-assigned entity. Target ids
-(`attack({ targetId })`, `openChest({ chestId })`) belong in the
-payload itself.
+export const intents = defineIntents({
+  move:   { dx: f32, dy: f32 },
+  attack: { targetId: u32 },
+});
+
+const server = new GameServer({ protocol: { intents, rpcs }, /* ... */ });
+const client = new GameClient({ protocol: { intents, rpcs }, /* ... */ });
+
+client.sendIntent('move', { dx: 1, dy: 0 });
+client.sendIntent('attack', { targetId: 42 });
+```
 
 ### RPCs
 
-Named bidirectional messages outside the state-sync pipeline. Use for
-match start, achievements, UI events.
+Bidirectional messages outside the state-sync pipeline. Define a
+schema, pass it to the `GameClient` / `GameServer` constructor, and
+the send and receive APIs are typed against every name and payload.
 
 ```ts
+import { defineRpcs } from 'murow/netcode';
+import { u8, u16 } from 'murow';
+
+export const rpcs = defineRpcs({
+  matchStart:  { countdownSec: u8 },
+  achievement: { id: u16 },
+});
+
+const server = new GameServer({ protocol: { intents, rpcs }, /* ... */ });
+const client = new GameClient({ protocol: { intents, rpcs }, /* ... */ });
+
 server.broadcastRpc('matchStart', { countdownSec: 3 });
+server.sendRpc(peer, 'achievement', { id: 7 });
+
 client.on('rpc', ({ name, args }) => { /* ... */ });
 ```
 
 ### Predictions
 
-Deterministic logic that runs on both sides. The server applies it
-authoritatively; the client applies it locally and keeps the result in
-a buffer for rollback when the snapshot disagrees.
+Shared logic that runs on both sides. Plug intents in, the handler map
+is typed against them. Server applies authoritatively; client applies
+locally and rolls back when the snapshot disagrees.
 
 ```ts
+import { definePredictions } from 'murow/netcode';
+import { intents, Position } from './protocol';
+
+export const predictions = definePredictions(intents, {
+  move: ({ dx, dy }, ctx) => {
+    const pos = ctx.fields(Position);
+    pos.x[ctx.entity] += dx * ctx.deltaTime;
+    pos.y[ctx.entity] += dy * ctx.deltaTime;
+  },
+});
+
 server.use(predictions);
 client.use(predictions);
 ```
 
 ### Handlers
 
-Server-only logic. Has access to `peer`, `clientTick`, and
-`lagCompensated()`. Never runs on the client.
+Server-side logic. Plug intents in, the handler map is typed against
+them, the server invokes the matching handler per intent. 
+
+> Same `ctx` as predictions, but includes `peer`, `clientTick`, `lagCompensated`.
 
 ```ts
+import { defineHandlers } from 'murow/netcode';
+import { intents, Ammo } from './protocol';
+
+export const handlers = defineHandlers(intents, {
+  shoot: (_, ctx) => {
+    const ammo = ctx.fields(Ammo);
+    if (ammo.count[ctx.entity] === 0) return;
+    ammo.count[ctx.entity] -= 1;
+  },
+});
+
 server.use(handlers);
-// Don't `client.use(handlers)` -- it's a type error by design.
 ```
+
+Predictions and handlers can coexist on the same intent.
 
 ### Networked components
 
-Components with a `sync` block participate in the snapshot pipeline.
-Without `sync`, they're local-only.
+The `sync` block is a sending and receiving rule for the component's
+data. With `sync`, every entity that has the component gets its data
+packaged into outgoing snapshots and unpacked on receive.
+
+> Without `sync`, the component stays local to the environment.
 
 ```ts
-const Position = defineComponent('Position', {
+import { defineComponent, f32, u8 } from 'murow';
+import { networked } from 'murow/netcode';
+
+export const Position = defineComponent('Position', {
   schema: { x: f32, y: f32 },
-  sync: networked({ rate: 'every-tick', interest: 'aoi', interp: 'lerp' }),
+  sync: networked({ rate: 'every-tick', interest: 'global', interp: 'lerp' }),
+});
+
+export const Ammo = defineComponent('Ammo', {
+  schema: { count: u8 },
+  sync: networked({ rate: 'on-change', interest: 'global', interp: 'step' }),
 });
 ```
 
-`networked(...)` is identity sugar with full type checking on `rate`,
-`interest`, `interp`, and `snapThreshold`.
+Options:
+- `rate` - how often it ships (`'every-tick'`, `'on-change'`, `{ every: N }`)
+- `interest` - which peers receive it (`'global'` or a plugin name)
+- `interp` - how the receiver smooths between packets (`'lerp'`, `'slerp'`, `'step'`, `'none'`)
+- `snapThreshold` - distance beyond which the receiver snaps instead of smoothing
+
+Pass the components to both `GameServer` and `GameClient` via the
+`World` constructor; both ends need the same definitions.
+
+```ts
+const world = new World({ maxEntities: 64, components: [Position, Ammo] });
+```
+
+Not all options are wired up yet - see the "Not wired up yet" section
+below.
 
 ### Entity assignment
 
+Tells a client which entity in the world represents *them*. Used
+mostly when a player connects: the server spawns their entity, calls
+`assignEntity`, and the client learns its own id so it can wire input
+to it.
+
 ```ts
-server.assignEntity(peer, entityId);
+// Server: on connect, spawn the player and tell the client.
+server.on('connection', ({ peer }) => {
+  const entityId = world.spawn();
+
+  world.add(entityId, Position, { x: 0, y: 0 });
+  server.assignEntity(peer, entityId);
+});
+
+// Client: remember the id and route input through it.
+let me: number | null = null;
+client.on('assigned', ({ entity }) => { me = entity; });
+
+client.on('error', console.error);
+
+const sent = client.sendIntent('move', { dx, dy });  // applies to `me` on both sides
 ```
 
-Pushes a `MSG_ASSIGN_ENTITY` frame. On the client:
+`sendIntent` returns `false` if the server hasn't yet assigned and
+delivered an entity id to the client. 
 
-```ts
-client.on('assigned', ({ entity }) => { /* this peer's entity */ });
-client.sendIntent('move', { dx, dy }); // ctx.entity = assigned entity
-```
+The assignment fires `client.on('assigned', ({ entity }) => ...)` and is also readable any
+time as `client.assignedEntity`. The same blocked send also emits an
+`'error'` event with `context: 'sendIntent'` for visibility.
 
-If the assignment lands before the entity exists locally (snapshot
-ordering), the client buffers it and resolves on the matching spawn.
+The client auto-marks the assigned entity as predicted, so
+reconciliation only rolls back state for entities the peer owns.
 
 ## Configuration
 

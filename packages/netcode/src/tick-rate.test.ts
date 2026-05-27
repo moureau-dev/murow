@@ -9,6 +9,7 @@ import { defineHandlers } from './handlers/define-handlers';
 import { GameServer } from './server/game-server';
 import { GameClient } from './client/game-client';
 import { MemoryServerTransport } from './transports/memory-transport';
+import type { Peer } from './ctx';
 
 async function flushTransport(times = 4): Promise<void> {
     for (let i = 0; i < times; i++) await Promise.resolve();
@@ -72,9 +73,20 @@ describe('low tick rate', () => {
             },
         });
 
-        const clientWorld = new World({ maxEntities: 8, components: [] });
-        const clientLoop = new GameLoop({ tickRate: 15, type: 'manual-client' });
+        // Need a real server here so the client can be assigned an
+        // entity (sendIntent now blocks until assignment).
+        const serverWorld = new World({ maxEntities: 8, components: [Velocity] });
+        const serverLoop = new GameLoop({ tickRate: 15, type: 'manual-server' });
         const transport = new MemoryServerTransport();
+        const server = new GameServer({
+            world: serverWorld,
+            loop: serverLoop,
+            transport,
+            protocol: { intents, rpcs },
+        });
+
+        const clientWorld = new World({ maxEntities: 8, components: [Velocity] });
+        const clientLoop = new GameLoop({ tickRate: 15, type: 'manual-client' });
         const { client: clientTransport } = transport.connectClient();
         const client = new GameClient({
             world: clientWorld,
@@ -84,6 +96,16 @@ describe('low tick rate', () => {
         });
         client.use(predictions);
         await flushTransport();
+
+        // Assign + sync so client can resolve its assignment.
+        const peerIds = transport.getPeerIds();
+        const peer: Peer = { peerId: peerIds[peerIds.length - 1], entity: -1 };
+        const serverEntity = serverWorld.spawn();
+        serverWorld.add(serverEntity, Velocity, { vx: 0, vy: 0 });
+        server.assignEntity(peer, serverEntity);
+        serverLoop.step(1 / 15 + 0.001);
+        await flushTransport();
+        clientLoop.step(1 / 15 + 0.001);
 
         // Advance the loop by one tick (15Hz → ~0.0667s).
         (clientLoop as any).step(1 / 15 + 0.001);
@@ -111,7 +133,7 @@ describe('low tick rate', () => {
             },
         });
 
-        const serverWorld = new World({ maxEntities: 8, components: [] });
+        const serverWorld = new World({ maxEntities: 8, components: [Velocity] });
         const serverLoop = new GameLoop({ tickRate: 10, type: 'manual-server' });
         const transport = new MemoryServerTransport();
         const server = new GameServer({
@@ -123,7 +145,7 @@ describe('low tick rate', () => {
         server.use(handlers);
 
         // Connect a dummy client transport and fire an intent through it.
-        const clientWorld = new World({ maxEntities: 8, components: [] });
+        const clientWorld = new World({ maxEntities: 8, components: [Velocity] });
         const clientLoop = new GameLoop({ tickRate: 10, type: 'manual-client' });
         const { client: clientTransport } = transport.connectClient();
         const client = new GameClient({
@@ -133,6 +155,16 @@ describe('low tick rate', () => {
             protocol: { intents, rpcs },
         });
         await flushTransport();
+
+        // Assign + sync so client can resolve its assignment.
+        const peerIds = transport.getPeerIds();
+        const peer: Peer = { peerId: peerIds[peerIds.length - 1], entity: -1 };
+        const serverEntity = serverWorld.spawn();
+        serverWorld.add(serverEntity, Velocity, { vx: 0, vy: 0 });
+        server.assignEntity(peer, serverEntity);
+        serverLoop.step(1 / 10 + 0.001);
+        await flushTransport();
+        clientLoop.step(1 / 10 + 0.001);
 
         // Advance the server loop one tick so lastDt is observed.
         (serverLoop as any).step(1 / 10 + 0.001);

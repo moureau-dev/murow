@@ -210,11 +210,19 @@ describe('multiplayer end-to-end', () => {
 
     test('client.sendIntent triggers a typed server intent event', async () => {
         const ctx = setupServer();
-        const { client } = connectClient(ctx);
+        const { client, peer, clientLoop } = connectClient(ctx);
 
         const seen = capture<ServerEventPayloads['intent']>();
         ctx.server.on('intent', seen.set);
         await flush();
+
+        // Assign + sync so the client can resolve its assignment and sendIntent unblocks.
+        const serverEntity = ctx.serverWorld.spawn();
+        ctx.serverWorld.add(serverEntity, Velocity, { vx: 0, vy: 0 });
+        ctx.server.assignEntity(peer, serverEntity);
+        ctx.serverLoop.step(1 / 60 + 0.001);
+        await flush();
+        clientLoop.step(1 / 60 + 0.001);
 
         client.sendIntent('move', { dx: 2, dy: -3 });
         await flush();
@@ -483,13 +491,17 @@ describe('multiplayer end-to-end', () => {
 
     test('assignEntity makes ctx.entity available to subsequent intent handlers', async () => {
         const ctx = setupServer();
-        const { client, peer } = connectClient(ctx);
+        const { client, peer, clientLoop } = connectClient(ctx);
         await flush();
 
-        // Spawn a server-side entity and bind it to the peer.
+        // Spawn a server-side entity, sync it through a snapshot so the
+        // client knows about it, then assign so client.sendIntent unblocks.
         const e = ctx.serverWorld.spawn();
         ctx.serverWorld.add(e, Velocity, { vx: 0, vy: 0 });
         ctx.server.assignEntity(peer, e);
+        ctx.serverLoop.step(1 / 60 + 0.001);
+        await flush();
+        clientLoop.step(1 / 60 + 0.001);
 
         client.sendIntent('move', { dx: 4, dy: 5 });
         await flush();
@@ -506,8 +518,16 @@ describe('multiplayer end-to-end', () => {
         const target = ctx.serverWorld.spawn();
         ctx.serverWorld.add(target, Health, { hp: 100 });
 
-        const { client, clientWorld } = connectClient(ctx);
+        const { client, clientWorld, clientLoop, peer } = connectClient(ctx);
         await flush();
+
+        // Assign + sync so the client can resolve its assignment and sendIntent unblocks.
+        const attacker = ctx.serverWorld.spawn();
+        ctx.serverWorld.add(attacker, Velocity, { vx: 0, vy: 0 });
+        ctx.server.assignEntity(peer, attacker);
+        ctx.serverLoop.step(1 / 60 + 0.001);
+        await flush();
+        clientLoop.step(1 / 60 + 0.001);
 
         expect(ctx.serverWorld.get(target, Health).hp).toBe(100);
 
@@ -524,8 +544,15 @@ describe('multiplayer end-to-end', () => {
         const target = ctx.serverWorld.spawn();
         ctx.serverWorld.add(target, Health, { hp: 100 });
 
-        const { client } = connectClient(ctx);
+        const { client, clientLoop, peer } = connectClient(ctx);
         await flush();
+
+        const attacker = ctx.serverWorld.spawn();
+        ctx.serverWorld.add(attacker, Velocity, { vx: 0, vy: 0 });
+        ctx.server.assignEntity(peer, attacker);
+        ctx.serverLoop.step(1 / 60 + 0.001);
+        await flush();
+        clientLoop.step(1 / 60 + 0.001);
 
         for (let i = 0; i < 3; i++) {
             client.sendIntent('attack', { targetId: target as Entity });
@@ -539,8 +566,15 @@ describe('multiplayer end-to-end', () => {
         const target = ctx.serverWorld.spawn();
         ctx.serverWorld.add(target, Health, { hp: 30 });
 
-        const { client } = connectClient(ctx);
+        const { client, clientLoop, peer } = connectClient(ctx);
         await flush();
+
+        const attacker = ctx.serverWorld.spawn();
+        ctx.serverWorld.add(attacker, Velocity, { vx: 0, vy: 0 });
+        ctx.server.assignEntity(peer, attacker);
+        ctx.serverLoop.step(1 / 60 + 0.001);
+        await flush();
+        clientLoop.step(1 / 60 + 0.001);
 
         client.sendIntent('attack', { targetId: target as Entity });
         client.sendIntent('attack', { targetId: target as Entity });
@@ -582,10 +616,17 @@ describe('multiplayer end-to-end', () => {
         const ctx = setupServer();
         const target = ctx.serverWorld.spawn();
 
-        const { client } = connectClient(ctx);
+        const { client, clientLoop, peer } = connectClient(ctx);
         const intentEvent = capture<ServerEventPayloads['intent']>();
         ctx.server.on('intent', intentEvent.set);
         await flush();
+
+        const attacker = ctx.serverWorld.spawn();
+        ctx.serverWorld.add(attacker, Velocity, { vx: 0, vy: 0 });
+        ctx.server.assignEntity(peer, attacker);
+        ctx.serverLoop.step(1 / 60 + 0.001);
+        await flush();
+        clientLoop.step(1 / 60 + 0.001);
 
         client.sendIntent('attack', { targetId: target as Entity });
         await flush();

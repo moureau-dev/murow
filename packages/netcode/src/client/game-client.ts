@@ -103,8 +103,17 @@ export class GameClient<
     /** Set when MSG_ASSIGN_ENTITY lands before the matching spawn. */
     private pendingAssignedServerEid: number | null = null;
     /** Resolved local entity for the server's assignment. Default for sendIntent. */
-    private assignedEntity: Entity | null = null;
+    private _assignedEntity: Entity | null = null;
     private interpBuffer: InterpolationBuffer;
+
+    /**
+     * Local entity the server has assigned to this peer, or `null` if no
+     * assignment has been received yet. `sendIntent` is a no-op (emits an
+     * `'error'` event) until this is set.
+     */
+    get assignedEntity(): Entity | null {
+        return this._assignedEntity;
+    }
 
     constructor(opts: GameClientOptions<I, R>) {
         super([
@@ -264,7 +273,7 @@ export class GameClient<
             if (this.pendingAssignedServerEid === serverEid) {
                 this.pendingAssignedServerEid = null;
                 this.predictedEntities.add(localEid);
-                this.assignedEntity = localEid;
+                this._assignedEntity = localEid;
                 this.emit('assigned', { entity: localEid });
             }
         }
@@ -278,7 +287,7 @@ export class GameClient<
             return;
         }
         this.predictedEntities.add(localEid);
-        this.assignedEntity = localEid;
+        this._assignedEntity = localEid;
         this.emit('assigned', { entity: localEid });
     }
 
@@ -362,18 +371,34 @@ export class GameClient<
      * Send an intent to the server. `ctx.entity` in the prediction is the
      * server-assigned entity. Target entities (chestId, targetId, etc.)
      * belong in the payload itself.
+     *
+     * Returns `true` when the intent was sent, `false` when blocked. Both
+     * blocked paths emit an `'error'` event so calling code can react:
+     * - Unknown intent name.
+     * - No entity assigned yet (server hasn't called `assignEntity` for
+     *   this peer). Check `client.assignedEntity` if you want to know
+     *   without sending.
      */
     sendIntent<K extends keyof I & string>(
         name: K,
         payload: IntentPayload<I, K>,
-    ): void {
+    ): boolean {
         const def = this.intents.defs[name];
         if (def === undefined) {
             this.emit('error', {
                 error: new Error(`Unknown intent "${String(name)}"`),
                 context: 'sendIntent',
             });
-            return;
+            return false;
+        }
+
+        const entity = this._assignedEntity;
+        if (entity === null) {
+            this.emit('error', {
+                error: new Error(`Cannot send intent "${String(name)}": no entity assigned yet`),
+                context: 'sendIntent',
+            });
+            return false;
         }
 
         const intentObj = { ...(payload as Record<string, unknown>), kind: def.kind, tick: this.localTick };
@@ -386,7 +411,6 @@ export class GameClient<
 
         const predFn = this.predictionMap?.[name as keyof typeof this.predictionMap];
         if (predFn !== undefined) {
-            const entity = this.assignedEntity ?? (0 as Entity);
             const deltaTime = this.lastDt;
             const ctx: PredictionContext = {
                 world: this.world,
@@ -405,11 +429,13 @@ export class GameClient<
                 entity,
                 deltaTime,
             });
-            if (entity > 0) this.predictedEntities.add(entity);
+            this.predictedEntities.add(entity);
             while (this.predictionHistory.length > this.predictionBufferSize) {
                 this.predictionHistory.shift();
             }
         }
+
+        return true;
     }
 
     sendRpc<K extends keyof R & string>(name: K, args: RpcPayload<R, K>): void {
