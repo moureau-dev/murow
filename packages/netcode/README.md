@@ -278,6 +278,8 @@ packaged into outgoing snapshots and unpacked on receive.
 
 > Without `sync`, the component stays local to the environment.
 
+> Snapshots only include entities the server wrote to since last tick - for each, every synced component's current value ships.
+
 ```ts
 import { defineComponent, f32, u8 } from 'murow';
 import { networked } from 'murow/netcode';
