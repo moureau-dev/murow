@@ -1,7 +1,9 @@
+import { u16 } from 'murow/core/binary-codec';
 import { SimpleRNG } from 'murow/core/simple-rng';
 import type { Component, Entity, World } from 'murow/ecs';
 import type { GameLoop } from 'murow/game';
 import type { TransportAdapter } from 'murow/net';
+import { defineRPC } from 'murow/protocol';
 import { Network } from '../network/base';
 import { decodeDelta, type DecodedDelta } from '../codec/delta-codec';
 import { InterpolationBuffer } from './interpolation-buffer';
@@ -17,6 +19,9 @@ const MSG_ASSIGN_ENTITY = 0x84;
 const CMSG_INTENT = 0x01;
 const CMSG_RPC = 0x02;
 const CMSG_KICK_ACK = 0x03;
+
+const PING_RPC = defineRPC({ method: '__murow_ping', schema: { ts: u16 } });
+const PONG_RPC = defineRPC({ method: '__murow_pong', schema: { ts: u16 } });
 
 interface PredictedIntent {
     tick: number;
@@ -105,6 +110,7 @@ export class GameClient<
     /** Resolved local entity for the server's assignment. Default for sendIntent. */
     private _assignedEntity: Entity | null = null;
     private interpBuffer: InterpolationBuffer;
+    private _rttMs: number | null = null;
 
     /**
      * Local entity the server has assigned to this peer, or `null` if no
@@ -113,6 +119,14 @@ export class GameClient<
      */
     get assignedEntity(): Entity | null {
         return this._assignedEntity;
+    }
+
+    /**
+     * Last measured round-trip time in milliseconds, or `null` if no pong
+     * has come back yet. Updated whenever a `'pong'` event fires.
+     */
+    get rttMs(): number | null {
+        return this._rttMs;
     }
 
     constructor(opts: GameClientOptions<I, R>) {
@@ -126,6 +140,7 @@ export class GameClient<
             'despawn',
             'reconciled',
             'assigned',
+            'pong',
             'error',
         ]);
         this.world = opts.world;
@@ -133,6 +148,9 @@ export class GameClient<
         this.transport = opts.transport;
         this.intents = opts.protocol.intents;
         this.rpcs = opts.protocol.rpcs;
+        const reg = this.rpcs.registry as any;
+        if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
+        if (!reg.has(PONG_RPC.method)) reg.register(PONG_RPC);
         const strategy: PeerRenderStrategy = opts.strategy ?? { kind: 'snapshot-interpolation' };
         this.interpolationDelay = strategy.delay ?? 100;
         const staleWindowMs = strategy.staleWindow ?? this.interpolationDelay * 2 + 100;
@@ -352,6 +370,11 @@ export class GameClient<
     private handleRpc(payload: Uint8Array): void {
         try {
             const { method, data } = this.rpcs.registry.decode(payload);
+            if (method === '__murow_pong') {
+                const rtt = (Date.now() - (data as { ts: number }).ts) & 0xFFFF;
+                this._rttMs = rtt;
+                this.emit('pong', { rtt });
+            }
             this.emit('rpc', { name: method, payload: data });
         } catch (err) {
             this.emit('error', { error: err as Error, context: 'handleRpc' });
@@ -448,6 +471,15 @@ export class GameClient<
             return;
         }
         const encoded = this.rpcs.registry.encode(def, payload as any);
+        const framed = new Uint8Array(encoded.length + 1);
+        framed[0] = CMSG_RPC;
+        framed.set(encoded, 1);
+        this.transport.send(framed);
+    }
+
+    ping(): void {
+        const ts = Date.now() & 0xFFFF;
+        const encoded = (this.rpcs.registry as any).encode(PING_RPC, { ts }) as Uint8Array;
         const framed = new Uint8Array(encoded.length + 1);
         framed[0] = CMSG_RPC;
         framed.set(encoded, 1);

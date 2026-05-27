@@ -635,4 +635,22 @@ describe('multiplayer end-to-end', () => {
         expect(intentEvent.value!.name).toBe('attack');
         expect(ctx.serverWorld.has(target, Health)).toBe(false);
     });
+
+    test('client.ping round-trips and fires pong with the measured rtt', async () => {
+        const ctx = setupServer();
+        const { client } = connectClient(ctx);
+        await flush();
+
+        const pongSeen = capture<ClientEventPayloads['pong']>();
+        client.on('pong', pongSeen.set);
+
+        client.ping();
+        await flush();
+
+        expect(pongSeen.value).not.toBeNull();
+        expect(typeof pongSeen.value!.rtt).toBe('number');
+        expect(pongSeen.value!.rtt).toBeGreaterThanOrEqual(0);
+        expect(pongSeen.value!.rtt).toBeLessThan(0x10000);
+        expect(client.rttMs).toBe(pongSeen.value!.rtt);
+    });
 });

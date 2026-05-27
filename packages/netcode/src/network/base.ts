@@ -56,6 +56,8 @@ export interface ClientEventPayloads<R extends RpcSchemaMap = RpcSchemaMap> {
      * predicted.
      */
     assigned: { entity: number };
+    /** Round-trip measurement from the most recent `client.ping()`. */
+    pong: { rtt: number };
     /** Unhandled error. */
     error: { error: Error; context: string };
 }

@@ -2,6 +2,8 @@ import { SimpleRNG } from 'murow/core/simple-rng';
 import type { Component, Entity, World } from 'murow/ecs';
 import type { GameLoop } from 'murow/game';
 import type { ServerTransportAdapter, TransportAdapter } from 'murow/net';
+import { u16 } from 'murow/core/binary-codec';
+import { defineRPC } from 'murow/protocol';
 import { Network } from '../network/base';
 import { encodeDelta } from '../codec/delta-codec';
 import type { DefinedIntents, IntentSchemaMap } from '../intents/define-intents';
@@ -11,6 +13,9 @@ import type { DefinedHandlers } from '../handlers/define-handlers';
 import type { ServerPlugin } from './plugins/plugin';
 import type { LagCompensation } from './plugins/lag-compensation';
 import { makeFieldsAccessor, makeMarkDirty, type Peer, type ServerHandlerContext } from '../ctx';
+
+const PING_RPC = defineRPC({ method: '__murow_ping', schema: { ts: u16 } });
+const PONG_RPC = defineRPC({ method: '__murow_pong', schema: { ts: u16 } });
 
 // Server -> client frames. Reserved range to not collide with user
 // intent kinds (which start at 1 in `defineIntents`).
@@ -108,6 +113,10 @@ export class GameServer<
         this.intents = opts.protocol.intents;
         this.rpcs = opts.protocol.rpcs;
         this.rng = new SimpleRNG(1);
+
+        const reg = this.rpcs.registry as any;
+        if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
+        if (!reg.has(PONG_RPC.method)) reg.register(PONG_RPC);
 
         const tickRate = opts.loop.ticker.rate;
         const requestedSnapshotRate = opts.snapshot?.rate ?? Math.min(20, tickRate);
@@ -353,6 +362,16 @@ export class GameServer<
     private handleRpc(peer: InternalPeer, payload: Uint8Array): void {
         try {
             const decoded = (this.rpcs.registry as any).decode(payload) as { method: string; data: any };
+
+            if (decoded.method === '__murow_ping') {
+                const encoded = (this.rpcs.registry as any).encode(PONG_RPC, { ts: decoded.data.ts }) as Uint8Array;
+                const framed = new Uint8Array(encoded.length + 1);
+                framed[0] = MSG_RPC;
+                framed.set(encoded, 1);
+                peer.transport.send(framed);
+                return;
+            }
+
             this.emit('rpc', { peer, name: decoded.method, payload: decoded.data });
         } catch (err) {
             this.emit('error', { error: err as Error, context: 'handleRpc' });
