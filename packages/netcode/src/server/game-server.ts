@@ -49,6 +49,11 @@ export interface GameServerOptions<
         /** Ms before forcing transport close after a kick. Default 2000. */
         ackTimeout?: number;
     };
+    limits?: {
+        intentQueuePerPeer?: number;
+        pendingSequencesPerPeer?: number;
+        intentsPerSecond?: number;
+    };
     /** Optional schema fingerprint for component-layout drift checks. */
     schemaFingerprint?: string;
 }
@@ -72,6 +77,17 @@ interface InternalPeer extends Peer {
      */
     needsBaseline: boolean;
     intentQueue: { sequence: number; payload: Uint8Array }[];
+    intentWindowStart: number;
+    intentWindowCount: number;
+}
+
+function fnv1a(str: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = (h * 16777619) >>> 0;
+    }
+    return h;
 }
 
 export class GameServer<
@@ -83,6 +99,7 @@ export class GameServer<
     readonly transport: ServerTransportAdapter<TransportAdapter>;
     readonly intents: DefinedIntents<I>;
     readonly rpcs: DefinedRpcs<R>;
+    readonly expectedHash: number;
 
     private peers = new Map<string, InternalPeer>();
     private predictionMap: DefinedPredictions<I>['map'] | null = null;
@@ -97,6 +114,8 @@ export class GameServer<
     private rng: SimpleRNG;
     private scratch: number[] = [];
     private lastDt: number;
+    private limits: NonNullable<GameServerOptions<I, R>['limits']>;
+    private tickRate: number;
 
     constructor(opts: GameServerOptions<I, R>) {
         super([
@@ -114,6 +133,8 @@ export class GameServer<
         this.intents = opts.protocol.intents;
         this.rpcs = opts.protocol.rpcs;
         this.rng = new SimpleRNG(1);
+        this.limits = opts.limits ?? {};
+        this.tickRate = opts.loop.ticker.rate;
 
         const reg = this.rpcs.registry as any;
         if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
@@ -127,6 +148,13 @@ export class GameServer<
         this.lastDt = opts.loop.ticker.intervalMs / 1000;
 
         this.discoverSyncedComponents();
+
+        const allComponents = (this.world as any).components as Component<any>[];
+        this.expectedHash = fnv1a([
+            ...allComponents.map((c: Component<any>) => c.name).sort(),
+            ...Object.entries(this.intents.nameByKind).sort().map(([k, v]) => `${k}:${v}`),
+            ...Object.values(this.rpcs.defs).map((d: any) => d.methodName).sort(),
+        ].join(','));
         this.wireTransport();
         this.wireLoop();
     }
@@ -150,6 +178,8 @@ export class GameServer<
                 pendingBySequence: new Map<number, Uint8Array>(),
                 needsBaseline: true,
                 intentQueue: [],
+                intentWindowStart: Date.now(),
+                intentWindowCount: 0,
             };
             this.peers.set(peerId, peer);
             peerTransport.onMessage((data) => this.handleIncoming(peer, data));
@@ -196,10 +226,15 @@ export class GameServer<
                 return;
             }
 
+            const pendingLimit = this.limits.pendingSequencesPerPeer ?? 64;
             for (let i = 0; i < peer.intentQueue.length; i++) {
                 const entry = peer.intentQueue[i];
                 if (entry.sequence <= peer.lastAckedClientTick) continue;
                 if (peer.pendingBySequence.has(entry.sequence)) continue;
+                if (peer.pendingBySequence.size >= pendingLimit) {
+                    this.kick(peer, 'pending-sequences-exceeded');
+                    return;
+                }
                 peer.pendingBySequence.set(entry.sequence, entry.payload);
             }
             peer.intentQueue.length = 0;
@@ -299,6 +334,7 @@ export class GameServer<
                 this.syncedNumMaskWords,
                 despawned,
                 peer.lastAckedClientTick,
+                this.expectedHash,
             );
 
             const framed = new Uint8Array(buf.length + 1);
@@ -335,6 +371,22 @@ export class GameServer<
         if (type === CMSG_INTENT) {
             if (data.length < 5) {
                 this.emit('intent-failed', { peer, kind: -1, reason: 'decode-error' });
+                return;
+            }
+            const intentQueueLimit = this.limits.intentQueuePerPeer ?? 256;
+            if (peer.intentQueue.length >= intentQueueLimit) {
+                this.kick(peer, 'intent-queue-exceeded');
+                return;
+            }
+            const now = Date.now();
+            const rateLimit = this.limits.intentsPerSecond ?? (2 * this.tickRate);
+            if (now - peer.intentWindowStart > 1000) {
+                peer.intentWindowStart = now;
+                peer.intentWindowCount = 0;
+            }
+            peer.intentWindowCount++;
+            if (peer.intentWindowCount > rateLimit) {
+                this.kick(peer, 'intent-rate-exceeded');
                 return;
             }
             const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);

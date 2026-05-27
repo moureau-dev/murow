@@ -103,6 +103,7 @@ export function makeHarness(opts: HarnessOptions): Harness {
         transport,
         protocol: { intents: schema.intents, rpcs: schema.rpcs },
         snapshot: { rate: TICK_RATE },
+        limits: { intentsPerSecond: 100000 },
     });
     server.use(schema.predictions);
 
