@@ -1,7 +1,6 @@
 import { BunWebSocketServerTransport, SimpleRNG } from 'murow';
 import { GameServer } from 'murow/netcode';
 import {
-    PORT,
     TICK_RATE,
     WS_PATH,
     Arena,
@@ -17,6 +16,8 @@ import {
  * prediction handle movement (it runs as the authoritative apply here),
  * and ships snapshot deltas at TICK_RATE Hz.
  */
+
+const PORT = Number(process.env.PORT) || 3010;
 
 const arena = new Arena('server-timeout');
 

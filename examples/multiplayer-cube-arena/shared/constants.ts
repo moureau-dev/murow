@@ -4,12 +4,10 @@
  * agree across both sides.
  */
 /**
- * Single port for everything: Bun's HTTP server serves the built client
- * bundle at `/`, and the WebSocket transport upgrades at `WS_PATH`. Vite's
- * dev server proxies the same path through to this port so dev and prod
- * speak the same URL shape.
+ * WebSocket upgrade path. The client dials `${location.host}${WS_PATH}`
+ * and the server upgrades requests on the same path. Vite's dev server
+ * proxies it through so dev and prod speak the same URL shape.
  */
-export const PORT = 3010;
 export const WS_PATH = '/ws';
 
 /** Logic ticks per second. Both sides must run the same rate for prediction to match. */

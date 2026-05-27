@@ -6,6 +6,7 @@
   "private": true,
   "scripts": {
     "build:client": "vite build",
+    "build": "bun run scripts/build.ts",
     "server": "bun run server/index.ts",
     "dev:client": "vite",
     "dev": "bun run build:client && bun run server"
