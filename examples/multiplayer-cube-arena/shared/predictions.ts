@@ -22,7 +22,7 @@ export const predictions = definePredictions(intents, {
         const z = pos.z[ctx.entity] + dz * MOVE_SPEED * ctx.deltaTime;
 
         // Clamp to the arena bounds.
-        pos.x[ctx.entity] = Math.max(-ARENA_HALF, Math.min(ARENA_HALF, x));
-        pos.z[ctx.entity] = Math.max(-ARENA_HALF, Math.min(ARENA_HALF, z));
+        pos.x[ctx.entity] = Math.max(-ARENA_HALF * 2, Math.min(ARENA_HALF * 2, x));
+        pos.z[ctx.entity] = Math.max(-ARENA_HALF * 2, Math.min(ARENA_HALF * 2, z));
     },
 });

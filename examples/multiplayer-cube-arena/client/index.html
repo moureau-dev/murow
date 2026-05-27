@@ -20,15 +20,65 @@
         #status.connecting { background: #FFA500; color: #000; }
         #status.connected { background: #4ECDC4; color: #000; }
         #status.disconnected { background: #FF6B6B; color: #fff; }
+        #mobileControls {
+            display: none;
+            position: absolute;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%);
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            z-index: 10;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #mobileControls .btn-row {
+            display: flex;
+            gap: 8px;
+        }
+        .mbtn {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            user-select: none;
+            touch-action: none;
+            -webkit-tap-highlight-color: transparent;
+            font-size: 28px;
+            color: #fff;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .mbtn:active { background: rgba(255, 255, 255, 0.4); }
+        @media (pointer: coarse) {
+            #mobileControls { display: flex; }
+        }
     </style>
 </head>
 <body>
     <canvas id="gameCanvas"></canvas>
+    <div id="mobileControls">
+        <div class="btn-row">
+            <button class="mbtn" id="mobileForward" aria-label="Forward">&#9650;</button>
+        </div>
+        <div class="btn-row">
+            <button class="mbtn" id="mobileLeft"    aria-label="Left">&#9664;</button>
+            <button class="mbtn" id="mobileBack"    aria-label="Back">&#9660;</button>
+            <button class="mbtn" id="mobileRight"   aria-label="Right">&#9654;</button>
+        </div>
+    </div>
     <div id="hud">
         <div><b>Multiplayer Cube Arena</b></div>
         <div>WASD to move &middot; Mouse to orbit camera</div>
         <div>Status: <span id="status" class="connecting">connecting...</span></div>
         <div>Players: <span id="playerCount">0</span></div>
+        <div>Ping: <span id="ping">-</span> ms</div>
     </div>
     <script type="module" src="/index.ts"></script>
 </body>

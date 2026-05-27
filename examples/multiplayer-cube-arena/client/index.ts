@@ -21,6 +21,22 @@ import {
 const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
 const statusEl = document.getElementById('status')!;
 const playerCountEl = document.getElementById('playerCount')!;
+const mobileForwardBtn = document.getElementById('mobileForward')!;
+const mobileBackBtn    = document.getElementById('mobileBack')!;
+const mobileLeftBtn    = document.getElementById('mobileLeft')!;
+const mobileRightBtn   = document.getElementById('mobileRight')!;
+
+let mobileForward = false, mobileBack = false, mobileLeft = false, mobileRight = false;
+
+function wire(btn: HTMLElement, set: (v: boolean) => void) {
+    btn.onpointerdown  = (e) => { e.preventDefault(); set(true); };
+    btn.onpointerup    = () => set(false);
+    btn.onpointerleave = () => set(false);
+}
+wire(mobileForwardBtn, (v) => { mobileForward = v; });
+wire(mobileBackBtn,    (v) => { mobileBack    = v; });
+wire(mobileLeftBtn,    (v) => { mobileLeft    = v; });
+wire(mobileRightBtn,   (v) => { mobileRight   = v; });
 
 const prefabs = new PrefabBucket('3d')
     .add({
@@ -61,6 +77,10 @@ const wsScheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
 const transport = new BrowserWebSocketClientTransport(
     `${wsScheme}//${location.host}${WS_PATH}`,
 );
+
+const safetyTicks = 2;
+const delay = safetyTicks * arena.loop.ticker.intervalMs;
+
 const client = new GameClient({
     world: arena.world,
     loop: arena.loop,
@@ -68,8 +88,8 @@ const client = new GameClient({
     protocol: { intents, rpcs },
     strategy: {
         kind: 'snapshot-interpolation',
-        delay: 200,
-        staleWindow: 500,
+        delay,
+        staleWindow: delay * 2 + 100,
     },
 });
 client.use(predictions);
@@ -123,6 +143,7 @@ client.on('error', ({ error, context }) => {
     console.error(`[client] ${context}:`, error);
 });
 
+
 // ──────────────────────────────────────────────────────────────────────
 // Third-person orbit camera (local state only — not networked).
 // ──────────────────────────────────────────────────────────────────────
@@ -162,15 +183,31 @@ arena.loop.events.on('render', ({ alpha }) => {
     renderer.render(alpha);
 });
 
+const pingEl = document.getElementById('ping')!;
+
+// ping game server every 2s for RTT measurement
+arena.loop.events.on('tick', ({ tick }) => {
+    /** Period to send ping to server */
+    const period = 2;
+    const rate = arena.loop.ticker.rate;
+    if (tick % (rate * period) !== 0) return;
+
+    client.ping();
+});
+
+client.on('pong', ({ rtt }) => {
+    pingEl.textContent = `(${safetyTicks} ticks behind) ${rtt}`;
+});
+
 // controls
 arena.loop.events.on('tick', ({ input }) => {
     // Read WASD into a 2D direction.
     let dx = 0;
     let dz = 0;
-    if (input.keys['KeyW']?.down) dz -= 1;
-    if (input.keys['KeyS']?.down) dz += 1;
-    if (input.keys['KeyA']?.down) dx -= 1;
-    if (input.keys['KeyD']?.down) dx += 1;
+    if (input.keys['KeyW']?.down || mobileForward) dz -= 1;
+    if (input.keys['KeyS']?.down || mobileBack)    dz += 1;
+    if (input.keys['KeyA']?.down || mobileLeft)    dx -= 1;
+    if (input.keys['KeyD']?.down || mobileRight)   dx += 1;
 
     // Rotate the WASD vector by the camera yaw so "W" always moves away
     // from the camera, "A" always strafes left, etc.

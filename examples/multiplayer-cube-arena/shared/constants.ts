@@ -11,7 +11,7 @@
 export const WS_PATH = '/ws';
 
 /** Logic ticks per second. Both sides must run the same rate for prediction to match. */
-export const TICK_RATE = 12;
+export const TICK_RATE = 16;
 
 /** World units per second when moving. */
 export const MOVE_SPEED = 4;
