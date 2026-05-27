@@ -349,8 +349,8 @@ describe('multiplayer end-to-end', () => {
         expect(aGot.value).not.toBeNull();
         expect(bGot.value).not.toBeNull();
         expect(aGot.value!.name).toBe('countdown');
-        expect((aGot.value!.args as { secondsRemaining: number }).secondsRemaining).toBe(3);
-        expect((bGot.value!.args as { secondsRemaining: number }).secondsRemaining).toBe(3);
+        expect((aGot.value!.payload as { secondsRemaining: number }).secondsRemaining).toBe(3);
+        expect((bGot.value!.payload as { secondsRemaining: number }).secondsRemaining).toBe(3);
     });
 
     test('sendRpc to a single peer reaches only that peer', async () => {

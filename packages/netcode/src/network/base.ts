@@ -1,7 +1,21 @@
 import { EventSystem } from 'murow/core/events';
 import type { Peer } from '../ctx';
+import type { RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs';
 
-export interface ServerEventPayloads {
+/**
+ * Discriminated union over every RPC name in `R`. `name` narrows
+ * `payload` to that RPC's typed payload.
+ */
+export type RpcEvent<R extends RpcSchemaMap> = {
+    [K in keyof R & string]: { name: K; payload: RpcPayload<R, K> };
+}[keyof R & string];
+
+/** Same as `RpcEvent<R>` but with the originating `peer` field. */
+export type ServerRpcEvent<R extends RpcSchemaMap> = {
+    [K in keyof R & string]: { peer: Peer; name: K; payload: RpcPayload<R, K> };
+}[keyof R & string];
+
+export interface ServerEventPayloads<R extends RpcSchemaMap = RpcSchemaMap> {
     /** A new peer connected. */
     connection: { peer: Peer };
     /** A peer disconnected. */
@@ -10,15 +24,15 @@ export interface ServerEventPayloads {
     intent: { peer: Peer; kind: number; name: string; payload: unknown; tick: number };
     /** Engine-level intent failure: decode error or unknown kind. */
     'intent-failed': { peer: Peer; kind: number; reason: string };
-    /** An RPC arrived from a peer. */
-    rpc: { peer: Peer; name: string; args: unknown };
+    /** An RPC arrived from a peer. `name` and `payload` are correlated. */
+    rpc: ServerRpcEvent<R>;
     /** A snapshot was packed and sent to a peer. */
     snapshot: { peer: Peer; tick: number; byteSize: number };
     /** Unhandled error. */
     error: { error: Error; context: string };
 }
 
-export interface ClientEventPayloads {
+export interface ClientEventPayloads<R extends RpcSchemaMap = RpcSchemaMap> {
     /** Transport opened. */
     connected: {};
     /** Transport closed. */
@@ -27,8 +41,8 @@ export interface ClientEventPayloads {
     kicked: { reason: string };
     /** A snapshot arrived. */
     snapshot: { tick: number; byteSize: number };
-    /** An RPC arrived from the server. */
-    rpc: { name: string; args: unknown };
+    /** An RPC arrived from the server. `name` and `payload` are correlated. */
+    rpc: RpcEvent<R>;
     /** A new networked entity appeared in the client's view. */
     spawn: { entity: number; components: Record<string, unknown> };
     /** A networked entity left the client's view (despawn or out-of-AOI). */
@@ -50,12 +64,18 @@ type ToEventTuple<P> = {
     [K in keyof P]: [K, P[K]];
 }[keyof P];
 
-export type NetworkEvents<T extends 'client' | 'server'> = T extends 'server'
-    ? Array<ToEventTuple<ServerEventPayloads>>
-    : Array<ToEventTuple<ClientEventPayloads>>;
+export type NetworkEvents<
+    T extends 'client' | 'server',
+    R extends RpcSchemaMap = RpcSchemaMap,
+> = T extends 'server'
+    ? Array<ToEventTuple<ServerEventPayloads<R>>>
+    : Array<ToEventTuple<ClientEventPayloads<R>>>;
 
-export class Network<T extends 'client' | 'server'> extends EventSystem<
-    NetworkEvents<T> extends [string, unknown][] ? NetworkEvents<T> : never
+export class Network<
+    T extends 'client' | 'server',
+    R extends RpcSchemaMap = RpcSchemaMap,
+> extends EventSystem<
+    NetworkEvents<T, R> extends [string, unknown][] ? NetworkEvents<T, R> : never
 > {
     constructor(events: string[]) {
         super({ events });
@@ -63,7 +83,10 @@ export class Network<T extends 'client' | 'server'> extends EventSystem<
 }
 
 /** Narrowed event surface. `emit` is engine-internal. */
-export type PublicEventSurface<T extends 'client' | 'server'> = Pick<
-    Network<T>,
+export type PublicEventSurface<
+    T extends 'client' | 'server',
+    R extends RpcSchemaMap = RpcSchemaMap,
+> = Pick<
+    Network<T, R>,
     'on' | 'once' | 'off'
 >;

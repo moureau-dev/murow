@@ -39,7 +39,7 @@ export interface DefinedRpcs<R extends RpcSchemaMap> {
  * });
  *
  * server.broadcastRpc('matchStart', { countdownSec: 3 });
- * client.on('rpc', ({ name, args }) => { ... });
+ * client.on('rpc', ({ name, payload }) => { ... });
  */
 export function defineRpcs<R extends RpcSchemaMap>(rpcs: R): DefinedRpcs<R> {
     const defs: any = {};

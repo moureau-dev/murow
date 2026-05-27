@@ -79,7 +79,7 @@ export interface GameClientOptions<
 export class GameClient<
     I extends IntentSchemaMap = IntentSchemaMap,
     R extends RpcSchemaMap = RpcSchemaMap,
-> extends Network<'client'> {
+> extends Network<'client', R> {
     readonly world: World;
     readonly loop: GameLoop<any>;
     readonly transport: TransportAdapter;
@@ -352,7 +352,7 @@ export class GameClient<
     private handleRpc(payload: Uint8Array): void {
         try {
             const { method, data } = this.rpcs.registry.decode(payload);
-            this.emit('rpc', { name: method, args: data });
+            this.emit('rpc', { name: method, payload: data });
         } catch (err) {
             this.emit('error', { error: err as Error, context: 'handleRpc' });
         }
@@ -438,7 +438,7 @@ export class GameClient<
         return true;
     }
 
-    sendRpc<K extends keyof R & string>(name: K, args: RpcPayload<R, K>): void {
+    sendRpc<K extends keyof R & string>(name: K, payload: RpcPayload<R, K>): void {
         const def = this.rpcs.defs[name];
         if (def === undefined) {
             this.emit('error', {
@@ -447,7 +447,7 @@ export class GameClient<
             });
             return;
         }
-        const encoded = this.rpcs.registry.encode(def, args as any);
+        const encoded = this.rpcs.registry.encode(def, payload as any);
         const framed = new Uint8Array(encoded.length + 1);
         framed[0] = CMSG_RPC;
         framed.set(encoded, 1);

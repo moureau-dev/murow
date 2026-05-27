@@ -71,7 +71,7 @@ interface InternalPeer extends Peer {
 export class GameServer<
     I extends IntentSchemaMap = IntentSchemaMap,
     R extends RpcSchemaMap = RpcSchemaMap,
-> extends Network<'server'> {
+> extends Network<'server', R> {
     readonly world: World;
     readonly loop: GameLoop<any>;
     readonly transport: ServerTransportAdapter<TransportAdapter>;
@@ -353,7 +353,7 @@ export class GameServer<
     private handleRpc(peer: InternalPeer, payload: Uint8Array): void {
         try {
             const decoded = (this.rpcs.registry as any).decode(payload) as { method: string; data: any };
-            this.emit('rpc', { peer, name: decoded.method, args: decoded.data });
+            this.emit('rpc', { peer, name: decoded.method, payload: decoded.data });
         } catch (err) {
             this.emit('error', { error: err as Error, context: 'handleRpc' });
         }
@@ -397,7 +397,7 @@ export class GameServer<
         internal.transport.send(frame);
     }
 
-    sendRpc<K extends keyof R & string>(peer: Peer, name: K, args: RpcPayload<R, K>): void {
+    sendRpc<K extends keyof R & string>(peer: Peer, name: K, payload: RpcPayload<R, K>): void {
         const internal = this.peers.get(peer.peerId);
         if (internal === undefined) return;
         if (internal.kicking !== null) return;
@@ -409,17 +409,17 @@ export class GameServer<
             });
             return;
         }
-        const payload = this.rpcs.registry.encode(def, args as any);
-        const framed = new Uint8Array(payload.length + 1);
+        const encoded = this.rpcs.registry.encode(def, payload as any);
+        const framed = new Uint8Array(encoded.length + 1);
         framed[0] = MSG_RPC;
-        framed.set(payload, 1);
+        framed.set(encoded, 1);
         internal.transport.send(framed);
     }
 
-    broadcastRpc<K extends keyof R & string>(name: K, args: RpcPayload<R, K>): void {
+    broadcastRpc<K extends keyof R & string>(name: K, payload: RpcPayload<R, K>): void {
         for (const peer of this.peers.values()) {
             if (peer.kicking !== null) continue;
-            this.sendRpc(peer, name, args);
+            this.sendRpc(peer, name, payload);
         }
     }
 

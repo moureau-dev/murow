@@ -214,11 +214,23 @@ const client = new GameClient({ protocol: { intents, rpcs }, /* ... */ });
 // Server -> client (one peer, or all peers).
 server.sendRpc(peer, 'achievement', { id: 7 });
 server.broadcastRpc('matchStart', { countdownSec: 3 });
-client.on('rpc', ({ name, args }) => { /* ... */ });
 
 // Client -> server.
 client.sendRpc('buyItem', { itemId: 42 });
-server.on('rpc', ({ peer, name, args }) => { /* ... */ });
+```
+
+The `'rpc'` event payload is a discriminated union over the schema -
+narrow on `name` and `payload` is typed for that RPC.
+
+```ts
+client.on('rpc', ({ name, payload }) => {
+  if (name === 'matchStart') payload.countdownSec;  // typed: number
+  if (name === 'achievement') payload.id;           // typed: number
+});
+
+server.on('rpc', ({ peer, name, payload }) => {
+  if (name === 'buyItem') payload.itemId;           // typed: number
+});
 ```
 
 ### Predictions
