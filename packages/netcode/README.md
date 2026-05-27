@@ -152,9 +152,23 @@ for each despawn:
   [serverEid: u32]
 ```
 
-`clientAckTick` is the highest client-stamped tick the server has
-applied for the receiving peer. The reconciler uses this (not the
-server tick) to drop confirmed predictions.
+`clientAckTick` is the highest contiguous client intent sequence the
+server has applied for the receiving peer. The reconciler uses this
+(not the server tick) to drop confirmed predictions.
+</details>
+
+<details>
+<summary><b>Intent wire format</b></summary>
+
+```
+[type=0x01][sequence: u32][encoded intent]
+```
+
+Each `sendIntent` increments a per-client sequence number (monotonic,
+contiguous, never reused). The server applies intents in sequence
+order and only advances `clientAckTick` once every prior sequence has
+been applied — so the client's prediction-history cut-off is always
+safe even under reorder or skipped game ticks.
 </details>
 
 <details>
@@ -505,13 +519,17 @@ client.on('connected',    () => { ... });
 client.on('disconnected', ({ reason }) => { ... });
 client.on('kicked',       ({ reason }) => { ... });
 client.on('snapshot',     ({ tick, byteSize }) => { ... });
-client.on('rpc',          ({ name, args }) => { ... });
+client.on('rpc',          ({ name, payload }) => { ... });
 client.on('spawn',        ({ entity, components }) => { ... });
 client.on('despawn',      ({ entity }) => { ... });
 client.on('reconciled',   ({ rewindTick, replayed }) => { ... });
 client.on('assigned',     ({ entity }) => { ... });
+client.on('pong',         ({ rtt }) => { ... });
 client.on('error',        ({ error, context }) => { ... });
 ```
+
+`rewindTick` carries the server's contiguous-applied intent sequence
+(not the game tick) — the cut-off the reconciler used to drop history.
 </details>
 
 ### `on('intent')` vs `defineHandlers`

@@ -3,9 +3,11 @@
 A small end-to-end example of `murow/netcode` driving `murow/webgpu`.
 
 Each connected player spawns as a colored cube on a shared grid. WASD
-moves your cube with client-side prediction; other players' cubes are
-interpolated 100 ms behind their authoritative state. The camera orbits
-your cube in third person — purely local state, never networked.
+(or on-screen buttons on touch devices) moves your cube with
+client-side prediction; other players' cubes are interpolated behind
+their authoritative state, with the interpolation delay tuned from
+the measured RTT. The camera orbits your cube in third person —
+purely local state, never networked.
 
 The game is 2D in logic (no jumping, no Y-axis movement) but rendered in
 3D using cube and grid prefabs from `PrefabBucket`.
@@ -29,9 +31,10 @@ bun run server               # in one terminal — runs the WS + HTTP server
 bun run dev:client           # in another — Vite dev server with hot reload at :5173
 ```
 
-Open <http://localhost:3011> (or <http://localhost:5173> in dev mode) in
+Open <http://localhost:3010> (or <http://localhost:5173> in dev mode) in
 two browser tabs. Each tab gets its own cube; you'll see the other tab's
-cube smoothly catching up over the network.
+cube smoothly catching up over the network. The server port is
+configurable via `PORT` (default 3010).
 
 The client uses **Vite + `unplugin-typegpu`** for bundling because the
 WebGPU renderer relies on the plugin to embed shader-function metadata.
@@ -101,6 +104,10 @@ multiplayer-cube-arena/
 - `shared/constants.ts → TICK_RATE` — try 10, 15, 30. Both sides read the
   same value, so changing one number changes the whole sim.
 - `shared/constants.ts → MOVE_SPEED` — world units per second.
-- `client/index.ts → interpolation.delay` — try 0 (jittery), 100
-  (default, smooth), 250 (heavy lag visible on other players).
-- `client/index.ts → camera.distance` — third-person zoom.
+- `client/index.ts → safetyTicks` (inside the `'pong'` handler) — how
+  many ticks behind newest the interpolation clock sits. Higher =
+  smoother peers under jitter, more visible lag. The actual buffer
+  delay is recomputed from this on every pong.
+- `client/index.ts → ScrollZoom` initial / min / max — third-person
+  zoom range.
+- `PORT` env var — server listen port (default 3010).
