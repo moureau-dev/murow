@@ -39,25 +39,32 @@ describe('InterpolationBuffer', () => {
     }
 
     test('interpolates linearly between two straddling snapshots', () => {
-        const { world, serverToLocal, localEid } = setup();
-        const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+        {
+            const { world, serverToLocal, localEid } = setup();
+            const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+            buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
+            buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 100, y: 0 } }]));
+            buf.apply(world, 1110, [Position], () => false);
+            expect(world.get(localEid, Position).x).toBeCloseTo(10);
+        }
 
-        // A at t=1000 with position (0, 0).
-        buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
-        // B at t=1100 with position (100, 0).
-        buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 100, y: 0 } }]));
+        {
+            const { world, serverToLocal, localEid } = setup();
+            const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+            buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
+            buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 100, y: 0 } }]));
+            buf.apply(world, 1150, [Position], () => false);
+            expect(world.get(localEid, Position).x).toBeCloseTo(50);
+        }
 
-        // renderTime = 1200 - 100 = 1100 → equals B → pick B.
-        buf.apply(world, 1200, [Position], () => false);
-        expect(world.get(localEid, Position).x).toBeCloseTo(100);
-
-        // renderTime = 1150 - 100 = 1050 → halfway → 50.
-        buf.apply(world, 1150, [Position], () => false);
-        expect(world.get(localEid, Position).x).toBeCloseTo(50);
-
-        // renderTime = 1110 - 100 = 1010 → 10% → 10.
-        buf.apply(world, 1110, [Position], () => false);
-        expect(world.get(localEid, Position).x).toBeCloseTo(10);
+        {
+            const { world, serverToLocal, localEid } = setup();
+            const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+            buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
+            buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 100, y: 0 } }]));
+            buf.apply(world, 1200, [Position], () => false);
+            expect(world.get(localEid, Position).x).toBeCloseTo(100);
+        }
     });
 
     test('underrun (renderTime before oldest) holds the previous World value', () => {
@@ -158,5 +165,18 @@ describe('InterpolationBuffer', () => {
         // → overrun → write the new snapshot's value.
         buf.apply(world, 11150, [Position], () => false);
         expect(world.get(localEid, Position).x).toBeCloseTo(100);
+    });
+
+    test('reordered packet does not trigger false stale-window prune', () => {
+        const { world, serverToLocal, localEid } = setup();
+        const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+
+        buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
+        buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 33, y: 0 } }]));
+        buf.record(snap(1190, 4, [{ serverEid: 100, comp: Position, value: { x: 100, y: 0 } }]));
+        buf.record(snap(1210, 3, [{ serverEid: 100, comp: Position, value: { x: 66, y: 0 } }]));
+
+        buf.apply(world, 1300, [Position], () => false);
+        expect(world.get(localEid, Position).x).toBeGreaterThan(60);
     });
 });

@@ -26,13 +26,16 @@ export class InterpolationBuffer {
     private serverToLocal: Map<number, Entity>;
     private buffer: BufferedSnapshot[] = [];
     private capacity: number;
-    private delayMs: number;
+    private renderTick = -Infinity;
+    private latestReceivedAt = -Infinity;
+    private smoothedTickRateMs = 0;
+    delay: number;
     /**
      * Max gap (ms) between consecutive snapshots before existing history
      * is dropped. Past this gap, lerping across the gap would walk the
      * peer slowly through stale territory.
      */
-    private staleWindowMs: number;
+    staleWindow: number;
 
     constructor(
         serverToLocal: Map<number, Entity>,
@@ -42,36 +45,45 @@ export class InterpolationBuffer {
     ) {
         this.serverToLocal = serverToLocal;
         this.capacity = capacity;
-        this.delayMs = delayMs;
-        this.staleWindowMs = staleWindowMs;
+        this.delay = delayMs;
+        this.staleWindow = staleWindowMs;
     }
 
     setDelay(delayMs: number): void {
-        this.delayMs = delayMs;
+        this.delay = delayMs;
     }
 
     setStaleWindow(staleWindowMs: number): void {
-        this.staleWindowMs = staleWindowMs;
+        this.staleWindow = staleWindowMs;
     }
 
     record(snapshot: BufferedSnapshot): void {
-        const last = this.buffer.length > 0 ? this.buffer[this.buffer.length - 1] : null;
-        if (last !== null) {
-            const gap = snapshot.receivedAt - last.receivedAt;
-            if (gap > this.staleWindowMs) {
-                this.buffer.length = 0;
-            }
+        const gap = snapshot.receivedAt - this.latestReceivedAt;
+        if (this.buffer.length > 0 && gap > this.staleWindow) {
+            this.buffer.length = 0;
+            this.renderTick = -Infinity;
+            this.latestReceivedAt = -Infinity;
+            this.smoothedTickRateMs = 0;
         }
-        this.buffer.push(snapshot);
-        while (this.buffer.length > this.capacity) this.buffer.shift();
-    }
+        if (snapshot.receivedAt > this.latestReceivedAt) {
+            this.latestReceivedAt = snapshot.receivedAt;
+        }
 
-    forget(_serverEid: number): void {
-        // Snapshots arrive whole; despawned entities just stop appearing.
+        let insertAt = this.buffer.length;
+        while (insertAt > 0 && this.buffer[insertAt - 1].serverTick >= snapshot.serverTick) {
+            if (this.buffer[insertAt - 1].serverTick === snapshot.serverTick) return;
+            insertAt--;
+        }
+        this.buffer.splice(insertAt, 0, snapshot);
+
+        while (this.buffer.length > this.capacity) this.buffer.shift();
     }
 
     clear(): void {
         this.buffer.length = 0;
+        this.renderTick = -Infinity;
+        this.latestReceivedAt = -Infinity;
+        this.smoothedTickRateMs = 0;
     }
 
     apply(
@@ -82,14 +94,51 @@ export class InterpolationBuffer {
     ): void {
         if (this.buffer.length === 0) return;
 
-        const renderTime = now - this.delayMs;
+        const newest = this.buffer[this.buffer.length - 1];
+        const oldest = this.buffer[0];
+
+        let tickRateMs: number = 0;
+        if (this.buffer.length >= 2) {
+            const tickSpan = newest.serverTick - oldest.serverTick;
+            const wallSpan = this.latestReceivedAt - oldest.receivedAt;
+            const rawTickRateMs = tickSpan > 0 && wallSpan > 0 ? wallSpan / tickSpan : 0;
+            if (rawTickRateMs > 0) {
+                if (this.smoothedTickRateMs === 0) this.smoothedTickRateMs = rawTickRateMs;
+                else this.smoothedTickRateMs = this.smoothedTickRateMs * 0.9 + rawTickRateMs * 0.1;
+            }
+
+            tickRateMs = this.smoothedTickRateMs;
+        }
+
+        if (tickRateMs === 0) {
+            if (now - newest.receivedAt < this.delay) return;
+            this.writeSnapshot(world, newest, components, shouldSkip);
+            return;
+        }
+
+        const ageBeyondDelay = now - newest.receivedAt - this.delay;
+        const targetTick = newest.serverTick + ageBeyondDelay / tickRateMs;
+
+        if (this.renderTick === -Infinity) {
+            this.renderTick = targetTick;
+        } else {
+            const drift = targetTick - this.renderTick;
+            if (drift > 2) {
+                this.renderTick = targetTick;
+            } else {
+                const warp = Math.max(0.9, Math.min(1.1, 1 + drift * 0.05));
+                this.renderTick += warp;
+            }
+        }
+
+        const renderTick = this.renderTick;
 
         let a: BufferedSnapshot | null = null;
         let b: BufferedSnapshot | null = null;
         for (let i = 0; i < this.buffer.length - 1; i++) {
             const s0 = this.buffer[i];
             const s1 = this.buffer[i + 1];
-            if (s0.receivedAt <= renderTime && renderTime <= s1.receivedAt) {
+            if (s0.serverTick <= renderTick && renderTick <= s1.serverTick) {
                 a = s0;
                 b = s1;
                 break;
@@ -97,38 +146,38 @@ export class InterpolationBuffer {
         }
 
         if (a === null || b === null) {
-            const head = this.buffer[this.buffer.length - 1];
-
-            if (renderTime < this.buffer[0].receivedAt) {
-                // Underrun: respect the interpolation delay by holding
-                // whatever World last had (archetype init or previous
-                // lerp). The peer stays put until the delay elapses.
-                return;
-            }
-
-            // Overrun: past the newest. Use it.
-            this.writeSnapshot(world, head, components, shouldSkip);
+            if (renderTick < oldest.serverTick) return;
+            this.writeSnapshot(world, newest, components, shouldSkip);
             return;
         }
-
-        const span = b.receivedAt - a.receivedAt;
-        const t = span > 0 ? Math.min(1, Math.max(0, (renderTime - a.receivedAt) / span)) : 0;
 
         const seen = new Set<number>();
         for (const eid of a.entityIds) seen.add(eid);
         for (const eid of b.entityIds) seen.add(eid);
+
+        const aIndex = this.buffer.indexOf(a);
+        const bIndex = this.buffer.indexOf(b);
 
         for (const serverEid of seen) {
             const localEid = this.serverToLocal.get(serverEid);
             if (localEid === undefined) continue;
             if (shouldSkip(localEid)) continue;
 
-            const compsA = a.componentValuesByEntity.get(serverEid);
-            const compsB = b.componentValuesByEntity.get(serverEid);
-
             for (const c of components) {
-                const va = compsA?.get(c);
-                const vb = compsB?.get(c);
+                let aIdx = aIndex;
+                let va = a.componentValuesByEntity.get(serverEid)?.get(c);
+                while (va === undefined && aIdx > 0) {
+                    aIdx--;
+                    va = this.buffer[aIdx].componentValuesByEntity.get(serverEid)?.get(c);
+                }
+
+                let bIdx = bIndex;
+                let vb = b.componentValuesByEntity.get(serverEid)?.get(c);
+                while (vb === undefined && bIdx < this.buffer.length - 1) {
+                    bIdx++;
+                    vb = this.buffer[bIdx].componentValuesByEntity.get(serverEid)?.get(c);
+                }
+
                 if (va === undefined && vb === undefined) continue;
 
                 let toWrite: Record<string, any> | undefined;
@@ -141,19 +190,27 @@ export class InterpolationBuffer {
                     const mode = modeFor(c);
                     if (mode === 'none') {
                         toWrite = vb;
-                    } else if (mode === 'step') {
-                        toWrite = t < 0.5 ? va : vb;
                     } else {
-                        // slerp falls through to lerp until implemented.
-                        const out: Record<string, number> = {};
-                        for (const fieldName of c.fieldNames as string[]) {
-                            out[fieldName] = lerp(
-                                va[fieldName] as number,
-                                vb[fieldName] as number,
-                                t,
-                            );
+                        const aTick = this.buffer[aIdx].serverTick;
+                        const bTick = this.buffer[bIdx].serverTick;
+                        const wideSpan = bTick - aTick;
+                        const wideT = wideSpan > 0
+                            ? Math.min(1, Math.max(0, (renderTick - aTick) / wideSpan))
+                            : 0;
+                        if (mode === 'step') {
+                            toWrite = wideT < 0.5 ? va : vb;
+                        } else {
+                            // slerp falls through to lerp until implemented.
+                            const out: Record<string, number> = {};
+                            for (const fieldName of c.fieldNames as string[]) {
+                                out[fieldName] = lerp(
+                                    va[fieldName] as number,
+                                    vb[fieldName] as number,
+                                    wideT,
+                                );
+                            }
+                            toWrite = out;
                         }
-                        toWrite = out;
                     }
                 }
 

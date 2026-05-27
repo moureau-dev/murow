@@ -104,15 +104,10 @@ describe('reconciliation', () => {
         expect(clientWorld.get(localEntity, Position).x).toBeCloseTo(100);
         expect(clientWorld.get(localEntity, Position).y).toBeCloseTo(100);
 
-        // Server receives the intent and applies the SAME prediction (the
-        // bundle is shared) — authoritative position is also (100, 100).
         await flush();
-        expect(serverWorld.get(serverEntity, Position).x).toBeCloseTo(100);
-
-        // Server snapshot arrives → reconciler sees its tick > prediction
-        // tick → prediction is dropped. Client position remains (100, 100).
         serverLoop.step(1 / 60 + 0.001);
         await flush();
+        expect(serverWorld.get(serverEntity, Position).x).toBeCloseTo(100);
         expect(client.getPredictionDepth()).toBe(0);
         expect(clientWorld.get(localEntity, Position).x).toBeCloseTo(100);
     });
@@ -152,24 +147,16 @@ describe('reconciliation', () => {
         // sending a third position via the client's prediction. Reconciler
         // should re-apply the prediction on top of the snapshot.
 
-        // Step 1: server entity moves authoritatively to (10, 10).
         serverWorld.update(serverEntity, Position, { x: 10, y: 10 });
+        serverLoop.step(1 / 60 + 0.001);
+        await flush();
 
-        // Step 2: client predicts a teleport to (50, 50) BEFORE the
-        // snapshot arrives. sendIntent stamps with current localTick.
         client.sendIntent('teleport', { x: 50, y: 50 });
         expect(clientWorld.get(localEntity, Position).x).toBeCloseTo(50);
         expect(client.getPredictionDepth()).toBe(1);
 
-        // Step 3: the server tick is still behind the predicted tick (the
-        // snapshot was the empty one from line above). Drive a server tick
-        // that ships authoritative (10, 10). The snapshot's serverTick is
-        // less than the prediction's localTick, so the prediction must NOT
-        // be dropped, AND it must be re-applied on top of (10, 10).
-        serverLoop.step(1 / 60 + 0.001);
         await flush();
 
-        // Reconciler should have replayed the teleport → position back to (50, 50).
         expect(clientWorld.get(localEntity, Position).x).toBeCloseTo(50);
         expect(clientWorld.get(localEntity, Position).y).toBeCloseTo(50);
     });

@@ -62,8 +62,8 @@ interface KickingState {
 interface InternalPeer extends Peer {
     transport: TransportAdapter;
     kicking: KickingState | null;
-    /** Highest client-stamped tick we've applied for this peer. */
     lastAckedClientTick: number;
+    pendingBySequence: Map<number, Uint8Array>;
     /**
      * True until the peer has received its first snapshot. The first
      * snapshot ships every entity with any synced component, not just
@@ -71,6 +71,7 @@ interface InternalPeer extends Peer {
      * entities haven't mutated this tick.
      */
     needsBaseline: boolean;
+    intentQueue: { sequence: number; payload: Uint8Array }[];
 }
 
 export class GameServer<
@@ -146,7 +147,9 @@ export class GameServer<
                 transport: peerTransport,
                 kicking: null,
                 lastAckedClientTick: 0,
+                pendingBySequence: new Map<number, Uint8Array>(),
                 needsBaseline: true,
+                intentQueue: [],
             };
             this.peers.set(peerId, peer);
             peerTransport.onMessage((data) => this.handleIncoming(peer, data));
@@ -171,6 +174,9 @@ export class GameServer<
 
     private wireLoop(): void {
         const events = this.loop.events as any;
+        events.on('pre-tick', () => {
+            this.drainIntentQueues();
+        });
         events.on('post-tick', ({ deltaTime }: any) => {
             this.tickCounter++;
             this.lastDt = deltaTime;
@@ -179,6 +185,48 @@ export class GameServer<
 
             if (this.tickCounter % this.snapshotEvery !== 0) return;
             this.sendSnapshots();
+        });
+    }
+
+    private drainIntentQueues(): void {
+        this.peers.forEach((peer) => {
+            if (peer.kicking !== null) {
+                peer.intentQueue.length = 0;
+                peer.pendingBySequence.clear();
+                return;
+            }
+
+            for (let i = 0; i < peer.intentQueue.length; i++) {
+                const entry = peer.intentQueue[i];
+                if (entry.sequence <= peer.lastAckedClientTick) continue;
+                if (peer.pendingBySequence.has(entry.sequence)) continue;
+                peer.pendingBySequence.set(entry.sequence, entry.payload);
+            }
+            peer.intentQueue.length = 0;
+
+            while (peer.pendingBySequence.has(peer.lastAckedClientTick + 1)) {
+                const nextSequence = peer.lastAckedClientTick + 1;
+                const payload = peer.pendingBySequence.get(nextSequence)!;
+                peer.pendingBySequence.delete(nextSequence);
+                this.handleIntent(peer, nextSequence, payload);
+            }
+
+            if (peer.pendingBySequence.size > 0) {
+                const STALL_LIMIT = 16;
+                let lowestPending = Infinity;
+                for (const sequence of peer.pendingBySequence.keys()) {
+                    if (sequence < lowestPending) lowestPending = sequence;
+                }
+                if (lowestPending - peer.lastAckedClientTick > STALL_LIMIT) {
+                    peer.lastAckedClientTick = lowestPending - 1;
+                    while (peer.pendingBySequence.has(peer.lastAckedClientTick + 1)) {
+                        const nextSequence = peer.lastAckedClientTick + 1;
+                        const payload = peer.pendingBySequence.get(nextSequence)!;
+                        peer.pendingBySequence.delete(nextSequence);
+                        this.handleIntent(peer, nextSequence, payload);
+                    }
+                }
+            }
         });
     }
 
@@ -285,7 +333,13 @@ export class GameServer<
         }
 
         if (type === CMSG_INTENT) {
-            this.handleIntent(peer, data.subarray(1));
+            if (data.length < 5) {
+                this.emit('intent-failed', { peer, kind: -1, reason: 'decode-error' });
+                return;
+            }
+            const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+            const sequence = dv.getUint32(1, true);
+            peer.intentQueue.push({ sequence, payload: data.subarray(5) });
             return;
         }
         if (type === CMSG_RPC) {
@@ -298,7 +352,7 @@ export class GameServer<
         });
     }
 
-    private handleIntent(peer: InternalPeer, payload: Uint8Array): void {
+    private handleIntent(peer: InternalPeer, sequence: number, payload: Uint8Array): void {
         let intent: any;
         try {
             intent = this.intents.registry.decode(payload);
@@ -346,9 +400,7 @@ export class GameServer<
         const handlerFn = this.handlerMap?.[name as keyof typeof this.handlerMap];
         if (handlerFn) (handlerFn as any)(intent, ctx);
 
-        if (intent.tick > peer.lastAckedClientTick) {
-            peer.lastAckedClientTick = intent.tick;
-        }
+        peer.lastAckedClientTick = sequence;
 
         this.emit('intent', {
             peer,

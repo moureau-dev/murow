@@ -25,6 +25,7 @@ const PONG_RPC = defineRPC({ method: '__murow_pong', schema: { ts: u16 } });
 
 interface PredictedIntent {
     tick: number;
+    sequence: number;
     name: string;
     payload: any;
     entity: Entity;
@@ -79,6 +80,7 @@ export interface GameClientOptions<
         /** Max buffered unacked predictions kept for rollback. Default 64. */
         bufferSize?: number;
     };
+    now?: () => number;
 }
 
 export class GameClient<
@@ -92,12 +94,13 @@ export class GameClient<
     readonly rpcs: DefinedRpcs<R>;
 
     private predictionMap: DefinedPredictions<I>['map'] | null = null;
-    private interpolationDelay: number;
     private predictionBufferSize: number;
     private predictionHistory: PredictedIntent[] = [];
 
     private localTick = 0;
+    private intentSequence = 0;
     private lastServerTick = 0;
+    private lastReconciledServerTick = 0;
 
     private serverToLocal = new Map<number, Entity>();
     private syncedComponents: Component<any>[] = [];
@@ -109,8 +112,9 @@ export class GameClient<
     private pendingAssignedServerEid: number | null = null;
     /** Resolved local entity for the server's assignment. Default for sendIntent. */
     private _assignedEntity: Entity | null = null;
-    private interpBuffer: InterpolationBuffer;
+    interpBuffer: InterpolationBuffer;
     private _rttMs: number | null = null;
+    private now: () => number;
 
     /**
      * Local entity the server has assigned to this peer, or `null` if no
@@ -152,17 +156,18 @@ export class GameClient<
         if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
         if (!reg.has(PONG_RPC.method)) reg.register(PONG_RPC);
         const strategy: PeerRenderStrategy = opts.strategy ?? { kind: 'snapshot-interpolation' };
-        this.interpolationDelay = strategy.delay ?? 100;
-        const staleWindowMs = strategy.staleWindow ?? this.interpolationDelay * 2 + 100;
+        const interpolationDelay = strategy.delay ?? 100;
+        const staleWindowMs = strategy.staleWindow ?? interpolationDelay * 2 + 100;
         this.predictionBufferSize = opts.prediction?.bufferSize ?? 64;
         this.rng = new SimpleRNG(1);
         this.lastDt = opts.loop.ticker.intervalMs / 1000;
+        this.now = opts.now ?? (() => performance.now());
 
         // 16 slots covers ~800ms at 20Hz.
         this.interpBuffer = new InterpolationBuffer(
             this.serverToLocal,
             16,
-            this.interpolationDelay,
+            interpolationDelay,
             staleWindowMs,
         );
 
@@ -191,7 +196,7 @@ export class GameClient<
         events.on('sync', () => {
             this.interpBuffer.apply(
                 this.world,
-                performance.now(),
+                this.now(),
                 this.syncedComponents,
                 (e) => this.predictedEntities.has(e),
             );
@@ -258,7 +263,7 @@ export class GameClient<
             this.emit('snapshot', { tick: decoded.tick, byteSize: payload.length + 1 });
 
             this.interpBuffer.record({
-                receivedAt: performance.now(),
+                receivedAt: this.now(),
                 serverTick: decoded.tick,
                 entityIds: decoded.serverEntityIds,
                 componentValuesByEntity: decoded.valuesByServerEntity,
@@ -268,10 +273,12 @@ export class GameClient<
                 const localEid = this.serverToLocal.get(serverEid);
                 if (localEid === undefined) continue;
                 this.serverToLocal.delete(serverEid);
-                this.interpBuffer.forget(serverEid);
                 if (this.world.isAlive(localEid)) this.world.despawn(localEid);
                 this.emit('despawn', { entity: localEid });
             }
+
+            if (decoded.tick <= this.lastReconciledServerTick) return;
+            this.lastReconciledServerTick = decoded.tick;
 
             this.reconcile(decoded);
         } catch (err) {
@@ -314,6 +321,7 @@ export class GameClient<
      * the server has acked, replay the rest on top.
      */
     private reconcile(decoded: DecodedDelta): void {
+        const resetEntities = new Set<Entity>();
         for (const serverEid of decoded.serverEntityIds) {
             const localEid = this.serverToLocal.get(serverEid);
             if (localEid === undefined) continue;
@@ -327,14 +335,14 @@ export class GameClient<
                     this.world.add(localEid, c, value as any);
                 }
             }
+            resetEntities.add(localEid);
         }
 
-        // Drop predictions by CLIENT tick (not server tick).
-        const ackTick = decoded.clientAckTick;
+        const ackSequence = decoded.clientAckTick;
         let cut = 0;
         while (
             cut < this.predictionHistory.length &&
-            this.predictionHistory[cut].tick <= ackTick
+            this.predictionHistory[cut].sequence <= ackSequence
         ) {
             cut++;
         }
@@ -342,12 +350,14 @@ export class GameClient<
 
         const remaining = this.predictionHistory.length;
         if (remaining === 0) {
-            this.emit('reconciled', { rewindTick: ackTick, replayed: 0 });
+            this.emit('reconciled', { rewindTick: ackSequence, replayed: 0 });
             return;
         }
 
+        let replayedCount = 0;
         for (let i = 0; i < remaining; i++) {
             const pred = this.predictionHistory[i];
+            if (!resetEntities.has(pred.entity)) continue;
             const predFn = this.predictionMap?.[pred.name as keyof typeof this.predictionMap];
             if (predFn === undefined) continue;
             const ctx: PredictionContext = {
@@ -360,10 +370,11 @@ export class GameClient<
                 markDirty: makeMarkDirty(this.world, pred.entity),
             };
             (predFn as any)(pred.payload, ctx);
+            replayedCount++;
         }
         this.emit('reconciled', {
-            rewindTick: ackTick,
-            replayed: remaining,
+            rewindTick: ackSequence,
+            replayed: replayedCount,
         });
     }
 
@@ -427,9 +438,12 @@ export class GameClient<
         const intentObj = { ...(payload as Record<string, unknown>), kind: def.kind, tick: this.localTick };
 
         const encoded = this.intents.registry.encode(intentObj);
-        const framed = new Uint8Array(encoded.length + 1);
+        const sequence = ++this.intentSequence;
+        const framed = new Uint8Array(encoded.length + 5);
         framed[0] = CMSG_INTENT;
-        framed.set(encoded, 1);
+        const dv = new DataView(framed.buffer, framed.byteOffset, framed.byteLength);
+        dv.setUint32(1, sequence >>> 0, true);
+        framed.set(encoded, 5);
         this.transport.send(framed);
 
         const predFn = this.predictionMap?.[name as keyof typeof this.predictionMap];
@@ -447,6 +461,7 @@ export class GameClient<
             (predFn as any)(payload, ctx);
             this.predictionHistory.push({
                 tick: this.localTick,
+                sequence,
                 name,
                 payload,
                 entity,
@@ -494,12 +509,11 @@ export class GameClient<
         return this.predictionHistory.length;
     }
 
-    get interpolationDelayMs(): number {
-        return this.interpolationDelay;
+    get interpolationDelay(): number {
+        return this.interpBuffer.delay;
     }
 
     setInterpolationDelay(ms: number): void {
-        this.interpolationDelay = ms;
         this.interpBuffer.setDelay(ms);
     }
 }

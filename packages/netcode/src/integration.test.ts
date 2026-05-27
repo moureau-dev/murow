@@ -226,6 +226,8 @@ describe('multiplayer end-to-end', () => {
 
         client.sendIntent('move', { dx: 2, dy: -3 });
         await flush();
+        ctx.serverLoop.step(1 / 60 + 0.001);
+        await flush();
 
         expect(seen.value).not.toBeNull();
         expect(seen.value!.name).toBe('move');
@@ -251,6 +253,8 @@ describe('multiplayer end-to-end', () => {
         // send through the same memory pipe.
         const peerView = (peerTransport as any).clientView() as { send: (data: Uint8Array) => void };
         peerView.send(malformed);
+        await flush();
+        ctx.serverLoop.step(1 / 60 + 0.001);
         await flush();
 
         expect(failures.values.length).toBe(1);
@@ -298,35 +302,31 @@ describe('multiplayer end-to-end', () => {
         clientLoop.step(1 / 60 + 0.001);
         clientLoop.step(1 / 60 + 0.001);
 
-        const tickAtPredict = client.getLocalTick();
         client.sendIntent('move', { dx: 9, dy: 0 });
         expect(client.getPredictionDepth()).toBe(1);
+        const sequenceAtPredict = 1;
 
-        // Capture reconciled event(s).
         const reconciled = captureAll<ClientEventPayloads['reconciled']>();
         client.on('reconciled', reconciled.push);
 
-        // Build a DecodedDelta-shaped stub. The reconciler uses
-        // `clientAckTick` (the server's view of the highest applied
-        // CLIENT tick) to decide which predictions to drop.
+        const localEid = client.assignedEntity!;
+        const serverEid = [...(client as any).serverToLocal.entries()]
+            .find(([, lid]) => lid === localEid)![0] as number;
         const stubDelta = (clientAckTick: number) => ({
             tick: 0,
             clientAckTick,
-            entityIds: [] as number[],
-            serverEntityIds: [] as number[],
+            entityIds: [localEid],
+            serverEntityIds: [serverEid],
             despawnedServerIds: [] as number[],
-            valuesByServerEntity: new Map(),
+            valuesByServerEntity: new Map([[serverEid, new Map([[Velocity, { vx: 0, vy: 0 }]])]]),
         });
 
-        // Simulate a snapshot acking a client tick older than the
-        // prediction's tick — the prediction must NOT be dropped.
-        (client as any).reconcile(stubDelta(tickAtPredict - 1));
+        (client as any).reconcile(stubDelta(sequenceAtPredict - 1));
         expect(client.getPredictionDepth()).toBe(1);
         expect(reconciled.values.length).toBe(1);
         expect(reconciled.values[0].replayed).toBe(1);
 
-        // Now simulate a snapshot acking the prediction's tick — should drop it.
-        (client as any).reconcile(stubDelta(tickAtPredict));
+        (client as any).reconcile(stubDelta(sequenceAtPredict));
         expect(client.getPredictionDepth()).toBe(0);
         expect(reconciled.values.length).toBe(2);
         expect(reconciled.values[1].replayed).toBe(0);
@@ -505,6 +505,8 @@ describe('multiplayer end-to-end', () => {
 
         client.sendIntent('move', { dx: 4, dy: 5 });
         await flush();
+        ctx.serverLoop.step(1 / 60 + 0.001);
+        await flush();
 
         // The server's move prediction wrote to Velocity on ctx.entity.
         // ctx.entity was filled from the assigned peer.entity.
@@ -533,6 +535,8 @@ describe('multiplayer end-to-end', () => {
 
         client.sendIntent('attack', { targetId: target as Entity });
         await flush();
+        ctx.serverLoop.step(1 / 60 + 0.001);
+        await flush();
 
         expect(ctx.serverWorld.get(target, Health).hp).toBe(75);
         // Prediction map has no 'attack' entry — the client never mutated locally.
@@ -557,6 +561,8 @@ describe('multiplayer end-to-end', () => {
         for (let i = 0; i < 3; i++) {
             client.sendIntent('attack', { targetId: target as Entity });
             await flush();
+            ctx.serverLoop.step(1 / 60 + 0.001);
+            await flush();
         }
         expect(ctx.serverWorld.get(target, Health).hp).toBe(25);
     });
@@ -578,6 +584,8 @@ describe('multiplayer end-to-end', () => {
 
         client.sendIntent('attack', { targetId: target as Entity });
         client.sendIntent('attack', { targetId: target as Entity });
+        await flush();
+        ctx.serverLoop.step(1 / 60 + 0.001);
         await flush();
 
         expect(ctx.serverWorld.get(target, Health).hp).toBe(0);
@@ -629,6 +637,8 @@ describe('multiplayer end-to-end', () => {
         clientLoop.step(1 / 60 + 0.001);
 
         client.sendIntent('attack', { targetId: target as Entity });
+        await flush();
+        ctx.serverLoop.step(1 / 60 + 0.001);
         await flush();
 
         expect(intentEvent.value).not.toBeNull();

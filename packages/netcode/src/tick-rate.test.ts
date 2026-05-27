@@ -171,6 +171,8 @@ describe('low tick rate', () => {
 
         client.sendIntent('tick', {});
         await flushTransport();
+        (serverLoop as any).step(1 / 10 + 0.001);
+        await flushTransport();
 
         expect(observedDeltas.length).toBe(1);
         const deltaTime = observedDeltas[0];
