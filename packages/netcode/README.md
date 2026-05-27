@@ -9,22 +9,14 @@ Shipped under the `murow` package as a subpath. No separate install.
 import { GameServer, GameClient } from 'murow/netcode';
 ```
 
-## At a glance
+## What's in the box
 
-| Feature | What it does |
-|---|---|
-| `GameServer` / `GameClient` | Typed network endpoints. Hook into a `GameLoop`, take a `World` and a protocol bundle. |
-| `defineIntents` / `defineRpcs` | Schema sugar over `defineIntent` / `defineRPC`. Numeric kinds auto-assigned, codecs built, TypeScript inference flows into `sendIntent` / `sendRpc`. |
-| `definePredictions` | Deterministic logic that runs identically on both sides. Server is authoritative, client predicts + rolls back. |
-| `defineHandlers` | Server-only logic with `peer`, `clientTick`, `lagCompensated()`. Never runs on the client. |
-| `networked()` | Type-checked `sync` block for `defineComponent`. Controls rate, interest, interp, snapThreshold. |
-| `ctx.fields(C)` | Inside predictions/handlers, returns the typed-array bundle for the active entity and auto-marks it dirty for synced components. RAW-speed reads/writes, zero allocation. |
-| `ctx.markDirty(C \| Cs, entity?)` | Explicit dirty-mark for cross-entity writes or no-op-path skipping when reaching into `ctx.world.fields()` directly. Accepts a single component or an array. |
-| `InterpolationBuffer` (internal) | Renders behind newest snapshot to absorb jitter. Tunable via `interpolation.delay`. |
-| `assignEntity` / `'assigned'` | Server tells the client which entity is theirs. Client auto-marks it predicted. |
-| `AoiGrid` | Spatial interest plugin. Filters per-peer snapshots by radius. |
-| `LagCompensation` | Server-side state rewind for fair hit detection across pings. |
-| `MemoryServerTransport` | In-process transport pair for tests. |
+- **Game server / client** - `GameServer`, `GameClient`
+- **Messages** - [`defineIntents`](#intents), [`defineRpcs`](#rpcs)
+- **Game logic** - [`definePredictions`](#predictions), [`defineHandlers`](#handlers)
+- **Component sync** - [`networked()`](#networked-components)
+- **Server plugins** - [`AoiGrid`](#aoigrid), [`LagCompensation`](#lagcompensation)
+- **Test transport** - `MemoryServerTransport`
 
 ## Minimal example
 
@@ -208,20 +200,25 @@ the send and receive APIs are typed against every name and payload.
 
 ```ts
 import { defineRpcs } from 'murow/netcode';
-import { u8, u16 } from 'murow';
+import { u8, u16, u32 } from 'murow';
 
 export const rpcs = defineRpcs({
   matchStart:  { countdownSec: u8 },
   achievement: { id: u16 },
+  buyItem:     { itemId: u32 },
 });
 
 const server = new GameServer({ protocol: { intents, rpcs }, /* ... */ });
 const client = new GameClient({ protocol: { intents, rpcs }, /* ... */ });
 
-server.broadcastRpc('matchStart', { countdownSec: 3 });
+// Server -> client (one peer, or all peers).
 server.sendRpc(peer, 'achievement', { id: 7 });
-
+server.broadcastRpc('matchStart', { countdownSec: 3 });
 client.on('rpc', ({ name, args }) => { /* ... */ });
+
+// Client -> server.
+client.sendRpc('buyItem', { itemId: 42 });
+server.on('rpc', ({ peer, name, args }) => { /* ... */ });
 ```
 
 ### Predictions
