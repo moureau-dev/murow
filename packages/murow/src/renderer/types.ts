@@ -95,6 +95,7 @@ export interface SpriteUV {
 }
 
 export interface SpriteHandle {
+    readonly id: number;
     readonly slot: number;
     x: number;
     y: number;

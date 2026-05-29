@@ -105,7 +105,109 @@ export class Ray3D {
     }
 
     /**
-     * Intersection with a triangle using the Möller–Trumbore algorithm.
+     * Sphere entry for picking: `t` to the nearest front-facing surface,
+     * or `null`. Unlike `intersectsSphere`, an origin inside the sphere or
+     * a sphere entirely behind the origin return `null` -- you only pick
+     * surfaces facing you.
+     */
+    entrySphere(cx: number, cy: number, cz: number, r: number): number | null {
+        const fx = this.origin[0] - cx;
+        const fy = this.origin[1] - cy;
+        const fz = this.origin[2] - cz;
+        const c = fx * fx + fy * fy + fz * fz - r * r;
+        if (c <= 0) return null;
+        const b = 2 * (fx * this.direction[0] + fy * this.direction[1] + fz * this.direction[2]);
+        if (b >= 0) return null;
+        const disc = b * b - 4 * c;
+        if (disc < 0) return null;
+        return (-b - Math.sqrt(disc)) / 2;
+    }
+
+    /**
+     * Axis-aligned box entry for picking, given center and half-extents.
+     * `t` to the front face, or `null`. Origin-inside and fully-behind
+     * both return `null` (see `entrySphere`).
+     */
+    entryBox(
+        cx: number, cy: number, cz: number,
+        hx: number, hy: number, hz: number,
+    ): number | null {
+        let tMin = -Infinity, tMax = Infinity;
+        const eps = 1e-10;
+        const o = this.origin, d = this.direction;
+        const lo = [cx - hx, cy - hy, cz - hz];
+        const hi = [cx + hx, cy + hy, cz + hz];
+
+        for (let a = 0; a < 3; a++) {
+            if (Math.abs(d[a]) < eps) {
+                if (o[a] < lo[a] || o[a] > hi[a]) return null;
+            } else {
+                const inv = 1 / d[a];
+                let t0 = (lo[a] - o[a]) * inv;
+                let t1 = (hi[a] - o[a]) * inv;
+                if (t0 > t1) { const tmp = t0; t0 = t1; t1 = tmp; }
+                if (t0 > tMin) tMin = t0;
+                if (t1 < tMax) tMax = t1;
+                if (tMin > tMax) return null;
+            }
+        }
+
+        if (tMax < 0) return null;
+        if (tMin < 0) return null;
+        return tMin;
+    }
+
+    /**
+     * Y-axis-aligned cylinder entry for picking: center `(cx,cy,cz)`,
+     * radius `r`, total height `h` (spans `cy +- h/2`). Side = 2D
+     * ray-vs-circle in XZ keeping in-range Y; caps = the two disk planes.
+     * Nearest candidate, or `null`; origin-inside is rejected.
+     */
+    entryCylinder(
+        cx: number, cy: number, cz: number,
+        r: number, h: number,
+    ): number | null {
+        const ox = this.origin[0], oy = this.origin[1], oz = this.origin[2];
+        const dx = this.direction[0], dy = this.direction[1], dz = this.direction[2];
+        const halfH = h * 0.5;
+        const yMin = cy - halfH;
+        const yMax = cy + halfH;
+
+        const fx = ox - cx, fz = oz - cz;
+        const a = dx * dx + dz * dz;
+        let best = Infinity;
+
+        if (a >= 1e-10) {
+            const b = 2 * (fx * dx + fz * dz);
+            const c = fx * fx + fz * fz - r * r;
+            const disc = b * b - 4 * a * c;
+            if (disc >= 0) {
+                const sq = Math.sqrt(disc);
+                const t0 = (-b - sq) / (2 * a);
+                const t1 = (-b + sq) / (2 * a);
+                if (t0 >= 0) { const y = oy + dy * t0; if (y >= yMin && y <= yMax && t0 < best) best = t0; }
+                if (t1 >= 0) { const y = oy + dy * t1; if (y >= yMin && y <= yMax && t1 < best) best = t1; }
+            }
+        }
+
+        if (Math.abs(dy) >= 1e-10) {
+            for (let i = 0; i < 2; i++) {
+                const py = i === 0 ? yMin : yMax;
+                const t = (py - oy) / dy;
+                if (t < 0) continue;
+                const hx2 = (ox + dx * t) - cx;
+                const hz2 = (oz + dz * t) - cz;
+                if (hx2 * hx2 + hz2 * hz2 <= r * r && t < best) best = t;
+            }
+        }
+
+        if (!isFinite(best)) return null;
+        if (oy >= yMin && oy <= yMax && (fx * fx + fz * fz) <= r * r) return null;
+        return best;
+    }
+
+    /**
+     * Intersection with a triangle using the Möller-Trumbore algorithm.
      * Returns `t` at the hit point, `null` if no hit.
      */
     intersectsTriangle(

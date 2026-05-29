@@ -24,3 +24,6 @@ export * from "./prefab-bucket";
 export * from "./prefab-bucket/specs";
 export { PrefabBucket } from "./prefab-bucket/concrete";
 export type { PrefabBucket2D, PrefabBucket3D } from "./prefab-bucket/concrete";
+
+// Raycast — abstract pick / ray-test contract
+export * from "./raycast";

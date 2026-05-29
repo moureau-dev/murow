@@ -173,6 +173,8 @@ export type {
     GltfSpec,
     GridPrefab,
     GridSpec,
+    Hitbox2D,
+    Hitbox3D,
     PartOffset,
     Prefab2D,
     Prefab2DSpec,

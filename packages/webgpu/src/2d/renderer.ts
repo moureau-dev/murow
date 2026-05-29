@@ -45,6 +45,7 @@ import {
 import { DynamicSprite, StaticSprite, SpriteUniforms } from '../core/types';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { SpriteAccessor } from './sprite-accessor';
+import { WebGPURaycast2D, type RaycastState2D } from './raycast';
 import { Camera2D } from '../camera/camera-2d';
 import {
     createSpriteLayout,
@@ -61,7 +62,8 @@ import {
 import { parseSpritesheet, type ParsedSpritesheet } from 'murow/renderer';
 import { GeometryBuilder, type GeometryOptions } from '../geometry/geometry-builder';
 import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder';
-import type { PrefabBucket2D, Prefab2D, SpritesheetPrefab } from 'murow/renderer';
+import type { PrefabBucket2D, Prefab2D, SpritesheetPrefab, Hitbox2D } from 'murow/renderer';
+import { testHitbox2DPoint, testQuad2DPoint } from 'murow/renderer';
 
 export interface WebGPU2DRendererOptions extends Renderer2DOptions {
     /**
@@ -139,7 +141,13 @@ export class WebGPU2DRenderer extends Base2DRenderer {
     private nextSheetId = 0;
 
     readonly camera: Camera2D;
+    readonly raycast: WebGPURaycast2D;
     private uniformData = new Float32Array(20);
+
+    // Per-slot handle + optional hitbox, parallel to the sprite arrays.
+    private spriteHandles: (SpriteAccessor | null)[];
+    private spriteHitboxes: (Hitbox2D | undefined)[];
+    private nextSpriteId = 0;
 
     private resizeObserver: ResizeObserver | null = null;
     private resizeCallbacks: ((width: number, height: number) => void)[] = [];
@@ -151,11 +159,14 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         super(canvas, { ...options, maxSprites: resolvedMaxSprites });
         this._prefabs = options.prefabs ?? null;
         this.camera = new Camera2D(canvas.width || 800, canvas.height || 600);
+        this.raycast = new WebGPURaycast2D(this);
         this.freeList = new FreeList(resolvedMaxSprites);
         this.batcher = new SparseBatcher(resolvedMaxSprites);
         this.dynamicData = new Float32Array(resolvedMaxSprites * DYNAMIC_FLOATS_PER_SPRITE);
         this.staticData = new Float32Array(resolvedMaxSprites * STATIC_FLOATS_PER_SPRITE);
         this.slotIndexData = new Uint32Array(resolvedMaxSprites);
+        this.spriteHandles = new Array(resolvedMaxSprites).fill(null);
+        this.spriteHitboxes = new Array(resolvedMaxSprites).fill(undefined);
     }
 
     async init(): Promise<void> {
@@ -347,8 +358,9 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         const dynBase = slot * DYNAMIC_FLOATS_PER_SPRITE;
         const statBase = slot * STATIC_FLOATS_PER_SPRITE;
 
-        // Resolve prefab → SpritesheetHandle if needed.
+        // Resolve prefab -> SpritesheetHandle if needed; a prefab may carry a hitbox.
         const sheet = isPrefab2D(opts.sheet) ? resolveSpritePrefabHandle(opts.sheet) : opts.sheet;
+        const hitbox = isPrefab2D(opts.sheet) ? opts.sheet.hitbox : undefined;
 
         const [px, py] = opts.position ?? [0, 0];
         this.dynamicData[dynBase + DYNAMIC_OFFSET_PREV_X] = px;
@@ -385,10 +397,13 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         this.staticDirty = true;
         this.batcher.add(opts.layer ?? 0, sheet.id, slot);
 
-        return new SpriteAccessor(
-            this.dynamicData, this.staticData, slot, sheet.id,
+        const accessor = new SpriteAccessor(
+            this.dynamicData, this.staticData, this.nextSpriteId++, slot, sheet.id,
             () => { this.staticDirty = true; },
         );
+        this.spriteHandles[slot] = accessor;
+        this.spriteHitboxes[slot] = hitbox;
+        return accessor;
     }
 
     removeSprite(sprite: SpriteHandle): void {
@@ -400,7 +415,45 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         const statBase = accessor.slot * STATIC_FLOATS_PER_SPRITE;
         this.dynamicData.fill(0, dynBase, dynBase + DYNAMIC_FLOATS_PER_SPRITE);
         this.staticData.fill(0, statBase, statBase + STATIC_FLOATS_PER_SPRITE);
+        this.spriteHandles[accessor.slot] = null;
+        this.spriteHitboxes[accessor.slot] = undefined;
         this.staticDirty = true;
+    }
+
+    /**
+     * Point-test every sprite against the unprojected cursor and push the
+     * hits into the buffer. Sort key is `-layer` so the topmost sprite is
+     * "nearest". A declared hitbox overrides the default rendered quad.
+     */
+    _collectRaycastHitsInto(screenX: number, screenY: number, rc: RaycastState2D): void {
+        const [wx, wy] = this.camera.screenToWorld(screenX, screenY);
+        const dyn = this.dynamicData;
+        const stat = this.staticData;
+
+        this.batcher.each((_sheetId, instances, count) => {
+            for (let i = 0; i < count; i++) {
+                const slot = instances[i];
+                const handle = this.spriteHandles[slot];
+                if (handle === null) continue;
+
+                const dynBase = slot * DYNAMIC_FLOATS_PER_SPRITE;
+                const statBase = slot * STATIC_FLOATS_PER_SPRITE;
+                const cx = dyn[dynBase + DYNAMIC_OFFSET_CURR_X];
+                const cy = dyn[dynBase + DYNAMIC_OFFSET_CURR_Y];
+                const rot = dyn[dynBase + DYNAMIC_OFFSET_CURR_ROTATION];
+                const sx = stat[statBase + STATIC_OFFSET_SCALE_X];
+                const sy = stat[statBase + STATIC_OFFSET_SCALE_Y];
+                const layer = stat[statBase + STATIC_OFFSET_LAYER];
+
+                const hb = this.spriteHitboxes[slot];
+                const inside = hb
+                    ? testHitbox2DPoint(hb, cx, cy, sx, sy, rot, wx, wy)
+                    : testQuad2DPoint(cx, cy, sx, sy, rot, wx, wy);
+                if (!inside) continue;
+
+                rc.push(handle, -layer, wx, wy, 0, layer);
+            }
+        });
     }
 
     storePreviousState(): void {

@@ -30,7 +30,7 @@ function createAccessor(slot = 0, sheetId = 0) {
     const staticData = new Float32Array(STATIC_FLOATS_PER_SPRITE * 4);
     let dirtyCount = 0;
     const onDirty = () => { dirtyCount++; };
-    const accessor = new SpriteAccessor(dynamicData, staticData, slot, sheetId, onDirty);
+    const accessor = new SpriteAccessor(dynamicData, staticData, 0, slot, sheetId, onDirty);
     return { accessor, dynamicData, staticData, getDirtyCount: () => dirtyCount };
 }
 
@@ -309,9 +309,9 @@ describe('SpriteAccessor', () => {
             const staticData = new Float32Array(STATIC_FLOATS_PER_SPRITE * 4);
             const noop = () => {};
 
-            const a0 = new SpriteAccessor(dynamicData, staticData, 0, 0, noop);
-            const a1 = new SpriteAccessor(dynamicData, staticData, 1, 0, noop);
-            const a2 = new SpriteAccessor(dynamicData, staticData, 2, 0, noop);
+            const a0 = new SpriteAccessor(dynamicData, staticData, 0, 0, 0, noop);
+            const a1 = new SpriteAccessor(dynamicData, staticData, 1, 1, 0, noop);
+            const a2 = new SpriteAccessor(dynamicData, staticData, 2, 2, 0, noop);
 
             a0.x = 10;
             a1.x = 20;

@@ -307,4 +307,70 @@ describe('Ray3D', () => {
             expect(t).toBeNull();
         });
     });
+
+    describe('entrySphere', () => {
+        test('returns the near (front-facing) entry', () => {
+            const r = new Ray3D();
+            r.set(0, 0, 0, 0, 0, 1);
+            expect(r.entrySphere(0, 0, 10, 2)).toBeCloseTo(8);
+        });
+
+        test('rejects origin inside the sphere', () => {
+            const r = new Ray3D();
+            r.set(0, 0, 10, 0, 0, 1);
+            expect(r.entrySphere(0, 0, 10, 2)).toBeNull();
+        });
+
+        test('rejects a sphere behind the origin', () => {
+            const r = new Ray3D();
+            r.set(0, 0, 0, 0, 0, 1);
+            expect(r.entrySphere(0, 0, -10, 2)).toBeNull();
+        });
+    });
+
+    describe('entryBox', () => {
+        test('returns the near face for a centered box', () => {
+            const r = new Ray3D();
+            r.set(0, 0, 0, 0, 0, 1);
+            expect(r.entryBox(0, 0, 10, 1, 1, 1)).toBeCloseTo(9);
+        });
+
+        test('rejects origin inside the box', () => {
+            const r = new Ray3D();
+            r.set(0, 0, 10, 0, 0, 1);
+            expect(r.entryBox(0, 0, 10, 1, 1, 1)).toBeNull();
+        });
+
+        test('misses a box off the ray axis', () => {
+            const r = new Ray3D();
+            r.set(0, 0, 0, 0, 0, 1);
+            expect(r.entryBox(5, 0, 10, 1, 1, 1)).toBeNull();
+        });
+    });
+
+    describe('entryCylinder', () => {
+        test('hits the side wall', () => {
+            const r = new Ray3D();
+            r.set(0, 0, 0, 0, 0, 1);
+            expect(r.entryCylinder(0, 0, 10, 2, 6)).toBeCloseTo(8);
+        });
+
+        test('hits a cap when entering from above', () => {
+            const r = new Ray3D();
+            r.set(0, 10, 0, 0, -1, 0);
+            expect(r.entryCylinder(0, 0, 0, 2, 6)).toBeCloseTo(7);
+        });
+
+        test('rejects origin inside the cylinder', () => {
+            const r = new Ray3D();
+            r.set(0, 0, 10, 0, 0, 1);
+            expect(r.entryCylinder(0, 0, 10, 2, 6)).toBeNull();
+        });
+
+        test('misses outside the radius', () => {
+            const r = new Ray3D();
+            r.set(5, 0, 0, 0, 0, 1);
+            expect(r.entryCylinder(0, 0, 10, 2, 6)).toBeNull();
+        });
+    });
 });

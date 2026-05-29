@@ -53,6 +53,11 @@ import {
     type CompositePrefab,
     type SkeletalAnimState,
     type PlayOptions,
+    Raycast as RaycastBase,
+    RaycastMemo as RaycastMemoBase,
+    testHitbox3DRay,
+    type RaycastHit as RaycastHitBase,
+    type RaycastOptions as RaycastOptionsBase,
 } from 'murow/renderer';
 import {
     buildAnimationKernel,
@@ -61,6 +66,9 @@ import {
 } from './skeletal-animation-compute/index';
 import { packAnimationData } from './skeletal-animation-compute/packer';
 import { GltfClipResyncCoordinator } from './clip-resync-coordinator';
+import { WebGPURaycast3D, type RaycastState } from './raycast';
+import { HitboxDebugRenderer } from './hitbox';
+import type { Ray3D } from 'murow/core/ray';
 import type { ComputeKernel } from '../compute/compute-builder';
 
 // --- Dynamic offset constants ---
@@ -94,6 +102,7 @@ export interface ModelHandle {
 }
 
 export interface MeshInstanceHandle {
+    readonly id: number;
     readonly slot: number;
     readonly modelId: number;
     readonly skinned: boolean;
@@ -189,6 +198,7 @@ function computeBucketStats(bucket: PrefabBucket3D): { maxSkinnedParts: number; 
 
 /** Handle to a spawned instance (single primitive or multi-part glTF). */
 export interface InstanceHandle {
+    readonly id: number;
     setPosition(x: number, y: number, z: number): void;
     setRotation(x: number, y: number, z: number): void;
     setScale(x: number, y: number, z: number): void;
@@ -235,6 +245,11 @@ export interface MeshInstanceOptions {
     color?: readonly [r: number, g: number, b: number];
 }
 
+export type RaycastHit = RaycastHitBase<MeshInstanceHandle, [number, number, number]>;
+export type RaycastOptions = RaycastOptionsBase<MeshInstanceHandle>;
+export type Raycast = RaycastBase<MeshInstanceHandle, [number, number, number]>;
+export type RaycastMemo = RaycastMemoBase<MeshInstanceHandle, [number, number, number]>;
+
 export interface WebGPU3DRendererOptions extends Renderer3DOptions {
     maxSkinnedInstances?: number;
     maxBonesPerSkin?: number;
@@ -279,6 +294,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
     // Per-instance model ID (for batcher lookup on remove)
     private instanceModelIds: Uint8Array;
+
+    // Per-slot handle reference, parallel to slot index. Indexed by slot.
+    private instanceHandles: (MeshInstanceHandle | null)[];
+    private nextInstanceId = 0;
 
     // TypeGPU buffers
     private dynamicBuffer!: TgpuBuffer<any>;
@@ -364,6 +383,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private skinnedInstanceModelIds!: Uint8Array;
     private skinnedInstanceBoneOffsets!: Uint32Array;
     private skinnedAnimStates: (SkeletalAnimState | null)[] = [];
+    private skinnedInstanceHandles!: (MeshInstanceHandle | null)[];
     private nextBoneOffset = 0;
     /** Reusable bone-offset blocks per skinIndex. Pushed on remove, popped on add. Indexed by skinIndex (low cardinality), so a Map of lists is fine. */
     private freedBoneOffsets: Map<number, number[]> = new Map();
@@ -385,10 +405,15 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private frustumPlanes = new Float32Array(24);
 
     readonly camera: Camera3D;
+    readonly raycast: WebGPURaycast3D;
     private uniformData = new Float32Array(24); // mat4x4 (16) + alpha (1) + lightDir (3) + padding (4)
     private lastRenderTime = 0;
 
     private readonly _prefabs: PrefabBucket3D | null;
+
+    debug: { hitboxes: boolean } = { hitboxes: false };
+
+    private hitboxDebug = new HitboxDebugRenderer();
 
     constructor(canvas: HTMLCanvasElement, options: WebGPU3DRendererOptions) {
         // Resolve maxInstances from the bucket before delegating to super:
@@ -398,6 +423,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             ?? (options.prefabs ? options.prefabs.size + 16 : 32);
         super(canvas, { ...options, maxInstances: resolvedMaxInstances });
         this.camera = new Camera3D();
+        this.raycast = new WebGPURaycast3D(this);
 
         this._prefabs = options.prefabs ?? null;
 
@@ -434,6 +460,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         this.staticData = new Float32Array(resolvedMaxInstances * STATIC_MESH_FLOATS);
         this.slotIndexData = new Uint32Array(resolvedMaxInstances);
         this.instanceModelIds = new Uint8Array(resolvedMaxInstances);
+        this.instanceHandles = new Array(resolvedMaxInstances).fill(null);
 
         // Skinned instance buffers
         const msi = this.maxSkinnedInstances;
@@ -446,6 +473,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         this.skinnedInstanceModelIds = new Uint8Array(msi);
         this.skinnedInstanceBoneOffsets = new Uint32Array(msi);
         this.skinnedAnimStates = new Array(msi).fill(null);
+        this.skinnedInstanceHandles = new Array(msi).fill(null);
 
         // Bone matrix buffer (CPU side)
         this.boneMatrixData = new Float32Array(this.maxTotalBones * 16);
@@ -486,7 +514,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
         this._width = this.canvas.width;
         this._height = this.canvas.height;
-        this.camera.aspect = this._width / this._height;
+        this.camera.setAspect(this.canvas.clientWidth || this._width, this.canvas.clientHeight || this._height);
 
         // Depth texture
         this.depthTexture = this.device.createTexture({
@@ -644,6 +672,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             this.uploadPrefabBucket(this._prefabs);
         }
 
+        this.hitboxDebug.init(this.device, this.format);
         this.setupResizeObserver();
         this._initialized = true;
     }
@@ -717,7 +746,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                     });
                 }
 
-                this.camera.aspect = w / h;
+                const cssBox = entry.contentBoxSize?.[0];
+                const cssW = cssBox ? cssBox.inlineSize : w;
+                const cssH = cssBox ? cssBox.blockSize : h;
+                this.camera.setAspect(cssW, cssH);
 
                 // Recreate depth texture
                 this.depthTexture.destroy();
@@ -1303,7 +1335,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const rotOut: [number, number, number] = [0, 0, 0];
         const sclOut: [number, number, number] = [0, 0, 0];
 
+        const id = ++this.nextInstanceId;
         const handle: MeshInstanceHandle = {
+            id,
             slot,
             modelId: modelHandle.id,
             skinned: false,
@@ -1356,9 +1390,11 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 self.freeList.free(slot);
                 dynamicData.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 staticData.fill(0, statBase, statBase + STATIC_MESH_FLOATS);
+                self.instanceHandles[slot] = null;
                 self.staticDirty = true;
             },
         };
+        this.instanceHandles[slot] = handle;
         return handle;
     }
 
@@ -1388,6 +1424,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const lead = childHandles[0];
 
         return {
+            id: lead.id,
             skinned: gltf.skinned,
             prefabId,
             setPosition(x: number, y: number, z: number) {
@@ -1469,6 +1506,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         }
 
         return {
+            id: childHandles[0].id,
             skinned: childHandles.some((h) => h.skinned),
             prefabId: composite.id,
             setPosition(x: number, y: number, z: number) {
@@ -1603,7 +1641,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const rotOut: [number, number, number] = [0, 0, 0];
         const sclOut: [number, number, number] = [0, 0, 0];
 
-        return {
+        const id = ++this.nextInstanceId;
+        const handle: MeshInstanceHandle = {
+            id,
             slot,
             modelId: modelHandle.id,
             skinned: true,
@@ -1665,6 +1705,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 dynamicData.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 staticData.fill(0, statBase, statBase + SKINNED_STATIC_MESH_FLOATS);
                 animStates[slot] = null;
+                self.skinnedInstanceHandles[slot] = null;
                 self.skinnedStaticDirty = true;
 
                 // Drop the per-block refcount and recycle the bone block if no
@@ -1679,6 +1720,8 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 }
             },
         };
+        this.skinnedInstanceHandles[slot] = handle;
+        return handle;
     }
 
     /**
@@ -2001,6 +2044,91 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         });
     }
 
+    /**
+     * Pick test for a single instance. Returns ray-`t` at the entry point
+     * or `null`. Uses the prefab's declared hitbox when available; falls
+     * back to the model's bounding sphere otherwise.
+     */
+    private testInstanceRay(
+        ray: Ray3D,
+        handle: MeshInstanceHandle,
+        cx: number, cy: number, cz: number,
+        sx: number, sy: number, sz: number,
+        modelBoundingRadius: number,
+    ): number | null {
+        const prefab = this._prefabs && handle.prefabId
+            ? (this._prefabs.get(handle.prefabId) as unknown as Prefab3D | undefined)
+            : undefined;
+        const hitbox = prefab?.hitbox;
+        if (hitbox !== undefined) {
+            return testHitbox3DRay(ray, hitbox, cx, cy, cz, sx, sy, sz);
+        }
+
+        const maxScale = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
+        return ray.entrySphere(cx, cy, cz, modelBoundingRadius * maxScale);
+    }
+
+    /** Push every instance the screen ray hits within [near, far] into the hit buffer. Unsorted. */
+    _collectRaycastHitsInto(screenX: number, screenY: number, rc: RaycastState): void {
+        const ray = this.camera.screenToRay(screenX, screenY);
+        const ox = ray.origin[0], oy = ray.origin[1], oz = ray.origin[2];
+        const dx = ray.direction[0], dy = ray.direction[1], dz = ray.direction[2];
+        const minDistance = this.camera.near;
+        const maxDistance = this.camera.far;
+
+        const dyn = this.dynamicData;
+        const stat = this.staticData;
+        const models = this.models;
+        this.batcher.each((_, instances, count) => {
+            for (let i = 0; i < count; i++) {
+                const slot = instances[i];
+                const handle = this.instanceHandles[slot];
+                if (handle === null) continue;
+
+                const model = models[handle.modelId];
+                if (!model) continue;
+
+                const dynBase = slot * DYNAMIC_MESH_FLOATS;
+                const statBase = slot * STATIC_MESH_FLOATS;
+                const t = this.testInstanceRay(
+                    ray, handle,
+                    dyn[dynBase + DYN_CURR_PX], dyn[dynBase + DYN_CURR_PY], dyn[dynBase + DYN_CURR_PZ],
+                    stat[statBase + STAT_SX], stat[statBase + STAT_SY], stat[statBase + STAT_SZ],
+                    model.boundingRadius,
+                );
+                if (t === null || t < minDistance || t > maxDistance) continue;
+                rc.push(handle, t, ox + dx * t, oy + dy * t, oz + dz * t);
+            }
+        });
+
+        const sDyn = this.skinnedDynamicData;
+        const sStat = this.skinnedStaticData;
+        const skinned = this.skinnedModels;
+        this.skinnedBatcher.each((_, instances, count) => {
+            for (let i = 0; i < count; i++) {
+                const slot = instances[i];
+                const handle = this.skinnedInstanceHandles[slot];
+                if (handle === null) continue;
+
+                const model = models[handle.modelId];
+                if (!model) continue;
+                const skin = skinned[model.skinIndex];
+                if (!skin) continue;
+
+                const dynBase = slot * DYNAMIC_MESH_FLOATS;
+                const statBase = slot * SKINNED_STATIC_MESH_FLOATS;
+                const t = this.testInstanceRay(
+                    ray, handle,
+                    sDyn[dynBase + DYN_CURR_PX], sDyn[dynBase + DYN_CURR_PY], sDyn[dynBase + DYN_CURR_PZ],
+                    sStat[statBase + SSTAT_SX], sStat[statBase + SSTAT_SY], sStat[statBase + SSTAT_SZ],
+                    skin.boundingRadius,
+                );
+                if (t === null || t < minDistance || t > maxDistance) continue;
+                rc.push(handle, t, ox + dx * t, oy + dy * t, oz + dz * t);
+            }
+        });
+    }
+
     render(alpha: number): void {
         if (!this._initialized) return;
 
@@ -2245,8 +2373,63 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             }
         }
 
+        if (this.debug.hitboxes) {
+            this.drawDebugHitboxes(pass, vpMatrix);
+        }
+
         pass.end();
         this.device.queue.submit([encoder.finish()]);
+    }
+
+    private drawDebugHitboxes(pass: GPURenderPassEncoder, vp: Float32Array): void {
+        if (!this._prefabs) return;
+        const debug = this.hitboxDebug;
+        const state = this.raycast.state;
+        debug.begin(vp);
+
+        const dyn = this.dynamicData;
+        const stat = this.staticData;
+        this.batcher.each((_, instances, count) => {
+            for (let i = 0; i < count; i++) {
+                const slot = instances[i];
+                const handle = this.instanceHandles[slot];
+                if (handle === null || !handle.prefabId) continue;
+                const prefab = this._prefabs!.get(handle.prefabId) as unknown as Prefab3D | undefined;
+                const hb = prefab?.hitbox;
+                if (!hb) continue;
+                const dynBase = slot * DYNAMIC_MESH_FLOATS;
+                const statBase = slot * STATIC_MESH_FLOATS;
+                debug.emit(
+                    hb,
+                    state.containsId(handle.id),
+                    dyn[dynBase + DYN_CURR_PX], dyn[dynBase + DYN_CURR_PY], dyn[dynBase + DYN_CURR_PZ],
+                    stat[statBase + STAT_SX], stat[statBase + STAT_SY], stat[statBase + STAT_SZ],
+                );
+            }
+        });
+
+        const sDyn = this.skinnedDynamicData;
+        const sStat = this.skinnedStaticData;
+        this.skinnedBatcher.each((_, instances, count) => {
+            for (let i = 0; i < count; i++) {
+                const slot = instances[i];
+                const handle = this.skinnedInstanceHandles[slot];
+                if (handle === null || !handle.prefabId) continue;
+                const prefab = this._prefabs!.get(handle.prefabId) as unknown as Prefab3D | undefined;
+                const hb = prefab?.hitbox;
+                if (!hb) continue;
+                const dynBase = slot * DYNAMIC_MESH_FLOATS;
+                const statBase = slot * SKINNED_STATIC_MESH_FLOATS;
+                debug.emit(
+                    hb,
+                    state.containsId(handle.id),
+                    sDyn[dynBase + DYN_CURR_PX], sDyn[dynBase + DYN_CURR_PY], sDyn[dynBase + DYN_CURR_PZ],
+                    sStat[statBase + SSTAT_SX], sStat[statBase + SSTAT_SY], sStat[statBase + SSTAT_SZ],
+                );
+            }
+        });
+
+        debug.flush(pass);
     }
 
     /**

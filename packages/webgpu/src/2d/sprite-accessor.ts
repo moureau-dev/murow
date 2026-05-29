@@ -33,6 +33,7 @@ export class SpriteAccessor implements SpriteHandle {
     private staticData: Float32Array;
     private dynamicBase: number;
     private staticBase: number;
+    private _id: number;
     private _slot: number;
     private _sheetId: number;
     private _onStaticDirty: () => void;
@@ -40,12 +41,14 @@ export class SpriteAccessor implements SpriteHandle {
     constructor(
         dynamicData: Float32Array,
         staticData: Float32Array,
+        id: number,
         slot: number,
         sheetId: number,
         onStaticDirty: () => void,
     ) {
         this.dynamicData = dynamicData;
         this.staticData = staticData;
+        this._id = id;
         this._slot = slot;
         this._sheetId = sheetId;
         this.dynamicBase = slot * DYNAMIC_FLOATS_PER_SPRITE;
@@ -53,6 +56,7 @@ export class SpriteAccessor implements SpriteHandle {
         this._onStaticDirty = onStaticDirty;
     }
 
+    get id(): number { return this._id; }
     get slot(): number { return this._slot; }
     get sheetId(): number { return this._sheetId; }
 

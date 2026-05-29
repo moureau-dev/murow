@@ -12,4 +12,5 @@ export * from './free-list';
 export * from './sparse-batcher';
 export * from './simple-rng';
 export * from './ray';
+export * from './raycast';
 export * from '../renderer';

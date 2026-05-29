@@ -38,6 +38,7 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             jointCount,
             totalVertexCount,
             metadata: spec.metadata ?? {},
+            hitbox: spec.hitbox,
         };
 
         // Animation views — present only when the spec declared a non-empty list,
@@ -134,6 +135,7 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             step: spec.step,
             lineWidth: spec.lineWidth,
             metadata: (spec.metadata ?? {}) as any,
+            hitbox: spec.hitbox,
         };
     },
     cube: (spec) => {
@@ -143,6 +145,7 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             id: spec.id,
             size: spec.size ?? 1,
             metadata: (spec.metadata ?? {}) as any,
+            hitbox: spec.hitbox,
         };
     },
     composite: (spec) => {
@@ -152,6 +155,7 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             id: spec.id,
             parts: spec.parts,
             metadata: (spec.metadata ?? {}) as any,
+            hitbox: spec.hitbox,
         };
     },
 };
@@ -173,6 +177,7 @@ export const parsers2d: PrefabParserMap<Prefab2DSpec, Prefab2D> = {
             width: parsed.width,
             height: parsed.height,
             metadata: (spec.metadata ?? {}) as any,
+            hitbox: spec.hitbox,
         };
     },
 };
