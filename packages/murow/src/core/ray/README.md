@@ -50,16 +50,21 @@ if (t !== null) {
 |--------|-------------|
 | `set(ox, oy, oz, dx, dy, dz)` | Set origin and direction (auto-normalized) |
 | `at(t)` | Point along ray at distance `t`. Reuses internal buffer |
-| `intersectsPlane(nx, ny, nz, d)` | Ray vs plane (n·x = d) |
+| `intersectsPlane(nx, ny, nz, d)` | Ray vs plane (n.x = d) |
 | `intersectsSphere(cx, cy, cz, r)` | Ray vs sphere |
 | `intersectsAABB(minX, minY, minZ, maxX, maxY, maxZ)` | Ray vs axis-aligned box |
-| `intersectsTriangle(ax, ay, az, bx, by, bz, cx, cy, cz)` | Ray vs triangle (Möller–Trumbore) |
+| `intersectsTriangle(ax, ay, az, bx, by, bz, cx, cy, cz)` | Ray vs triangle (Moller-Trumbore) |
+| `entrySphere(cx, cy, cz, r)` | Picking: nearest front-facing entry, rejects origin-inside / behind |
+| `entryBox(cx, cy, cz, hx, hy, hz)` | Picking: box by center + half-extents |
+| `entryCylinder(cx, cy, cz, r, height)` | Picking: Y-axis-aligned cylinder |
 
 ## Return values
 
 All `intersects*` methods return:
 - `number` — parametric distance `t` to the first hit (entry point, or exit if origin is inside)
 - `null` — no intersection
+
+The `entry*` methods are for **picking**: they return `t` to the nearest *front-facing* surface and reject origin-inside / fully-behind cases (you only pick surfaces facing you). Used by the hitbox system — see [`../hitbox`](../hitbox) and [`../raycast`](../raycast).
 
 `t` can be passed to `ray.at(t)` to get the world-space hit position.
 

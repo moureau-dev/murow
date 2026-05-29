@@ -77,6 +77,23 @@ Use `addGroup(name, parts)` to register a set of prefabs under a dotted namespac
 
 The mode narrows what `add()` accepts and what `get()` returns. Type-safe by construction.
 
+### Hitboxes
+
+Attach a `HitboxLibrary` (see [`core/hitbox`](../core/hitbox) and [`core/raycast`](../core/raycast)) so specs can reference a pick shape by name:
+
+```typescript
+const lib = new HitboxLibrary('3d')
+  .add('humanoid', new Hitbox('3d')
+    .add('body', { shape: 'cylinder', radius: 50, height: 120, offset: [0, 40, 0] })
+    .add('head', { shape: 'sphere', radius: 28, offset: [0, 130, 0] }));
+
+const bucket = new PrefabBucket('3d')
+  .hitboxes(lib)                                              // optional
+  .add({ type: 'gltf', id: 'jinx', src: '/jinx.glb', hitbox: 'humanoid' });
+```
+
+`.hitboxes(lib)` narrows the `hitbox` field to the library's names — `'humanoid'` autocompletes and typos are compile errors, while any string is still accepted (`StringOr`) and resolves to the model bound if unregistered. Without a library, `hitbox` cannot be set.
+
 ### Metadata
 
 Every spec can carry user-defined `metadata: Record<string, unknown>`. Literal types preserved through to the prefab:
