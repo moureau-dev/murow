@@ -62,8 +62,8 @@ import {
 import { parseSpritesheet, type ParsedSpritesheet } from 'murow/renderer';
 import { GeometryBuilder, type GeometryOptions } from '../geometry/geometry-builder';
 import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder';
-import type { PrefabBucket2D, Prefab2D, SpritesheetPrefab, Hitbox2D } from 'murow/renderer';
-import { testHitbox2DPoint, testQuad2DPoint } from 'murow/renderer';
+import type { PrefabBucket2D, Prefab2D, SpritesheetPrefab } from 'murow/renderer';
+import { testHitbox2D, pointInQuad2D, type Hitbox } from 'murow/core/hitbox';
 
 export interface WebGPU2DRendererOptions extends Renderer2DOptions {
     /**
@@ -146,7 +146,7 @@ export class WebGPU2DRenderer extends Base2DRenderer {
 
     // Per-slot handle + optional hitbox, parallel to the sprite arrays.
     private spriteHandles: (SpriteAccessor | null)[];
-    private spriteHitboxes: (Hitbox2D | undefined)[];
+    private spriteHitboxes: (Hitbox<'2d'> | null)[];
     private nextSpriteId = 0;
 
     private resizeObserver: ResizeObserver | null = null;
@@ -166,7 +166,7 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         this.staticData = new Float32Array(resolvedMaxSprites * STATIC_FLOATS_PER_SPRITE);
         this.slotIndexData = new Uint32Array(resolvedMaxSprites);
         this.spriteHandles = new Array(resolvedMaxSprites).fill(null);
-        this.spriteHitboxes = new Array(resolvedMaxSprites).fill(undefined);
+        this.spriteHitboxes = new Array(resolvedMaxSprites).fill(null);
     }
 
     async init(): Promise<void> {
@@ -358,9 +358,11 @@ export class WebGPU2DRenderer extends Base2DRenderer {
         const dynBase = slot * DYNAMIC_FLOATS_PER_SPRITE;
         const statBase = slot * STATIC_FLOATS_PER_SPRITE;
 
-        // Resolve prefab -> SpritesheetHandle if needed; a prefab may carry a hitbox.
+        // Resolve prefab -> SpritesheetHandle if needed; a prefab may name a hitbox.
         const sheet = isPrefab2D(opts.sheet) ? resolveSpritePrefabHandle(opts.sheet) : opts.sheet;
-        const hitbox = isPrefab2D(opts.sheet) ? opts.sheet.hitbox : undefined;
+        const hitboxName = isPrefab2D(opts.sheet) ? opts.sheet.hitbox : undefined;
+        const lib = this._prefabs?.hitboxLibrary ?? null;
+        const hitbox = hitboxName && lib ? (lib.get(hitboxName as never) as Hitbox<'2d'>) : null;
 
         const [px, py] = opts.position ?? [0, 0];
         this.dynamicData[dynBase + DYNAMIC_OFFSET_PREV_X] = px;
@@ -446,12 +448,16 @@ export class WebGPU2DRenderer extends Base2DRenderer {
                 const layer = stat[statBase + STATIC_OFFSET_LAYER];
 
                 const hb = this.spriteHitboxes[slot];
-                const inside = hb
-                    ? testHitbox2DPoint(hb, cx, cy, sx, sy, rot, wx, wy)
-                    : testQuad2DPoint(cx, cy, sx, sy, rot, wx, wy);
-                if (!inside) continue;
+                let part: string | null = null;
+                if (hb) {
+                    const hit = testHitbox2D(hb, cx, cy, sx, sy, rot, wx, wy);
+                    if (!hit) continue;
+                    part = hit.part;
+                } else if (!pointInQuad2D(cx, cy, sx, sy, rot, wx, wy)) {
+                    continue;
+                }
 
-                rc.push(handle, -layer, wx, wy, 0, layer);
+                rc.push(handle, -layer, wx, wy, 0, layer, part);
             }
         });
     }

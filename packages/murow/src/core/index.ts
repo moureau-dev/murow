@@ -13,4 +13,5 @@ export * from './sparse-batcher';
 export * from './simple-rng';
 export * from './ray';
 export * from './raycast';
+export * from './hitbox';
 export * from '../renderer';

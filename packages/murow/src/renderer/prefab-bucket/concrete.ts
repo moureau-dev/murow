@@ -17,9 +17,10 @@
  * ```
  */
 
-import { BasePrefabBucket, type StringOr } from './index';
+import { BasePrefabBucket, type SpecWithHitbox, type StringOr } from './index';
 import { parsers2d, parsers3d } from './parsers';
 import { generateId } from '../../core/generate-id';
+import type { HitboxLibrary } from '../../core/hitbox/hitbox-library';
 import type {
     CompositePrefab,
     PartOffset,
@@ -34,6 +35,7 @@ import type {
 type SpecForMode<M> = M extends '3d' ? Prefab3DSpec : Prefab2DSpec;
 type PrefabUnionForMode<M> = M extends '3d' ? Prefab3D : Prefab2D;
 
+
 /**
  * Registry of prefab specs and their parsed variants. The bucket tracks the mapping of
  * spec `id` strings to their parsed prefab types, so `get` narrows to the correct
@@ -44,28 +46,49 @@ type PrefabUnionForMode<M> = M extends '3d' ? Prefab3D : Prefab2D;
 export class PrefabBucket<
     M extends '2d' | '3d' = '3d',
     Specs extends Record<string, SpecForMode<M>> = {},
-> extends BasePrefabBucket<M, SpecForMode<M>, PrefabUnionForMode<M>, Specs> {
+    HB extends string = never,
+> extends BasePrefabBucket<M, SpecForMode<M>, PrefabUnionForMode<M>, Specs, HB> {
+    private _hitboxLibrary: HitboxLibrary<M> | null = null;
+
     constructor(mode: M) {
         const parsers = mode === '3d' ? parsers3d : parsers2d;
         super(mode, parsers as any);
     }
 
     /**
-     * Add a spec. Chains return the subclass type so the bucket variable's
-     * static type accumulates id→spec mappings, enabling `get` to narrow.
+     * Register the hitbox library backing this bucket. Specs may then set
+     * `hitbox` to any of the library's names, autocompleted and type-checked.
      */
-    add<const S extends SpecForMode<M>>(
-        spec: S,
-    ): PrefabBucket<M, Specs & { [K in S['id']]: S }> {
-        return super.add(spec) as unknown as PrefabBucket<M, Specs & { [K in S['id']]: S }>;
+    hitboxes<N extends string>(
+        library: HitboxLibrary<M, N>,
+    ): PrefabBucket<M, Specs, N> {
+        this._hitboxLibrary = library as HitboxLibrary<M>;
+        return this as unknown as PrefabBucket<M, Specs, N>;
     }
 
-    addAll<const Ss extends readonly SpecForMode<M>[]>(
+    /** The registered hitbox library, or `null` if none was set. */
+    get hitboxLibrary(): HitboxLibrary<M> | null {
+        return this._hitboxLibrary;
+    }
+
+    /**
+     * Add a spec. Chains return the subclass type so the bucket variable's
+     * static type accumulates id→spec mappings, enabling `get` to narrow.
+     * When a hitbox library is registered, `hitbox` must be one of its names.
+     */
+    add<const S extends SpecWithHitbox<SpecForMode<M>, HB>>(
+        spec: S,
+    ): PrefabBucket<M, Specs & { [K in S['id']]: S }, HB> {
+        return super.add(spec) as unknown as PrefabBucket<M, Specs & { [K in S['id']]: S }, HB>;
+    }
+
+    addAll<const Ss extends readonly SpecWithHitbox<SpecForMode<M>, HB>[]>(
         specs: Ss,
-    ): PrefabBucket<M, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }> {
+    ): PrefabBucket<M, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }, HB> {
         return super.addAll(specs) as unknown as PrefabBucket<
             M,
-            Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }
+            Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> },
+            HB
         >;
     }
 
@@ -128,7 +151,7 @@ export class PrefabBucket<
         }
 
         // The group itself is a composite prefab at id = groupName.
-        super.add({ type: 'composite', id: name, parts: compositeParts } as unknown as SpecForMode<M>);
+        super.add({ type: 'composite', id: name, parts: compositeParts } as unknown as SpecWithHitbox<SpecForMode<M>, HB>);
 
         (this as unknown as { groups: Map<string, string[]> }).groups.set(name, partIds);
         return this;
@@ -173,8 +196,6 @@ export type {
     GltfSpec,
     GridPrefab,
     GridSpec,
-    Hitbox2D,
-    Hitbox3D,
     PartOffset,
     Prefab2D,
     Prefab2DSpec,

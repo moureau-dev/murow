@@ -55,10 +55,10 @@ import {
     type PlayOptions,
     Raycast as RaycastBase,
     RaycastMemo as RaycastMemoBase,
-    testHitbox3DRay,
     type RaycastHit as RaycastHitBase,
     type RaycastOptions as RaycastOptionsBase,
 } from 'murow/renderer';
+import { testHitbox3D, type Hitbox } from 'murow/core/hitbox';
 import {
     buildAnimationKernel,
     uploadPackedToKernel,
@@ -327,6 +327,10 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         indexCount: number;
         indexFormat: GPUIndexFormat;
         boundingRadius: number;
+        // Model-space AABB half-extents, for the default (no-hitbox) pick bound.
+        halfX: number;
+        halfY: number;
+        halfZ: number;
         hasTexture: boolean;
         textureBindGroup: GPUBindGroup | null;
         skinned: boolean;
@@ -919,14 +923,22 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const uvs = data.uvs ?? new Float32Array(vertexCount * 2);
         const hasTexture = !!texture;
 
-        // Compute bounding radius (max distance from origin)
+        // Bounding radius (cull) + AABB half-extents (default pick bound), one pass.
         let maxRadiusSq = 0;
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         for (let i = 0; i < vertexCount; i++) {
             const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
             const rSq = px * px + py * py + pz * pz;
             if (rSq > maxRadiusSq) maxRadiusSq = rSq;
+            if (px < minX) minX = px; if (px > maxX) maxX = px;
+            if (py < minY) minY = py; if (py > maxY) maxY = py;
+            if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
         }
         const boundingRadius = Math.sqrt(maxRadiusSq);
+        const halfX = vertexCount ? (maxX - minX) * 0.5 : 0;
+        const halfY = vertexCount ? (maxY - minY) * 0.5 : 0;
+        const halfZ = vertexCount ? (maxZ - minZ) * 0.5 : 0;
 
         // Interleave position(3f) + normal(3f) + uv(2f) = 8 floats per vertex
         const interleaved = new Float32Array(vertexCount * 8);
@@ -995,6 +1007,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             indexCount,
             indexFormat: indices instanceof Uint32Array ? 'uint32' as const : 'uint16' as const,
             boundingRadius,
+            halfX, halfY, halfZ,
             hasTexture,
             textureBindGroup,
             skinned: false,
@@ -1019,14 +1032,22 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         const uvs = data.uvs ?? new Float32Array(vertexCount * 2);
         const hasTexture = !!texture;
 
-        // Compute bounding radius
+        // Bounding radius (cull) + AABB half-extents (default pick bound), one pass.
         let maxRadiusSq = 0;
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
         for (let i = 0; i < vertexCount; i++) {
             const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
             const rSq = px * px + py * py + pz * pz;
             if (rSq > maxRadiusSq) maxRadiusSq = rSq;
+            if (px < minX) minX = px; if (px > maxX) maxX = px;
+            if (py < minY) minY = py; if (py > maxY) maxY = py;
+            if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
         }
         const boundingRadius = Math.sqrt(maxRadiusSq);
+        const halfX = vertexCount ? (maxX - minX) * 0.5 : 0;
+        const halfY = vertexCount ? (maxY - minY) * 0.5 : 0;
+        const halfZ = vertexCount ? (maxZ - minZ) * 0.5 : 0;
 
         // Interleave: pos(3f) + normal(3f) + uv(2f) + joints(4xu16) + weights(4f) = 56 bytes
         const buf = new ArrayBuffer(vertexCount * 56);
@@ -1110,6 +1131,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             indexCount,
             indexFormat: indices instanceof Uint32Array ? 'uint32' as const : 'uint16' as const,
             boundingRadius,
+            halfX, halfY, halfZ,
             hasTexture,
             textureBindGroup,
             skinned: true,
@@ -2044,28 +2066,36 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         });
     }
 
+    /** Resolve an instance's declared hitbox name to its Hitbox via the bucket's library. */
+    private resolveHitbox(handle: MeshInstanceHandle): Hitbox<'3d'> | null {
+        if (!this._prefabs || !handle.prefabId) return null;
+        const lib = this._prefabs.hitboxLibrary;
+        if (!lib) return null;
+        const prefab = this._prefabs.get(handle.prefabId) as unknown as Prefab3D | undefined;
+        const name = prefab?.hitbox;
+        return name ? (lib.get(name as never) as Hitbox<'3d'>) : null;
+    }
+
     /**
-     * Pick test for a single instance. Returns ray-`t` at the entry point
-     * or `null`. Uses the prefab's declared hitbox when available; falls
-     * back to the model's bounding sphere otherwise.
+     * Pick test for a single instance. Returns the ray-`t` and the struck
+     * part name, or `null`. Uses the prefab's declared hitbox when
+     * available; falls back to the model's axis-aligned bounding box.
      */
     private testInstanceRay(
         ray: Ray3D,
         handle: MeshInstanceHandle,
         cx: number, cy: number, cz: number,
         sx: number, sy: number, sz: number,
-        modelBoundingRadius: number,
-    ): number | null {
-        const prefab = this._prefabs && handle.prefabId
-            ? (this._prefabs.get(handle.prefabId) as unknown as Prefab3D | undefined)
-            : undefined;
-        const hitbox = prefab?.hitbox;
-        if (hitbox !== undefined) {
-            return testHitbox3DRay(ray, hitbox, cx, cy, cz, sx, sy, sz);
+        halfX: number, halfY: number, halfZ: number,
+    ): { distance: number; part: string | null } | null {
+        const hitbox = this.resolveHitbox(handle);
+        if (hitbox) {
+            const hit = testHitbox3D(ray, hitbox, cx, cy, cz, sx, sy, sz);
+            return hit ? { distance: hit.distance, part: hit.part } : null;
         }
 
-        const maxScale = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
-        return ray.entrySphere(cx, cy, cz, modelBoundingRadius * maxScale);
+        const t = ray.entryBox(cx, cy, cz, halfX * sx, halfY * sy, halfZ * sz);
+        return t === null ? null : { distance: t, part: null };
     }
 
     /** Push every instance the screen ray hits within [near, far] into the hit buffer. Unsorted. */
@@ -2090,14 +2120,16 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
                 const dynBase = slot * DYNAMIC_MESH_FLOATS;
                 const statBase = slot * STATIC_MESH_FLOATS;
-                const t = this.testInstanceRay(
+                const hit = this.testInstanceRay(
                     ray, handle,
                     dyn[dynBase + DYN_CURR_PX], dyn[dynBase + DYN_CURR_PY], dyn[dynBase + DYN_CURR_PZ],
                     stat[statBase + STAT_SX], stat[statBase + STAT_SY], stat[statBase + STAT_SZ],
-                    model.boundingRadius,
+                    model.halfX, model.halfY, model.halfZ,
                 );
-                if (t === null || t < minDistance || t > maxDistance) continue;
-                rc.push(handle, t, ox + dx * t, oy + dy * t, oz + dz * t);
+                if (hit === null) continue;
+                const t = hit.distance;
+                if (t < minDistance || t > maxDistance) continue;
+                rc.push(handle, t, ox + dx * t, oy + dy * t, oz + dz * t, t, hit.part);
             }
         });
 
@@ -2117,14 +2149,16 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
                 const dynBase = slot * DYNAMIC_MESH_FLOATS;
                 const statBase = slot * SKINNED_STATIC_MESH_FLOATS;
-                const t = this.testInstanceRay(
+                const hit = this.testInstanceRay(
                     ray, handle,
                     sDyn[dynBase + DYN_CURR_PX], sDyn[dynBase + DYN_CURR_PY], sDyn[dynBase + DYN_CURR_PZ],
                     sStat[statBase + SSTAT_SX], sStat[statBase + SSTAT_SY], sStat[statBase + SSTAT_SZ],
-                    skin.boundingRadius,
+                    model.halfX, model.halfY, model.halfZ,
                 );
-                if (t === null || t < minDistance || t > maxDistance) continue;
-                rc.push(handle, t, ox + dx * t, oy + dy * t, oz + dz * t);
+                if (hit === null) continue;
+                const t = hit.distance;
+                if (t < minDistance || t > maxDistance) continue;
+                rc.push(handle, t, ox + dx * t, oy + dy * t, oz + dz * t, t, hit.part);
             }
         });
     }
@@ -2393,18 +2427,19 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             for (let i = 0; i < count; i++) {
                 const slot = instances[i];
                 const handle = this.instanceHandles[slot];
-                if (handle === null || !handle.prefabId) continue;
-                const prefab = this._prefabs!.get(handle.prefabId) as unknown as Prefab3D | undefined;
-                const hb = prefab?.hitbox;
+                if (handle === null) continue;
+                const hb = this.resolveHitbox(handle);
                 if (!hb) continue;
                 const dynBase = slot * DYNAMIC_MESH_FLOATS;
                 const statBase = slot * STATIC_MESH_FLOATS;
-                debug.emit(
-                    hb,
-                    state.containsId(handle.id),
-                    dyn[dynBase + DYN_CURR_PX], dyn[dynBase + DYN_CURR_PY], dyn[dynBase + DYN_CURR_PZ],
-                    stat[statBase + STAT_SX], stat[statBase + STAT_SY], stat[statBase + STAT_SZ],
-                );
+                const hovered = state.containsId(handle.id);
+                for (const part of hb.parts) {
+                    debug.emit(
+                        part, hovered,
+                        dyn[dynBase + DYN_CURR_PX], dyn[dynBase + DYN_CURR_PY], dyn[dynBase + DYN_CURR_PZ],
+                        stat[statBase + STAT_SX], stat[statBase + STAT_SY], stat[statBase + STAT_SZ],
+                    );
+                }
             }
         });
 
@@ -2414,18 +2449,19 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             for (let i = 0; i < count; i++) {
                 const slot = instances[i];
                 const handle = this.skinnedInstanceHandles[slot];
-                if (handle === null || !handle.prefabId) continue;
-                const prefab = this._prefabs!.get(handle.prefabId) as unknown as Prefab3D | undefined;
-                const hb = prefab?.hitbox;
+                if (handle === null) continue;
+                const hb = this.resolveHitbox(handle);
                 if (!hb) continue;
                 const dynBase = slot * DYNAMIC_MESH_FLOATS;
                 const statBase = slot * SKINNED_STATIC_MESH_FLOATS;
-                debug.emit(
-                    hb,
-                    state.containsId(handle.id),
-                    sDyn[dynBase + DYN_CURR_PX], sDyn[dynBase + DYN_CURR_PY], sDyn[dynBase + DYN_CURR_PZ],
-                    sStat[statBase + SSTAT_SX], sStat[statBase + SSTAT_SY], sStat[statBase + SSTAT_SZ],
-                );
+                const hovered = state.containsId(handle.id);
+                for (const part of hb.parts) {
+                    debug.emit(
+                        part, hovered,
+                        sDyn[dynBase + DYN_CURR_PX], sDyn[dynBase + DYN_CURR_PY], sDyn[dynBase + DYN_CURR_PZ],
+                        sStat[statBase + SSTAT_SX], sStat[statBase + SSTAT_SY], sStat[statBase + SSTAT_SZ],
+                    );
+                }
             }
         });
 

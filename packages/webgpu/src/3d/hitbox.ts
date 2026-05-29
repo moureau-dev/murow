@@ -1,4 +1,4 @@
-import type { Hitbox3D } from 'murow/renderer';
+import { placePart3D, type HitboxPart } from 'murow/core/hitbox';
 
 function buildUnitSphereWireframe(segments = 16): Float32Array {
     const out: number[] = [];
@@ -177,26 +177,22 @@ export class HitboxDebugRenderer {
     }
 
     emit(
-        hb: Hitbox3D,
+        hb: HitboxPart<'3d'>,
         hovered: boolean,
         px: number, py: number, pz: number,
         sx: number, sy: number, sz: number,
     ): void {
-        const off = hb.offset;
-        const cx = off ? px + off[0] * sx : px;
-        const cy = off ? py + off[1] * sy : py;
-        const cz = off ? pz + off[2] * sz : pz;
+        const p = placePart3D(hb, px, py, pz, sx, sy, sz);
         const color = hovered ? HOVERED : IDLE;
 
+        // Unit wireframes span the full extent (sphere/cylinder radius 1, box +-0.5),
+        // so they scale by full dimensions: radius from a half-extent, full size from a half.
         if (hb.shape === 'sphere') {
-            const maxScale = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
-            const r = hb.radius * maxScale;
-            this.collect(this.sphereBuffer, this.sphereVertexCount, cx, cy, cz, r, r, r, color);
+            this.collect(this.sphereBuffer, this.sphereVertexCount, p.cx, p.cy, p.cz, p.hx, p.hx, p.hx, color);
         } else if (hb.shape === 'box') {
-            this.collect(this.boxBuffer, this.boxVertexCount, cx, cy, cz, hb.size[0] * sx, hb.size[1] * sy, hb.size[2] * sz, color);
+            this.collect(this.boxBuffer, this.boxVertexCount, p.cx, p.cy, p.cz, p.hx * 2, p.hy * 2, p.hz * 2, color);
         } else {
-            const maxXZ = sx > sz ? sx : sz;
-            this.collect(this.cylinderBuffer, this.cylinderVertexCount, cx, cy, cz, hb.radius * maxXZ, hb.height * sy, hb.radius * maxXZ, color);
+            this.collect(this.cylinderBuffer, this.cylinderVertexCount, p.cx, p.cy, p.cz, p.hx, p.hy * 2, p.hz, color);
         }
     }
 

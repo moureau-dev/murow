@@ -32,11 +32,6 @@ type MetadataOf<S> =
 // 3D
 // ============================================================================
 
-export type Hitbox3D =
-    | { readonly shape: 'sphere'; readonly radius: number; readonly offset?: readonly [number, number, number] }
-    | { readonly shape: 'box'; readonly size: readonly [number, number, number]; readonly offset?: readonly [number, number, number] }
-    | { readonly shape: 'cylinder'; readonly radius: number; readonly height: number; readonly offset?: readonly [number, number, number] };
-
 export interface GltfSpec {
     readonly type: 'gltf';
     /** Unique identifier for the prefab. */
@@ -53,7 +48,7 @@ export interface GltfSpec {
     readonly freezeAnimations?: boolean;
     /** Optional user-defined sidecar data (scale, speed, gameplay hints, etc). */
     readonly metadata?: Record<string, unknown>;
-    readonly hitbox?: Hitbox3D;
+    readonly hitbox?: string;
 }
 
 export interface GridSpec {
@@ -65,7 +60,7 @@ export interface GridSpec {
     readonly lineWidth: number;
     /** Optional user-defined sidecar data (scale, speed, gameplay hints, etc). */
     readonly metadata?: Record<string, unknown>;
-    readonly hitbox?: Hitbox3D;
+    readonly hitbox?: string;
 }
 
 /** Unit cube prefab centered at origin. Use the instance's `scale` to size it. */
@@ -75,7 +70,7 @@ export interface CubeSpec {
     /** Edge length. Defaults to 1. */
     readonly size?: number;
     readonly metadata?: Record<string, unknown>;
-    readonly hitbox?: Hitbox3D;
+    readonly hitbox?: string;
 }
 
 /** Local transform offset applied to a part inside a composite/group at spawn time. */
@@ -95,7 +90,7 @@ export interface CompositeSpec {
     readonly id: string;
     readonly parts: readonly { readonly partId: string; readonly offset?: PartOffset }[];
     readonly metadata?: Record<string, unknown>;
-    readonly hitbox?: Hitbox3D;
+    readonly hitbox?: string;
 }
 
 export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec | CompositeSpec;
@@ -149,7 +144,7 @@ type GltfPrefabBase<S extends GltfSpec> = {
     readonly totalVertexCount: number;
     /** Passed through from the spec. */
     readonly metadata: MetadataOf<S>;
-    readonly hitbox?: Hitbox3D;
+    readonly hitbox?: string;
 };
 
 /**
@@ -195,7 +190,7 @@ export interface GridPrefab<S extends GridSpec = GridSpec> {
     readonly step: number;
     readonly lineWidth: number;
     readonly metadata: MetadataOf<S>;
-    readonly hitbox?: Hitbox3D;
+    readonly hitbox?: string;
 }
 
 export interface CubePrefab<S extends CubeSpec = CubeSpec> {
@@ -203,7 +198,7 @@ export interface CubePrefab<S extends CubeSpec = CubeSpec> {
     readonly id: S['id'];
     readonly size: number;
     readonly metadata: MetadataOf<S>;
-    readonly hitbox?: Hitbox3D;
+    readonly hitbox?: string;
 }
 
 export interface CompositePrefab<S extends CompositeSpec = CompositeSpec> {
@@ -211,7 +206,7 @@ export interface CompositePrefab<S extends CompositeSpec = CompositeSpec> {
     readonly id: S['id'];
     readonly parts: readonly { readonly partId: string; readonly offset?: PartOffset }[];
     readonly metadata: MetadataOf<S>;
-    readonly hitbox?: Hitbox3D;
+    readonly hitbox?: string;
 }
 
 export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab | CompositePrefab;
@@ -219,16 +214,6 @@ export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab | CompositePrefab;
 // ============================================================================
 // 2D
 // ============================================================================
-
-/**
- * 2D pick bounds in sprite-local space, scaled by instance scale and
- * rotated by instance rotation at pick time. Without one, a sprite picks
- * on its full rendered quad (`scaleX` by `scaleY`). `offset` is local-space.
- */
-export type Hitbox2D =
-    | { readonly shape: 'circle'; readonly radius: number; readonly offset?: readonly [number, number] }
-    | { readonly shape: 'rect'; readonly size: readonly [number, number]; readonly offset?: readonly [number, number] }
-    | { readonly shape: 'capsule'; readonly radius: number; readonly length: number; readonly offset?: readonly [number, number] };
 
 export interface SpritesheetSpec {
     readonly type: 'spritesheet';
@@ -240,7 +225,7 @@ export interface SpritesheetSpec {
     /** URL to a texture-packer JSON file. Mutually exclusive with frameWidth/frameHeight. */
     readonly data?: string;
     readonly metadata?: Record<string, unknown>;
-    readonly hitbox?: Hitbox2D;
+    readonly hitbox?: string;
 }
 
 export type Prefab2DSpec = SpritesheetSpec;
@@ -253,7 +238,7 @@ export interface SpritesheetPrefab<S extends SpritesheetSpec = SpritesheetSpec> 
     readonly width: number;
     readonly height: number;
     readonly metadata: MetadataOf<S>;
-    readonly hitbox?: Hitbox2D;
+    readonly hitbox?: string;
 }
 
 export type Prefab2D = SpritesheetPrefab;

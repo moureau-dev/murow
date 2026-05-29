@@ -26,6 +26,10 @@ export type PrefabMode = '2d' | '3d';
  */
 export type StringOr<T extends string> = T | (string & {});
 
+/** A spec union with its `hitbox` field constrained to the hitbox names `HB`. */
+export type SpecWithHitbox<S, HB extends string> =
+    S extends unknown ? Omit<S, 'hitbox'> & { readonly hitbox?: StringOr<HB> } : never;
+
 export interface PrefabSpecBase {
     readonly type: string;
     readonly id: string;
@@ -66,6 +70,7 @@ export class BasePrefabBucket<
     Spec extends PrefabSpecBase = PrefabSpecBase,
     Prefab extends PrefabBase = PrefabBase,
     Specs extends Record<string, Spec> = {},
+    HB extends string = string,
 > {
     readonly mode: M;
     /** Shared notification channel - see `PrefabBucketEvents`. */
@@ -84,9 +89,9 @@ export class BasePrefabBucket<
     }
 
     /** Add a single spec. Throws if id is a duplicate, contains '.', or if the bucket is already loaded. */
-    add<const S extends Spec>(
+    add<const S extends SpecWithHitbox<Spec, HB>>(
         spec: S,
-    ): BasePrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }> {
+    ): BasePrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }, HB> {
         if (spec.id.includes('.')) throw new Error(`PrefabBucket: id '${spec.id}' is invalid - '.' is reserved for group paths`);
         return this.addUnchecked(spec);
     }
@@ -96,23 +101,23 @@ export class BasePrefabBucket<
      * subclasses to register parts under group-path ids (e.g. `'campfire.logs'`)
      * after the group itself has validated user input.
      */
-    protected addUnchecked<const S extends Spec>(
+    protected addUnchecked<const S extends SpecWithHitbox<Spec, HB>>(
         spec: S,
-    ): BasePrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }> {
+    ): BasePrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }, HB> {
         if (this.prefabs) throw new Error(`PrefabBucket: cannot add after load() - bucket is frozen`);
         if (this.pendingIds.has(spec.id)) throw new Error(`PrefabBucket: duplicate id '${spec.id}'`);
-        this.pending.push(spec);
+        this.pending.push(spec as unknown as Spec);
         this.pendingIds.add(spec.id);
-        return this as unknown as BasePrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }>;
+        return this as unknown as BasePrefabBucket<M, Spec, Prefab, Specs & { [K in S['id']]: S }, HB>;
     }
 
     /**
      * Add multiple specs. Validates the whole batch (ids unique, not loaded) before
      * committing, so the bucket never lands in a half-applied state.
      */
-    addAll<const Ss extends readonly Spec[]>(
+    addAll<const Ss extends readonly SpecWithHitbox<Spec, HB>[]>(
         specs: Ss,
-    ): BasePrefabBucket<M, Spec, Prefab, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }> {
+    ): BasePrefabBucket<M, Spec, Prefab, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }, HB> {
         if (this.prefabs) throw new Error(`PrefabBucket: cannot add after load() — bucket is frozen`);
         const seen = new Set<string>();
         for (const s of specs) {
@@ -123,10 +128,10 @@ export class BasePrefabBucket<
             seen.add(s.id);
         }
         for (const s of specs) {
-            this.pending.push(s);
+            this.pending.push(s as unknown as Spec);
             this.pendingIds.add(s.id);
         }
-        return this as unknown as BasePrefabBucket<M, Spec, Prefab, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }>;
+        return this as unknown as BasePrefabBucket<M, Spec, Prefab, Specs & { [K in Ss[number]['id']]: Extract<Ss[number], { id: K }> }, HB>;
     }
 
     /** Load all pending specs in parallel. Idempotent if already loaded. */

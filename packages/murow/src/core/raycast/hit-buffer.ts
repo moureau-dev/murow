@@ -15,12 +15,15 @@ export interface BufferedHit<H, Point extends number[]> {
     handle: H;
     distance: number;
     point: Point;
+    /** Name of the hitbox part struck, or `null` for a default-bound (sphere/box/quad) hit. */
+    part: string | null;
 }
 
 type Filter<H> = (handle: H) => boolean;
 
-export class HitBuffer<H extends { id: number }, Point extends number[]> {
+export class HitBuffer<H, Point extends number[]> {
     private handles: (H | null)[] = [];
+    private parts: (string | null)[] = [];
     private keys = new Float32Array(0);
     private distances = new Float32Array(0);
     private px = new Float32Array(0);
@@ -41,7 +44,7 @@ export class HitBuffer<H extends { id: number }, Point extends number[]> {
 
     private makeHit(): BufferedHit<H, Point> {
         const point = (this.dims === 2 ? [0, 0] : [0, 0, 0]) as Point;
-        return { handle: null as unknown as H, distance: 0, point };
+        return { handle: null as unknown as H, distance: 0, point, part: null };
     }
 
     reset(): void {
@@ -54,10 +57,11 @@ export class HitBuffer<H extends { id: number }, Point extends number[]> {
      * the public hit reports. They differ only when ordering isn't by
      * distance (e.g. 2D layer). `distance` defaults to `key`.
      */
-    push(handle: H, key: number, x: number, y: number, z = 0, distance = key): void {
+    push(handle: H, key: number, x: number, y: number, z = 0, distance = key, part: string | null = null): void {
         const slot = this.count;
         if (slot >= this.capacity) this.grow(slot + 1);
         this.handles[slot] = handle;
+        this.parts[slot] = part;
         this.keys[slot] = key;
         this.distances[slot] = distance;
         this.px[slot] = x;
@@ -98,16 +102,22 @@ export class HitBuffer<H extends { id: number }, Point extends number[]> {
         out.length = n;
     }
 
+    /**
+     * True if any live hit's handle matches `id` — comparing the handle
+     * directly when it is a number, or its `.id` when it is an object.
+     */
     containsId(id: number): boolean {
         for (let s = 0; s < this.count; s++) {
             const h = this.handles[s];
-            if (h !== null && h.id === id) return true;
+            if (h === null) continue;
+            if (typeof h === 'number' ? h === id : (h as { id: number }).id === id) return true;
         }
         return false;
     }
 
     private fill(target: BufferedHit<H, Point>, slot: number): BufferedHit<H, Point> {
         target.handle = this.handles[slot]!;
+        target.part = this.parts[slot];
         target.distance = this.distances[slot];
         target.point[0] = this.px[slot];
         target.point[1] = this.py[slot];
@@ -118,6 +128,7 @@ export class HitBuffer<H extends { id: number }, Point extends number[]> {
     private grow(n: number): void {
         const cap = Math.max(n, this.capacity * 2, INITIAL_CAPACITY);
         this.handles.length = cap;
+        this.parts.length = cap;
 
         const keys = new Float32Array(cap); keys.set(this.keys); this.keys = keys;
         const distances = new Float32Array(cap); distances.set(this.distances); this.distances = distances;

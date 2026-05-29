@@ -4,6 +4,8 @@ export interface RaycastHit<H, Point extends readonly number[] = readonly number
     handle: H;
     distance: number;
     point: Point;
+    /** Name of the hitbox part struck, or `null` for a default-bound (box/quad) hit. */
+    part: string | null;
 }
 
 export interface RaycastOptions<H> {
