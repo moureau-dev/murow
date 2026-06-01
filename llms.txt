@@ -1,3 +1,3118 @@
 # Murow — AI Reference Guide
 
 Murow is a TypeScript game engine for **server-authoritative multiplayer** games. It ships three packages from a single npm install (`murow`):
+
+- `murow` — core: ECS, game loop, input, math, binary codecs, protocol primitives, transport-agnostic networking, renderer abstractions
+- `murow/webgpu` — concrete WebGPU 2D/3D renderer with compute shaders and a typed shader DSL (TypeGPU)
+- `murow/netcode` — opinionated multiplayer layer (snapshots, prediction with rollback, interest plugins, lag compensation) built on top of the protocol + net primitives
+
+The `webgpu` and `netcode` subpaths are bundled with the `murow` package — `npm install murow` is the only install.
+
+**The engine is renderer-agnostic.** `murow` ships *abstract renderer contracts* + the asset pipeline (`PrefabBucket`, `parseGltf`, `parseSpritesheet`, `SkeletalAnimation`) + CPU collision/picking (`Hitbox`, `HitboxLibrary`, `Raycaster`, `Ray3D`) — all pure CPU, usable on a headless server. `murow/webgpu` is the reference backend; you can write a Three.js / PixiJS / Babylon backend by subclassing `Base2DRenderer` / `Base3DRenderer`. The WebGPU backend handles GPU-side frame interpolation (lerp), frustum culling, distance-based animation culling, sparse-batched draw calls, glTF skinning, and instance recycling automatically — see "WebGPU Renderer" section.
+
+**This is not Unity, Three.js, PlayCanvas, or Phaser.** Do not apply patterns from those. Murow is **data-oriented**: an ECS World holds typed components in Structure-of-Arrays storage, a GameLoop drives systems at a fixed tick rate, and a renderer reads world state once per frame.
+
+Before writing anything, internalize these — they are the patterns agents wrongly import from other engines:
+
+- **No entity/component classes.** A component is a typed binary schema (`defineComponent`), not a class with methods. An entity is a plain `number`. Don't write `class Player {}` or `class PositionComponent {}`.
+- **No scene graph / `Object3D` / `mesh.material.color`.** You spawn instance *handles* from a renderer and set flat transforms/tint; there is no node hierarchy and (3D) no live material editing.
+- **No React-style hooks, no per-frame object allocation in hot loops.** State lives in components (multiplayer) or in your own arrays (single-player) — not in closures or framework state.
+- **Determinism in predictions:** no `Math.random()` (use `ctx.rng`), no `Date.now()`/`performance.now()` (use `ctx.tick`/`ctx.deltaTime`), no I/O, no module-level mutable state. Predictions only write **networked** components.
+- **Server is authority.** Handlers are server-only. Gameplay decisions (hits, awards) live in `defineHandlers`, never on the client.
+- The full, specific list is the "Common Mistakes" table near the end — consult it before finalizing code.
+
+The engine has **two layers of networking** stacked on each other. Pick the one that matches your needs:
+
+1. **Low-level (`murow/net` + `murow/protocol`)** — `ServerNetwork` / `ClientNetwork` + `IntentRegistry` / `SnapshotRegistry` / `RpcRegistry`. You wire your own game loop, prediction, interpolation. Use when the netcode opinions don't fit.
+2. **High-level (`murow/netcode`)** — `GameServer` / `GameClient` + `defineIntents` / `definePredictions` / `defineHandlers` + `networked()` component sync + `AoiGrid` / `LagCompensation` plugins. The common case.
+
+When in doubt, use `murow/netcode`. Drop to the lower layer only if you need a custom snapshot pipeline.
+
+---
+
+## What to build with what (pick your stack first)
+
+Not every game needs every layer. Decide these two things before writing code:
+
+```
+Multiplayer?
+├── No (single-player / local) ──> GameLoop + a renderer.
+│                                  ECS is OPTIONAL — see below.
+│                                  Do NOT pull in GameServer/GameClient/networked()/defineIntents.
+│
+└── Yes ─────────────────────────> shared { components(+networked), intents, predictions }
+                                    + GameServer (authoritative) + GameClient (predicts).
+                                    Add LagCompensation for hitscan; AoiGrid for large worlds.
+
+Many entities / want systems & SoA speed?
+├── No  ──> hold state your own way (arrays/objects of renderer handles); drive the renderer directly.
+└── Yes ──> ECS World + components + systems (see ECS section; default to the Fields API).
+```
+
+**ECS is not required for single-player.** A loop that owns a few hundred instance handles and moves them each tick is perfectly idiomatic — `new GameLoop(...)`, `addInstance(...)`, mutate handles in the `tick` event, `render(alpha)` in `render`. No `World`, no `defineComponent`. Reach for ECS when entity count, query patterns, or system organization make hand-rolled state painful, or when you want SoA cache performance. (In **multiplayer**, ECS is effectively required — `networked()` components and the snapshot codec are built on the World.)
+
+Minimal single-player skeleton (no ECS, no netcode):
+
+```ts
+import { GameLoop, PrefabBucket } from 'murow';
+import { WebGPU3DRenderer } from 'murow/webgpu';
+
+const prefabs = new PrefabBucket('3d').add({ type: 'cube', id: 'box', size: 1 });
+await prefabs.load();
+const renderer = new WebGPU3DRenderer(canvas, { prefabs, maxInstances: 500, autoResize: true });
+await renderer.init();
+
+const boxes = Array.from({ length: 200 }, (_, i) =>
+  renderer.addInstance({ model: prefabs.get('box'), position: [i % 20, 0, (i / 20) | 0] }));
+
+const loop = new GameLoop({ type: 'client', tickRate: 30 });
+loop.events.on('pre-tick', () => renderer.storePreviousState());
+loop.events.on('tick', ({ deltaTime }) => {
+  for (const b of boxes) b.setPosition(b.position[0], b.position[1] + deltaTime, b.position[2]);
+});
+loop.events.on('render', ({ alpha }) => renderer.render(alpha));
+loop.start();
+```
+
+For the full multiplayer stack, see "Full Multiplayer Game (End to End)" at the end.
+
+---
+
+## Imports
+
+```ts
+// Core (utilities, math, codecs, ECS, game loop, transport primitives, renderer abstractions)
+import {
+  // ECS
+  World, defineComponent, type Entity,
+  // Binary codecs
+  BinaryCodec, PooledCodec, PooledArrayDecoder,
+  // Primitive field shortcuts (re-exports of BinaryCodec.f32 etc.)
+  f32, f64, u8, u16, u32, i8, i16, i32,
+  // Game loop
+  GameLoop, FixedTicker, createDriver, EventSystem,
+  // Input
+  type InputSnapshot,
+  // Math & misc
+  SimpleRNG, lerp, generateId,
+  Ray2D, Ray3D,
+  NavMesh,
+  // mat4 helpers (column-major, offset-based, zero-alloc)
+  mat4Identity, mat4IdentityNew, trsToMat4, nodeToMat4, mat4Mul, mat4MulNew,
+  FreeList, SparseBatcher,
+  // Prediction primitives (lower-level — netcode wraps these)
+  IntentTracker, Reconciliator,
+  // Protocol primitives
+  defineIntent, IntentRegistry,
+  defineRPC, RpcRegistry,
+  SnapshotCodec, SnapshotRegistry, applySnapshot, type Snapshot,
+  // Transport-agnostic networking
+  ServerNetwork, ClientNetwork,
+  type TransportAdapter, type ServerTransportAdapter,
+  BunWebSocketServerTransport,
+  // Renderer abstractions + asset pipeline (pure CPU — no GPU)
+  PrefabBucket, type GltfPrefab,
+  parseGltf, parseSpritesheet, SkeletalAnimation,
+  type SpriteHandle, type SpritesheetHandle,
+} from 'murow';
+
+// Input lives at a subpath
+import { InputManager, BrowserInputSource, MouseLook, ScrollZoom } from 'murow/core/input';
+
+// Browser WebSocket transport (separate adapter)
+import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-websocket';
+
+// WebGPU renderer
+import {
+  WebGPU2DRenderer, WebGPU3DRenderer,
+  Camera2D, Camera3D,
+  GeometryBuilder, ComputeBuilder, ComputeKernel,
+  ParticleEmitter,
+  Spritesheet, createTextureFromBitmap,
+  SpriteAccessor, AnimationController, MorphAnimation,
+  d, std,
+  type InstanceHandle, type MeshInstanceHandle,
+  type GltfModel, type ParticleEmitterConfig,
+} from 'murow/webgpu';
+
+// Netcode (high-level multiplayer)
+import {
+  GameServer, GameClient,
+  defineIntents, defineRpcs, definePredictions, defineHandlers,
+  networked,
+  AoiGrid, LagCompensation,
+  MemoryServerTransport,
+  type ServerPlugin, type PredictionContext, type ServerHandlerContext,
+  type ComponentFields,
+} from 'murow/netcode';
+```
+
+`f32`, `u8`, ... are top-level re-exports of `BinaryCodec.f32` etc. — both forms work. Prefer the short ones in schemas.
+
+**What does NOT ship.** There is no `Vec2` / `Vec3` type or vector math (dot, cross, normalize on CPU), no quaternion helpers, no easing functions, no `clamp` / `min` / `max` helpers. The only math exports are `lerp`, `SimpleRNG`, the `Ray2D` / `Ray3D` intersection tests, and the `mat4*` helpers above (used by the glTF/skin path; column-major `Float32Array` with explicit offsets). For 2D points the codebase uses plain `{ x: number; y: number }` literals (the type `Vector2` is exported from `murow/core/input`, but most APIs just take the literal). Use `std.*` for vector math *inside* WGSL shader closures only (see WebGPU section) — those do not run on the CPU.
+
+---
+
+## ECS — World, Components, Entities
+
+High-performance ECS with **five API patterns** and **Structure-of-Arrays** storage. Pick the pattern per system based on how hot the loop is and how much ergonomic polish you want:
+
+| Pattern    | Speed                       | When to use                                                                |
+|------------|-----------------------------|----------------------------------------------------------------------------|
+| RAW        | Fastest                     | Critical hot paths. Manual `getFieldArray` hoisting, ugly but minimal      |
+| **Fields** | **~1.3x slower than RAW**   | **Recommended for hand-written systems.** `world.fields(C)` returns a precisely-typed bundle in one array index. Same speed as RAW once JIT warms up |
+| Hybrid     | ~2x slower than RAW         | System Builder + raw array access. Production-ready                        |
+| Ergonomic  | ~3x slower than RAW         | System Builder + cached getters. Prototyping, non-critical systems         |
+| Direct     | ~6x slower than RAW         | One-off per-call work where ergonomics matter most: test setup, debug tooling, one-off scripts. Slowest tier, don't use in per-frame loops |
+
+The first four (RAW / Fields / Hybrid / Ergonomic) are all viable for per-frame systems. Hybrid and Ergonomic use the **System Builder** (`world.addSystem().query(...).fields(...).run(...)`); RAW and Fields are hand-written `for (const eid of world.query(...))` loops.
+
+**For prediction/handler bodies in `murow/netcode`**, use `ctx.fields(C)` - same speed as RAW Fields plus automatic dirty-tracking for snapshot replication. Do NOT use Direct (`world.get` / `world.update`) in prediction hot paths.
+
+RAW / Fields / Hybrid / Ergonomic all hit 60 FPS at 50k entities. Direct holds 60 FPS up to ~15k entities and 30 FPS up to ~25k.
+
+### Performance context
+
+Benchmarked against [bitECS](https://github.com/NateTheGreatt/bitECS) (JS peer) and [Bevy](https://bevyengine.org/) (Rust upper bound) using an identical 11-system "complex game simulation" workload — no rendering, 5-run averages on an Intel i5-2400 (Sandy Bridge, 2011) with Bun (Murow / bitECS) and Rust release (Bevy):
+
+**10,000 entities:**
+
+| Engine          | Frame time   | vs Bevy        | Max / P50 (tail variance)  |
+|-----------------|--------------|----------------|----------------------------|
+| Bevy (Rust)     | 0.43 ms      | -              | ~2.9x (1.20 / 0.42)        |
+| **Murow RAW**   | **1.12 ms**  | ~2.6x slower   | **~3.3x** (3.42 / 1.05)    |
+| **Murow Fields**| **1.45 ms**  | ~3.4x slower   | ~3.0x (4.60 / 1.52)        |
+| bitECS          | 1.63 ms      | ~3.8x slower   | **~44x** (42.07 / 0.96) (GC spikes) |
+| Murow Hybrid    | 2.23 ms      | ~5.2x slower   | ~2.2x (4.85 / 2.18)        |
+| Murow Ergonomic | 3.37 ms      | ~7.8x slower   | ~2.0x (6.54 / 3.32)        |
+| Murow Direct    | 6.91 ms      | ~16x slower    | ~1.7x (11.51 / 6.64)       |
+
+**100,000 entities** (where the gap widens but tail behavior stays consistent):
+
+| Engine          | Frame time   | Max frame      | Max / P50                 |
+|-----------------|--------------|----------------|---------------------------|
+| Bevy (Rust)     | 4.42 ms      | 11.76 ms       | ~2.7x                     |
+| bitECS          | 13.28 ms     | **349.95 ms**  | **~45x** (single-frame stalls) |
+| **Murow RAW**   | **21.39 ms** | 36.04 ms       | ~1.7x                     |
+| Murow Hybrid    | 22.83 ms     | 39.52 ms       | ~1.8x                     |
+| **Murow Fields**| **25.44 ms** | 39.21 ms       | ~1.5x                     |
+| Murow Ergonomic | 35.07 ms     | 55.37 ms       | ~1.6x                     |
+| Murow Direct    | 77.47 ms     | 116.62 ms      | ~1.5x                     |
+
+**What this tells you:**
+- Murow is **~2-2.6x slower than Rust Bevy** on the hot loop - the constant overhead of running in JS, not an algorithmic gap.
+- Murow has **substantially better worst-case latency than other JS ECS libraries** (max/P50 ratio ~1.5-3.3x vs. bitECS's ~45x). This matters more than raw throughput for game loops - bitECS hits a **single 350 ms frame at 100k entities** (a full-second stall would freeze the game); Murow's worst frame at the same scale is 36 ms. A steady 1.12 ms beats an averagey 0.96 ms with stalls.
+- **Fields** is the recommended sweet spot for hand-written systems: ~30% slower than RAW (one extra property load per typed-array access), ~35% faster than Hybrid, and precisely typed without casts. Predictions and handlers in `murow/netcode` get this performance by default via `ctx.fields(C)`.
+- The five Murow tiers (RAW / Fields / Hybrid / Ergonomic / Direct) trade ergonomics for ~2-6x perf - but all stay within the same tail-variance band.
+
+Full data (P50/P95/P99/Max columns, every entity count from 500 to 100k) and the runnable benchmark live in the source repo under `benchmarks/ecs/` (https://github.com/moureau-dev/murow) — not in the published npm package.
+
+### Defining components
+
+Components are **typed binary schemas**. The World stores them in a flat SoA `Float32Array` per field. There is no `Position` class — a component is a *descriptor* you pass back to the World every time you read or write.
+
+`defineComponent` has two forms — bare schema (local-only) and descriptor (with `sync` metadata for netcode):
+
+```ts
+// Form 1: bare schema (local-only component)
+function defineComponent<T extends object>(name: string, schema: Schema<T>): Component<T>;
+
+// Form 2: descriptor with sync metadata (networked component)
+function defineComponent<T extends object>(name: string, def: { schema: Schema<T>; sync: unknown }): Component<T>;
+
+// The returned Component<T> shape:
+type Component<T extends object> = {
+  schema: Schema<T>;
+  name: string;
+  size: number;             // bytes per record
+  fieldCount: number;
+  fieldNames: (keyof T)[];
+  arrayCodec: ArrayField<T>;
+  __type?: T;               // phantom type — never set at runtime
+  __worldIndex?: number;    // set when registered with a World
+  __sync?: unknown;         // set when descriptor form was used
+};
+```
+
+```ts
+const Position = defineComponent('Position', {
+  x: f32,
+  y: f32,
+});
+
+const Velocity = defineComponent('Velocity', {
+  vx: f32,
+  vy: f32,
+});
+
+// Networked components use the descriptor form (more on this in Netcode):
+const NetPosition = defineComponent('NetPosition', {
+  schema: { x: f32, y: f32 },
+  sync: networked({ rate: 'every-tick', interest: 'global', interp: 'lerp' }),
+});
+```
+
+### Creating a world
+
+```ts
+interface WorldConfig {
+  maxEntities?: number;                 // default: implementation-defined; pick a generous cap
+  components: Component<any>[];         // must register all components up-front
+}
+
+type Entity = number;                   // entities are plain numeric ids
+
+const world = new World({
+  maxEntities: 10_000,
+  components: [Position, Velocity],
+});
+```
+
+### Entity API — fluent
+
+```ts
+const eid = world.spawn();
+world.entity(eid)
+  .add(Position, { x: 0, y: 0 })
+  .add(Velocity, { vx: 10, vy: 0 });
+
+const handle = world.entity(eid);
+handle.get(Position);                  // { x, y } — read-only view (DO NOT mutate)
+handle.getMutable(Position);           // mutable copy — write back via update/set; not live storage
+handle.getField(Position, 'x');        // number
+handle.field(Position, 'x');           // raw TypedArray reference
+handle.has(Position);                  // boolean
+handle.update(Position, { x: 100 });   // partial — only listed fields change
+handle.setFields(Position, (p) => { p.x += 10; });   // mutate-in-place via updater; persists on flush
+handle.remove(Position);
+handle.despawn();
+handle.isAlive();
+
+// Batch mode — coalesce many writes on one entity, flush once (fewer store round-trips):
+handle
+  .beginUpdate()
+  .prepare(Position, Velocity)         // optional: pre-fetch component data for the batch
+  .update(Position, { x: 5 })
+  .update(Velocity, { vx: 1 })
+  .flush();                            // applies all queued writes
+```
+
+### World API
+
+```ts
+world.spawn();
+world.despawn(eid);
+world.isAlive(eid);
+world.getEntityCount();
+world.getEntities();                            // readonly Entity[] — all alive entities (reused buffer; don't retain)
+world.getMaxEntities();                         // the configured cap
+world.getComponents();                          // readonly Component<any>[] — every registered component
+
+world.add(eid, Position, { x: 0, y: 0 });
+world.set(eid, Position, { x: 0, y: 0 });       // full replace
+world.update(eid, Position, { x: 100 });        // partial update
+world.has(eid, Position);
+world.get(eid, Position);                       // returns a view — mutation does NOT persist
+world.getMutable(eid, Position);                // mutable copy — write back with world.set/update; NOT live storage
+world.remove(eid, Position);
+
+for (const id of world.query(Position, Velocity)) { /* ... */ }
+
+// Direct typed-array access (RAW API)
+const xs = world.getFieldArray(Position, 'x');  // Float32Array
+xs[eid] += 10;
+```
+
+**`world.query()` returns a reused, internally-cached `readonly Entity[]`** — NOT an iterator, NOT a fresh array. The cache is rebuilt only when the archetype set changes (any `spawn` / `despawn` / `add` / `remove`). Two consequences:
+- Safe to iterate in a hot loop with `for (let i = 0; i < q.length; i++)` — no per-call allocation.
+- **Do NOT retain a query result across structural changes.** If you spawn/despawn mid-iteration, the array you're holding can go stale. Re-query after structural edits, or defer the edits (see Despawn lifecycle).
+
+`getEntities()` and `getDespawned()` are likewise reused buffers — read, don't retain.
+
+### `world.fields()` - typed bundles per component
+
+For hand-written hot loops, `world.fields(Component)` returns a frozen object whose keys are the component's field names and whose values are the underlying typed arrays. The same object is returned on every call (built once at component registration), and each field is precisely typed from the schema - no casts.
+
+```ts
+const Transform = defineComponent('Transform', {
+  x: f32,
+  y: f32,
+  rotation: f32,
+});
+
+const pos = world.fields(Transform);
+// pos.x        is Float32Array (inferred from BinaryCodec.f32)
+// pos.y        is Float32Array
+// pos.rotation is Float32Array
+
+pos.x[eid] += vx * deltaTime;
+pos.y[eid] += vy * deltaTime;
+```
+
+Mixed types map to their exact array kind:
+
+```ts
+const Player = defineComponent('Player', {
+  hp: u16,    // -> Uint16Array
+  team: u8,   // -> Uint8Array
+  speed: f32, // -> Float32Array
+});
+
+const p = world.fields(Player);
+const _hp: Uint16Array = p.hp;
+const _team: Uint8Array = p.team;
+const _speed: Float32Array = p.speed;
+```
+
+**Bypasses dirty tracking.** Direct typed-array writes don't set the per-entity dirty bit that the snapshot codec reads. For networked components, either:
+- Use `ctx.fields()` in netcode predictions/handlers - it auto-marks the entity dirty.
+- Call `world.markDirty(entity, component.__worldIndex)` yourself after the write.
+- Use `world.update()` instead, which auto-marks dirty.
+
+For local-only (non-`networked()`) components, there's no dirty tracking to worry about - just write.
+
+### Four API patterns for systems
+
+**RAW - direct array access, 0% overhead. Manual per-field hoisting:**
+
+```ts
+const xs  = world.getFieldArray(Position, 'x');
+const ys  = world.getFieldArray(Position, 'y');
+const vxs = world.getFieldArray(Velocity, 'vx');
+const vys = world.getFieldArray(Velocity, 'vy');
+
+const entities = world.query(Position, Velocity);
+for (let i = 0; i < entities.length; i++) {
+  const eid = entities[i]!;
+  xs[eid]! += vxs[eid]! * deltaTime;
+  ys[eid]! += vys[eid]! * deltaTime;
+}
+```
+
+**Fields - per-component typed bundles, ~1.3x slower than RAW. Recommended for hand-written systems:**
+
+```ts
+const pos = world.fields(Position);    // typed: { x: Float32Array, y: Float32Array }
+const vel = world.fields(Velocity);    // typed: { vx: Float32Array, vy: Float32Array }
+
+const entities = world.query(Position, Velocity);
+for (let i = 0; i < entities.length; i++) {
+  const eid = entities[i]!;
+  pos.x[eid]! += vel.vx[eid]! * deltaTime;
+  pos.y[eid]! += vel.vy[eid]! * deltaTime;
+}
+```
+
+Bundles are built once at component registration; the lookups above are one array index each. Field types are inferred precisely from the schema, so `pos.x` is `Float32Array` (not the broad TypedArray union). For prediction/handler bodies in `murow/netcode`, use `ctx.fields(C)` which adds auto dirty-tracking on top.
+
+**Hybrid - system builder with explicit array access, ~2x slower than RAW:**
+
+```ts
+world
+  .addSystem()
+  .query(Position, Velocity)
+  .fields([
+    { position: ['x', 'y'] },
+    { velocity: ['vx', 'vy'] },
+  ])
+  .run((entity, deltaTime) => {
+    entity.position_x_array[entity.eid]! += entity.velocity_vx_array[entity.eid]! * deltaTime;
+    entity.position_y_array[entity.eid]! += entity.velocity_vy_array[entity.eid]! * deltaTime;
+  });
+
+world.runSystems(deltaTime);
+```
+
+**Ergonomic - cached getter/setter, ~3x slower than RAW:**
+
+```ts
+world
+  .addSystem()
+  .query(Position, Velocity)
+  .fields([
+    { position: ['x', 'y'] },
+    { velocity: ['vx', 'vy'] },
+  ])
+  .run((entity, deltaTime) => {
+    entity.position_x += entity.velocity_vx * deltaTime;
+    entity.position_y += entity.velocity_vy * deltaTime;
+  });
+```
+
+### System builder shape
+
+`addSystem()` returns a fluent builder. The `entity` argument passed to `.run` is a proxy synthesised from the `.fields([...])` declaration — for each `{ aliasName: ['fieldA', 'fieldB'] }` entry, the proxy gains both `<alias>_<field>` (Ergonomic getter/setter) and `<alias>_<field>_array` (raw `Float32Array`) properties.
+
+```ts
+// Builder chain:
+world
+  .addSystem()
+  .query(Component1, Component2, /* ...up to many */)
+  .fields([
+    { alias1: ['fieldA', 'fieldB'] },
+    { alias2: ['fieldC'] },
+  ])
+  .when?((entity) => boolean)                     // optional filter, called per entity. Receives ONLY the entity proxy (no world)
+  .run((entity, deltaTime, world) => { /* ... */ });
+
+// Shape of the entity proxy inside .run / .when:
+type SystemEntity = {
+  eid: Entity;                                    // current entity id
+  despawn(): void;                                // defer despawn until flushDespawned
+
+  // For every (alias, field) you declared:
+  [`${alias}_${field}`]: number;                  // Ergonomic — looks like a field (cached getter/setter)
+  [`${alias}_${field}_array`]: Float32Array;      // Hybrid/RAW — direct typed array. Index with entity.eid
+};
+```
+
+### Conditional systems and cross-entity reads
+
+```ts
+// Only run when condition is met
+world
+  .addSystem()
+  .query(Health)
+  .fields([{ health: ['current', 'max'] }])
+  .when((e) => e.health_current > 0 && e.health_current < e.health_max)
+  .run((e, deltaTime) => { e.health_current += 5 * deltaTime; });
+
+// Read from other entities via cached arrays
+const armorValue = world.getFieldArray(Armor, 'value');
+world
+  .addSystem()
+  .query(Damage, Target)
+  .fields([
+    { damage: ['amount'] },
+    { target: ['entityId'] },
+  ])
+  .run((e, deltaTime, world) => {
+    const targetId = e.target_entityId;
+    if (!world.isAlive(targetId)) return;
+    let dmg = e.damage_amount;
+    if (world.has(targetId, Armor)) dmg -= armorValue[targetId]! * 0.1;
+    // ...
+  });
+
+// Despawn from inside a system
+world
+  .addSystem()
+  .query(Health)
+  .fields([{ health: ['current'] }])
+  .when((e) => e.health_current <= 0)
+  .run((e, deltaTime, world) => { world.despawn(e.eid); });
+```
+
+### Despawn lifecycle
+
+`despawn` is **deferred** — the entity is marked dead but its slot stays alive until you flush. Use this when bridging to a renderer:
+
+```ts
+const despawned = world.getDespawned();  // Uint32Array — only ones killed this tick (a reused subarray view, not Entity[])
+for (let i = 0; i < despawned.length; i++) {
+  const eid = despawned[i];
+  // tear down renderer handles, etc.
+}
+world.flushDespawned();                  // releases the slots for reuse
+```
+
+`getDespawned()` returns a **reused `Uint32Array` subarray** (not a plain `Entity[]`) — read it within the same tick, don't retain it across `flushDespawned()`. Despawned entity ids are recycled (ring buffer), so a slot you free this tick may be handed back by `world.spawn()` soon after.
+
+`O(deaths)`, not `O(maxEntities)`.
+
+---
+
+## GameLoop
+
+`GameLoop` is the heartbeat. It runs a **fixed-rate tick** for game logic and a **variable-rate render** with interpolation. Use as a base class or instantiate directly.
+
+```ts
+const loop = new GameLoop({
+  type: 'client',
+  // 'client' | 'server-immediate' | 'server-timeout' | 'manual-client' | 'manual-server'
+  tickRate: 20,    // ticks per second
+});
+
+// Tick lifecycle (every payload carries { tick, deltaTime, input }; `input` is
+// the snapshot on tick events and the live peek on render — only on client loops):
+loop.events.on('sync',      ({ tick, deltaTime, input })                => { /* netcode pulls interpolated state */ });
+loop.events.on('pre-tick',  ({ tick, deltaTime, input })                => { /* capture PREV transforms for GPU lerp */ });
+loop.events.on('tick',      ({ tick, deltaTime, input })                => { /* world.runSystems(deltaTime) */ });
+loop.events.on('post-tick', ({ tick, deltaTime, input })                => { /* netcode emits snapshot */ });
+loop.events.on('render',    ({ alpha, deltaTime, input })               => { renderer.render(alpha); });  // client loops only
+
+// Lifecycle events (fire on the matching method call):
+loop.events.on('start',        ({ startedAt })                          => {});  // ms timestamp
+loop.events.on('stop',         ({ stoppedAt })                          => {});
+loop.events.on('toggle-pause', ({ paused, lastToggledAt, lastToggleTick }) => {});  // fires on pause() AND resume()
+loop.events.on('skip',         ({ ticks })                              => {});  // accumulator overran; N ticks were dropped
+
+loop.start();
+loop.stop();
+loop.pause();
+loop.resume();
+loop.step(deltaTime);           // advance one frame manually — for 'manual-client' / 'manual-server' types and tests
+loop.fps;                       // current FPS (read-only)
+loop.options.tickRate;          // configured tick rate (loop.options is the full config you passed)
+loop.ticker;                    // underlying FixedTicker
+loop.ticker.rate;
+```
+
+`render` (and its `alpha`) only exists on `'client'` / `'manual-client'` loops; server loops never emit it. Watch `'skip'` to detect when the simulation can't keep up with the tick rate (the loop drops ticks rather than spiralling).
+
+### Driver types
+
+- `'client'` — `requestAnimationFrame` driver. Renders at display refresh rate; supplies `alpha` (0..1) for frame interpolation.
+- `'server-immediate'` — `setImmediate` driver. Runs as fast as the event loop allows. Default for Node/Bun servers.
+- `'server-timeout'` — `setTimeout(1ms)` driver. Lower CPU than `server-immediate`, still tight enough for games.
+- `'manual-client'` / `'manual-server'` — no internal driver. You call `loop.step(deltaTime)` yourself. Use for tests, multi-instance simulations, or when you own the clock.
+
+```ts
+// Manual mode — drive multiple loops from one clock
+const loops = [
+  new GameLoop({ type: 'manual-server', tickRate: 30 }),
+  new GameLoop({ type: 'manual-server', tickRate: 20 }),
+  new GameLoop({ type: 'manual-server', tickRate: 15 }),
+];
+
+setInterval(() => {
+  for (const l of loops) l.step(1 / 60);
+}, 1000 / 60);
+```
+
+### Frame interpolation (GPU lerp)
+
+For smooth motion at low tick rates (e.g. 15 Hz simulation, 144 Hz render), the renderer interpolates between two transform snapshots. **Call `renderer.storePreviousState()` in `pre-tick`** so the renderer has a "previous" frame to lerp from:
+
+```ts
+loop.events.on('pre-tick', () => renderer.storePreviousState());
+loop.events.on('tick',     ({ deltaTime }) => world.runSystems(deltaTime));
+loop.events.on('render',   ({ alpha }) => renderer.render(alpha));
+```
+
+Without `storePreviousState`, motion snaps each tick at low tick rates.
+
+### Tick phases — netcode integration
+
+When using `murow/netcode`, the engine reserves phases:
+
+```
+Server tick:                          Client tick:
+┌─────────────────────────────────┐   ┌─────────────────────────────────┐
+│ sync       no-op                │   │ sync       interpolated state   │
+│ pre-tick   user                 │   │ pre-tick   user (PREV capture)  │
+│ tick       user (systems, etc.) │   │ tick       user (sendIntent...) │
+│ post-tick  snapshot + despawn   │   │ post-tick  no-op                │
+└─────────────────────────────────┘   │ render     user, at framerate   │
+                                      └─────────────────────────────────┘
+```
+
+---
+
+## FixedTicker
+
+Standalone fixed-timestep ticker if you don't want a full `GameLoop`. Wraps a variable `deltaTime` from the driver into deterministic fixed steps.
+
+```ts
+const ticker = new FixedTicker({
+  rate: 30,                                   // ticks per second
+  onTick: (deltaTime, tick) => { /* deltaTime = 1/30 always */ },
+  onTickSkipped: (skipped) => { /* fired when accumulator overran */ },
+});
+
+ticker.tick(variableDt);    // call once per frame
+ticker.alpha;               // 0..1 — fraction toward next tick, for render interpolation (clamped, never > 1)
+ticker.rate;                // ticks per second
+ticker.intervalMs;          // 1000 / rate — handy for sizing interpolation delay in ms
+ticker.accumulatedTime;     // seconds accumulated toward the next tick
+```
+
+---
+
+## Driver
+
+Low-level loop driver. `GameLoop` uses these internally; you only need this if you're not using `GameLoop`.
+
+```ts
+const driver = createDriver('client', (deltaTime) => { /* every frame */ });
+// 'client' uses requestAnimationFrame; 'server' uses setImmediate
+driver.start();
+driver.stop();
+```
+
+`deltaTime` is always in **seconds**, not milliseconds.
+
+---
+
+## EventSystem
+
+Callback-based event dispatcher used internally (by `GameLoop`, `GameServer`, `GameClient`) and available for your own use. Faster than DOM `EventTarget` and TypeScript-friendly.
+
+```ts
+interface FooProps { foo: string; }
+interface BarProps { bar: number; }
+
+const events = new EventSystem<[
+  ['foo', FooProps],
+  ['bar', BarProps],
+]>({ events: ['foo', 'bar'] });
+
+events.on('bar', ({ bar }) => { /* ... */ });
+events.once('foo', ({ foo }) => { /* runs once */ });
+events.emit('bar', { bar: 42 });
+events.off('bar', handler);
+events.clear();          // remove all listeners
+events.clear('bar');     // remove all listeners for one event
+```
+
+---
+
+## Input
+
+`GameLoop` wires up input automatically — the `tick` payload's `input` is an `InputSnapshot`. If you're not using `GameLoop`, set up `InputManager` directly.
+
+### From inside the loop (typical)
+
+```ts
+loop.events.on('tick', ({ input }) => {
+  // Keys — DOM `code` strings: KeyW, Space, ShiftLeft, ArrowUp, Digit1, ...
+  if (input.keys['KeyW']?.down)     { /* held this tick */ }
+  if (input.keys['Space']?.hit)     { /* pressed this tick (edge) */ }
+  if (input.keys['Space']?.released){ /* released this tick (edge) */ }
+
+  // Mouse
+  if (input.mouse.left.down) { /* ... */ }
+  if (input.mouse.right.hit) { /* ... */ }
+  const { x, y } = input.mouse.position;        // CSS pixels, top-left origin
+  const dx = input.mouse.delta.position.x;      // movement since last tick
+  const dy = input.mouse.delta.position.y;
+  const sx = input.mouse.delta.scroll.x;        // scroll wheel delta
+  const sy = input.mouse.delta.scroll.y;
+});
+```
+
+- `.down` = held; `.hit` = pressed *this* tick only (edge); `.released` = released this tick.
+- Mouse Y is screen-space (top = 0). Flip it if you need world-Y-up: `worldY = canvas.height - input.mouse.position.y`.
+- Use DOM `code` strings — `KeyW`, never `'w'`.
+
+### Standalone `InputManager`
+
+```ts
+import { InputManager, BrowserInputSource } from 'murow/core/input';
+
+type Vector2 = { x: number; y: number };
+type ButtonState = { down: boolean; hit: boolean; released: boolean };
+
+type InputSnapshot = {
+  keys: Record<string, ButtonState>;
+  mouse: {
+    position: Vector2;
+    delta: { position: Vector2; scroll: Vector2 };
+    left: ButtonState;
+    middle: ButtonState;
+    right: ButtonState;
+  };
+};
+
+const input = new InputManager();
+input.listen(new BrowserInputSource(document, document.body));
+
+const snap = input.snapshot();   // frozen copy — computes hit/release. Use in 'tick'
+const live = input.peek();        // live state — no hit/release. Use for render-rate logic
+input.unlisten();
+```
+
+Custom input sources implement `InputEventSource`:
+
+```ts
+interface InputEventSource {
+  attach(handlers: InputHandlers): void;
+  detach(): void;
+}
+
+type InputHandlers = {
+  keydown:   (e: KeyboardEvent) => void;
+  keyup:     (e: KeyboardEvent) => void;
+  mousemove: (e: MouseEvent) => void;
+  mousedown: (e: MouseEvent) => void;
+  mouseup:   (e: MouseEvent) => void;
+  wheel:     (e: WheelEvent) => void;
+  swipe:     (direction: 'up' | 'down' | 'left' | 'right') => void;
+  pinch:     (scale: number) => void;
+};
+```
+
+**Mobile / touch.** `BrowserInputSource` listens on **Pointer events** (`pointerdown`/`pointermove`/`pointerup`), so touch and mouse both flow into `input.mouse.*` transparently — touch-drag drives `mouse.position` / `mouse.left`, and `MouseLook`'s drag fallback works on touch out of the box. **`swipe` and `pinch` are interface stubs that do nothing** in the core input layer (gesture recognition is expected to live above it); don't rely on them firing. For on-screen mobile controls, wire your own DOM buttons to feed movement (the cube-arena example uses `pointerdown`/`pointerup` on HTML buttons that set boolean flags read each tick) rather than expecting gesture events.
+
+### `MouseLook` — yaw/pitch with Pointer Lock + drag fallback
+
+```ts
+interface AxisOptions {
+  initial?: number;       // radians, default 0
+  min?: number;           // radians, default -Infinity (yaw wraps freely)
+  max?: number;           // radians, default +Infinity
+}
+
+interface MouseLookOptions {
+  sensitivity?: number;                       // radians/pixel, default 0.002
+  yaw?: AxisOptions;                          // default unbounded
+  pitch?: AxisOptions;                        // default min: -PI/2 + 0.01, max: PI/2 - 0.01
+  invertX?: boolean;                          // default false
+  invertY?: boolean;                          // default false (flight-sim style if true)
+  drag?: boolean;                             // default true — drag-to-look fallback on iOS
+  dragButton?: 'left' | 'middle' | 'right';   // default 'left'
+}
+
+const look = new MouseLook({
+  sensitivity: 0.002,
+  yaw:   { initial: 0 },
+  pitch: { initial: 0, min: -Math.PI/2 + 0.01, max: Math.PI/2 - 0.01 },
+  drag: true,
+});
+
+canvas.addEventListener('click', () => {
+  look.lock(canvas).catch(() => { /* iOS — drag-to-look takes over */ });
+});
+
+loop.events.on('tick', ({ input }) => {
+  look.update(input);
+
+  // FPS-style: aim along forward
+  const [px, py, pz] = renderer.camera.position;
+  const [fx, fy, fz] = look.forward;
+  renderer.camera.setTarget(px + fx, py + fy, pz + fz);
+
+  // OR third-person orbit:
+  const [cx, cy, cz] = look.orbit([targetX, targetY, targetZ], distance);
+  renderer.camera.setPosition(cx, cy, cz);
+  renderer.camera.setTarget(targetX, targetY, targetZ);
+});
+
+look.yaw;                  // public mutable — set directly to drive cutscenes
+look.pitch;                // public mutable
+look.locked;               // boolean — true while Pointer Lock is held
+look.forward;              // Float32Array(3) — shared, do not retain
+look.right;                // Float32Array(3) — shared
+look.up;                   // Float32Array(3) — shared
+look.unlock();
+look.destroy();
+```
+
+Forward / right / up share a single `Float32Array(3)` reused per call — copy values out if you need to keep them past the next read. `yaw` and `pitch` are public mutable fields; you can write to them directly to drive cutscenes or auto-rotate, then resume from your written state by calling `update(input)` again.
+
+### `ScrollZoom` — scalar driven by mouse wheel
+
+```ts
+const zoom = new ScrollZoom({
+  initial: 8,
+  min: 3,
+  max: 20,
+  sensitivity: 0.005,    // negative to invert direction
+});
+
+loop.events.on('tick', ({ input }) => {
+  zoom.update(input);
+  const c = look.orbit(target, zoom.value);
+  // ...
+});
+
+zoom.value;    // public mutable
+```
+
+There's no bundled `FpsCamera` or `TpsCamera` — compose `MouseLook` + `ScrollZoom` + the renderer camera in your own code. The boilerplate is 2-3 lines per tick and games want different mixes (idle rotation, screen shake, wall collision).
+
+---
+
+## Math & Utilities
+
+```ts
+lerp(a, b, t);                       // linear interpolation, unclamped (allows extrapolation)
+
+generateId();                        // 16-char hex string, cryptographically random (no args)
+
+const rng = new SimpleRNG(0xC0FFEE); // deterministic 32-bit LCG, faster than Math.random
+rng.rand();                          // [0, 1)
+rng.range(min, max);                 // float in [min, max)
+rng.int(min, max);                   // integer in [min, max] inclusive
+rng.chance(0.3);                     // true 30% of the time
+rng.pick([a, b, c]);                 // random element
+rng.seed(42);                        // reset
+```
+
+Use `SimpleRNG` (not `Math.random`) wherever you need determinism: predictions, lockstep simulations, replays, procgen.
+
+### `Ray2D` / `Ray3D` — zero-allocation intersection
+
+```ts
+const ray = new Ray2D();
+ray.set(0, 0, 1, 0);                          // origin (0,0), direction +X (auto-normalized)
+ray.intersectsSegment(ax, ay, bx, by);        // number | null
+ray.intersectsCircle(cx, cy, r);
+ray.intersectsAABB(minX, minY, maxX, maxY);
+const [x, y] = ray.at(t);                     // reuses internal buffer
+
+const r3 = new Ray3D();
+r3.set(0, 0, 0, 0, 0, 1);
+r3.intersectsPlane(nx, ny, nz, d);            // plane equation n.x = d
+r3.intersectsSphere(cx, cy, cz, r);
+r3.intersectsAABB(minX, minY, minZ, maxX, maxY, maxZ);
+r3.intersectsTriangle(ax, ay, az, bx, by, bz, cx, cy, cz);  // Moller-Trumbore
+const [x, y, z] = r3.at(t);
+
+// Entry tests for PICKING: nearest front-facing surface only. Origin-inside
+// and fully-behind both return null (you only pick surfaces facing you).
+r3.entrySphere(cx, cy, cz, r);
+r3.entryBox(cx, cy, cz, halfX, halfY, halfZ);     // center + half-extents
+r3.entryCylinder(cx, cy, cz, r, height);          // Y-axis aligned
+```
+
+`intersects*` return the parametric distance `t` to the first hit (entry, or exit if the origin is inside), or `null`. `entry*` differ by rejecting origin-inside and behind-origin cases — the correct semantic for picking.
+
+### Picking via camera
+
+```ts
+// 3D picking
+const ray = renderer.camera.screenToRay(input.mouse.position.x, input.mouse.position.y);
+const t = ray.intersectsPlane(0, 1, 0, 0);   // hit the ground plane y=0
+if (t !== null) {
+  const [wx, wy, wz] = ray.at(t);
+}
+
+// 2D picking
+const [wx, wy] = renderer.camera.screenToWorld(mouseX, mouseY);
+```
+
+### Hitboxes & Picking — `Hitbox`, `HitboxLibrary`, `Raycaster`
+
+Pure-CPU collision shapes, shared between the renderer (client picking), game logic, and a headless server. All in `murow/core`, no GPU.
+
+A `Hitbox` is a named set of shapes in model-local space, scaled by instance scale at test time. Mode (`'2d'` | `'3d'`) gates the available shapes and accumulates part names into the type.
+
+```ts
+import { Hitbox, HitboxLibrary } from 'murow';
+
+// 3D shapes: sphere | box | cylinder. 2D shapes: circle | rect | capsule.
+const humanoid = new Hitbox('3d')
+  .add('body', { shape: 'cylinder', radius: 50, height: 120, offset: [0, 40, 0] })
+  .add('head', { shape: 'sphere', radius: 28, offset: [0, 130, 0] });
+
+// A library is the canonical named registry. Declared in shared code so the
+// renderer, game logic, and server all reference the same definitions.
+const lib = new HitboxLibrary('3d')
+  .add('humanoid', humanoid)
+  .add('crate', new Hitbox('3d').add('body', { shape: 'box', size: [1, 1, 1] }));
+
+lib.get('humanoid');        // -> Hitbox  (name autocompletes/typo-checks)
+lib.at(0);                  // -> Hitbox  (by index, for ECS components storing a u8 archetype)
+lib.indexOf('humanoid');    // -> 0
+```
+
+Attach the library to a `PrefabBucket` so prefabs reference hitboxes by name:
+
+```ts
+const bucket = new PrefabBucket('3d')
+  .hitboxes(lib)                                       // optional; narrows the `hitbox` field
+  .add({ type: 'gltf', id: 'jinx', src: '/jinx.glb', hitbox: 'humanoid' });  // autocompletes
+```
+
+**Renderer picking.** `renderer.raycast` casts against the cursor. A hit carries the instance handle, the world point, the distance, and the struck part name.
+
+```ts
+loop.events.on('tick', ({ input }) => { renderer.raycast.update(input); });   // once per tick
+
+const hit = renderer.raycast.hit({ filter: (h) => h.prefabId === 'jinx' });
+if (hit) {
+  hit.handle;            // MeshInstanceHandle (instance + .prefabId)
+  hit.part;              // 'head' | 'body' | null   <- null = default-bound hit
+  hit.point;             // [x, y, z]
+  hit.distance;
+}
+renderer.raycast.hitAll();           // all hits, nearest first (reused array)
+const memo = renderer.raycast.memo({ filter });  // retained query, lazily recomputed on update()
+```
+
+Prefabs **without** a hitbox fall back to the model's axis-aligned bounding box (3D) or the sprite's rendered quad (2D) — picking still works, just coarser. Returned hit objects are pool-backed and valid only until the next `update()`; copy what you keep, or use `memo`.
+
+Hitboxes are static model-space volumes (position + scale, not animated/skinned). This serves hitscan picking and gameplay hit zones (headshots); it is not bone-accurate.
+
+**Headless / server picking.** The `Raycaster` class runs the same tests against any entity source (e.g. an ECS), with no renderer:
+
+```ts
+import { Raycaster } from 'murow';
+import { Ray3D } from 'murow/core/ray';
+
+const caster = new Raycaster()
+  .lookup({
+    query:  () => world.query(Position, Scale, Hitbox),   // candidate ids (a plain array)
+    hitbox: (e) => lib.at(arch[e]),                       // id -> Hitbox | null
+  })
+  .configure({
+    position: () => world.fields(Position),               // { x, y, z } field arrays
+    scale:    () => world.fields(Scale),
+  });
+
+const ray = new Ray3D();
+ray.set(eyeX, eyeY, eyeZ, aimX, aimY, aimZ);
+const top = caster.cast(ray).hit({ filter: (e) => e !== shooter });
+// top.handle = entity id, top.part = 'head', top.distance, top.point
+```
+
+`Raycaster` is dimension-agnostic at construction and depends on neither the ECS nor a renderer — `lookup`/`configure` carry world knowledge as closures. It owns a reused hit buffer; `cast` allocates nothing per entity.
+
+### `NavMesh` — pathfinding with dynamic obstacles
+
+```ts
+const nav = new NavMesh('grid');             // 'grid' (A*) or 'graph' (line-of-sight + grid fallback)
+
+const circleId = nav.addObstacle({ type: 'circle', pos: { x: 5, y: 5 }, radius: 2 });
+const rectId   = nav.addObstacle({ type: 'rect',   pos: { x: 2, y: 3 }, size: { x: 4, y: 2 } });
+const polyId   = nav.addObstacle({
+  type: 'polygon',
+  pos: { x: 10, y: 5 },
+  points: [ { x: 0, y: 0 }, { x: 2, y: 0 }, { x: 1, y: 2 } ],   // LOCAL coordinates (0,0-based)
+});
+
+nav.moveObstacle(rectId, { x: 8, y: 4 });
+nav.removeObstacle(circleId);
+nav.getObstacles();                                                          // current obstacle list
+
+const path = nav.findPath({ from: { x: 1, y: 1 }, to: { x: 10, y: 8 } });   // ({x,y})[]
+```
+
+(`from`/`to` and path points are plain `{ x: number; y: number }` literals — there's no exported `Vec2`.)
+
+For 20+ concurrent path queries, enable workers — pathfinding then returns `Promise<({x,y})[]>`:
+
+```ts
+const nav = new NavMesh('grid', { workers: true, workerPoolSize: 4, workerPath: '/navmesh.worker.js' });
+const path = await nav.findPath({ from, to });
+// In the BROWSER, workerPath (URL to the worker script) is REQUIRED when workers is on.
+// On Node/Bun it's handled automatically and can be omitted.
+
+// 'auto' returns sync OR async depending on load
+const nav2 = new NavMesh('grid', { workers: 'auto' });
+const result = nav2.findPath({ from, to });
+const path2 = result instanceof Promise ? await result : result;
+```
+
+### `FreeList` — O(1) slot allocator (used internally by renderers and ECS)
+
+```ts
+const pool = new FreeList(1024);
+const idx = pool.allocate();          // returns -1 if pool is exhausted
+pool.free(idx);                       // throws on double-free
+pool.hasAvailable();
+pool.getAvailableCount();
+pool.getAllocatedCount();
+```
+
+### `SparseBatcher` — layer/sheet bucketing for draw calls
+
+```ts
+const batcher = new SparseBatcher(10_000);
+batcher.add(layer, sheetId, slot);    // sheetId must be < 64; up to 256 layers
+batcher.remove(layer, sheetId, slot); // O(1) swap-and-pop
+batcher.each((sheetId, instances, count) => {
+  bindTexture(sheetId);
+  drawInstanced(instances, count);
+});
+batcher.getActiveCount();
+batcher.getTotalCount();
+batcher.clear();
+```
+
+Used internally by the 2D renderer to minimise draw calls. You only need this if you're writing a custom renderer backend.
+
+---
+
+## Binary Codecs
+
+### `BinaryCodec` — static schemas
+
+Schema-driven binary encoding with automatic buffer sizing.
+
+```ts
+const schema = { id: BinaryCodec.u8, score: BinaryCodec.u16 };
+
+const buffer = BinaryCodec.encode(schema, { id: 1, score: 420 });   // Uint8Array
+const target = { id: 0, score: 0 };
+BinaryCodec.decode(schema, buffer, target);                          // mutates `target`
+```
+
+Available primitive fields (also re-exported at the top level): `u8`, `u16`, `u32`, `i8`, `i16`, `i32`, `f32`, `f64`. All big-endian. Object key order defines field layout.
+
+### `PooledCodec` — zero-allocation codec with object pooling
+
+For high-frequency data (snapshots, intents). Reuses decoded objects via an internal pool — **do not retain decoded objects across calls**.
+
+```ts
+const codec = new PooledCodec({ x: f32, y: f32 });
+
+const buf = codec.encode({ x: 1.5, y: 2.5 });
+const decoded = codec.decode(buf);       // reused object — copy fields if needed
+codec.release(decoded);                  // return to pool
+```
+
+PooledCodec supports nested schemas, arrays of objects (via `PooledArrayDecoder` / `PooledArrayEncoder`), strings (`BinaryCodec.string(maxLen)`), and primitive fields. Fields auto-initialize via `toNil()` when acquired from the pool.
+
+```ts
+const SnapshotSchema = {
+  tick: u16,
+  updates: {
+    positions: new PooledCodec({ x: f32, y: f32 }),   // array-of-objects
+    target: { id: u32, name: BinaryCodec.string(32) },
+  },
+};
+```
+
+---
+
+## Protocol Layer
+
+Lower-level codec primitives for networked messages. `murow/netcode` wraps these with type inference — use these directly only when you need custom message flows.
+
+### Intents — client → server
+
+```ts
+enum IntentKind { Move = 1, Shoot = 2 }
+
+const MoveIntent = defineIntent({
+  kind: IntentKind.Move,
+  schema: { dx: f32, dy: f32 },   // `kind` and `tick` are added automatically
+});
+
+type MoveIntent = typeof MoveIntent.type;
+// → { kind: 1, tick: number, dx: number, dy: number }
+
+const registry = new IntentRegistry();
+registry.register(MoveIntent.kind, MoveIntent.codec);
+
+// Client
+const buf = registry.encode({ kind: IntentKind.Move, tick, dx: 1, dy: 0 });
+socket.send(buf);
+
+// Server
+socket.on('data', (buf: Uint8Array) => {
+  const kind = buf[0];
+  const intent = registry.decode(kind, buf);
+});
+```
+
+### Snapshots — server → client
+
+`Snapshot<T> = { tick: number, updates: Partial<T> }`. `applySnapshot` deep-merges into your state (objects deep, arrays replaced, primitives overwritten).
+
+```ts
+const stateCodec = new PooledCodec({ /* state schema */ });
+const snapshotCodec = new SnapshotCodec(stateCodec);
+
+const buf = snapshotCodec.encode({ tick: 100, updates: { players: { 1: { x: 5 } } } });
+const snap = snapshotCodec.decode(buf);
+applySnapshot(clientState, snap);
+```
+
+For partial-update efficiency, use `SnapshotRegistry` to send only specific update types:
+
+```ts
+const snapshots = new SnapshotRegistry<GameUpdate>();
+snapshots.register('players', new PooledCodec({ players: { /* schema */ } }));
+snapshots.register('score',   new PooledCodec({ score: u32 }));
+
+if (playersChanged) socket.send(snapshots.encode('players', { tick, updates: { players: [...] } }));
+
+// Client
+const { type, snapshot } = snapshots.decode(buf);
+applySnapshot(state, snapshot);
+```
+
+### RPCs — bidirectional one-off events
+
+For match start, achievements, chat — anything that isn't input or state sync.
+
+```ts
+const MatchCountdown = defineRPC({ method: 'matchCountdown', schema: { secondsRemaining: u8 } });
+const BuyItem        = defineRPC({ method: 'buyItem',        schema: { itemId: BinaryCodec.string(32) } });
+
+const rpcs = new RpcRegistry();
+rpcs.register(MatchCountdown);
+rpcs.register(BuyItem);
+
+// Client → server
+client.sendRpc(BuyItem, { itemId: 'long_sword' });
+client.onRpc(MatchCountdown, (rpc) => { showCountdown(rpc.secondsRemaining); });
+
+// Server → client
+server.sendRpc(peerId, MatchCountdown, { secondsRemaining: 10 });
+server.sendRpcBroadcast(MatchCountdown, { secondsRemaining: 3 });
+server.onRpc(BuyItem, (peerId, rpc) => { /* ... */ });
+```
+
+**When to use RPCs:** match lifecycle, achievements, chat, UI feedback.
+**When NOT:** game state (use snapshots), player inputs (use intents), anything late joiners need to know.
+
+---
+
+## Networking Layer (Low-Level)
+
+`ServerNetwork` and `ClientNetwork` are transport-agnostic — they accept any `TransportAdapter`. Use these only if `murow/netcode`'s opinions don't fit; otherwise prefer `GameServer` / `GameClient`.
+
+### Shared `NetworkConfig` (used by both `ServerNetwork` and `ClientNetwork`)
+
+```ts
+type LagSimulation = number | { min: number; max: number };
+
+interface NetworkConfig {
+  maxMessageSize?: number;          // bytes. Default 64 KB
+  debug?: boolean;                  // log every send/recv. Default false
+  maxMessagesPerSecond?: number;    // per peer, server only. Default 100. 0 disables rate limiting
+  maxSendQueueSize?: number;        // per peer. Default 100. Overflow drops oldest
+  enableBufferPooling?: boolean;    // Default true. Custom queueing transports MUST copy buffers in send()
+  heartbeatInterval?: number;       // ms. Default 30000. 0 disables heartbeats
+  heartbeatTimeout?: number;        // ms. Default 60000. Connection is killed if no msg received within this window
+  lagSimulation?: LagSimulation;    // CLIENT only. Fixed delay (number) or random window. Default off
+}
+```
+
+### Server
+
+```ts
+import { ServerNetwork, BunWebSocketServerTransport, IntentRegistry, SnapshotRegistry } from 'murow';
+
+const transport = BunWebSocketServerTransport.create(3000, {
+  path: '/ws',
+  async fetch(req) { /* static fallback so HTTP + WS share one port */ },
+});
+
+const intentRegistry = new IntentRegistry();
+intentRegistry.register(MoveIntent.kind, MoveIntent.codec);
+
+const server = new ServerNetwork({
+  transport,
+  intentRegistry,
+  createPeerSnapshotRegistry: () => {
+    // Factory — runs once per new peer. Each peer gets its own registry,
+    // enabling fog-of-war and per-peer encoding.
+    const reg = new SnapshotRegistry();
+    reg.register('GameState', GameStateCodec);
+    return reg;
+  },
+  config: { debug: true, maxMessagesPerSecond: 100 },
+});
+
+server.onConnection((peerId)               => { /* ... */ });
+server.onDisconnection((peerId)            => { /* ... */ });
+server.onIntent(IntentKind.Move, (peerId, intent) => { /* ... */ });
+
+// Broadcast to all (optional filter)
+server.broadcastSnapshot('GameState', { tick, updates });
+
+// Send to one
+server.sendSnapshotToPeer(peerId, 'GameState', { tick, updates });
+
+// Broadcast with per-peer customization (fog of war)
+server.broadcastSnapshotWithCustomization('GameState', baseSnapshot, (peerId, snap) => {
+  const visible = entities.filter((e) => distance(player[peerId], e) < RADIUS);
+  return { tick: snap.tick, updates: { ...snap.updates, entities: visible } };
+});
+
+server.setPeerMetadata(peerId, 'platform', 'mobile');
+server.getPeerIds();
+server.getPeerState(peerId);
+server.close();
+```
+
+### Client
+
+```ts
+import { ClientNetwork, BunWebSocketClientTransport } from 'murow';
+
+const transport = await BunWebSocketClientTransport.connect('ws://localhost:3000');
+
+const client = new ClientNetwork({
+  transport,
+  intentRegistry,
+  snapshotRegistry,
+});
+
+client.sendIntent({ kind: IntentKind.Move, tick, dx: 1, dy: 0 });
+client.onSnapshot('GameState', (snap) => applySnapshot(state, snap));
+client.onAnySnapshot((type, snap) => { /* receive any snapshot type */ });
+client.onClose(() => { /* ... */ });
+client.getLastReceivedTick();
+client.isConnected();
+client.close();
+```
+
+### Custom transports
+
+```ts
+class MyTransport implements TransportAdapter {
+  send(data: Uint8Array): void { /* ... */ }
+  onMessage(handler: (data: Uint8Array) => void): void { /* ... */ }
+  onOpen?(handler: () => void): void { /* optional — assumes connected if omitted */ }
+  onClose(handler: () => void): void { /* ... */ }
+  close(): void { /* ... */ }
+}
+
+class MyServerTransport implements ServerTransportAdapter<MyTransport> {
+  onConnection(handler: (peer: MyTransport, peerId: string) => void): void { /* ... */ }
+  onDisconnection(handler: (peerId: string) => void): void { /* ... */ }
+  getPeer(peerId: string): MyTransport | undefined { /* ... */ }
+  getPeerIds(): string[] { /* ... */ }
+  close(): void { /* ... */ }
+}
+```
+
+**Important:** if your transport queues internally, you MUST copy the buffer in `send()` — `ServerNetwork`/`ClientNetwork` may reuse the underlying memory.
+
+---
+
+## Prediction Primitives (Low-Level)
+
+`IntentTracker` and `Reconciliator` are the building blocks behind `murow/netcode`'s prediction. Use directly only if you need a custom prediction flow.
+
+```ts
+const positionRecon = new Reconciliator<MoveIntent, PositionSnapshot>({
+  onLoadState: (state) => gameClient.setPositions(state),    // rewind to server-auth state
+  onReplay:    (remainingIntents) => remainingIntents.forEach((i) => gameClient.applyMove(i)),
+});
+
+ticker.onTick = (deltaTime, tick) => {
+  if (inputs.has('position')) {
+    const intent = inputs.getAndRemove('position');
+    positionRecon.trackIntent(tick, intent);
+  }
+  gameClient.update(deltaTime);
+};
+
+function onServerSnapshot(snapshot: { tick: number; state: PositionSnapshot }) {
+  positionRecon.onSnapshot(snapshot);   // rewinds + replays unconfirmed intents
+}
+```
+
+---
+
+## Netcode (High-Level Multiplayer)
+
+`murow/netcode` is the opinionated multiplayer layer. It runs the protocol + net primitives, wires up snapshots + prediction with rollback + jitter buffer interpolation, and exposes a typed API.
+
+### Networked components — `networked()`
+
+Add a `sync` block to make a component participate in snapshots. Components without `sync` are local-only.
+
+```ts
+type InterpolationMode = 'lerp' | 'slerp' | 'step' | 'none';
+type SyncRate          = 'every-tick' | 'on-change' | { every: number };  // { every: N } = every Nth tick
+type InterestRule      = 'global' | (string & {});                         // plugin name, or 'global'
+
+interface SyncSpec {
+  rate: SyncRate;
+  interest: InterestRule;
+  interp?: InterpolationMode;       // default 'lerp' for ALL types. Set 'step' yourself on integer/discrete fields (ids, flags) — they are NOT auto-stepped
+  snapThreshold?: number;           // distance beyond which the client snaps instead of smoothing
+}
+
+function networked(spec: SyncSpec): SyncSpec;   // identity helper - only exists for the type check
+```
+
+```ts
+import { defineComponent, f32, u8, u16 } from 'murow';
+import { networked } from 'murow/netcode';
+
+export const Position = defineComponent('Position', {
+  schema: { x: f32, z: f32 },
+  sync: networked({
+    rate:     'every-tick',
+    interest: 'global',
+    interp:   'lerp',
+    snapThreshold: 0.5,
+  }),
+});
+
+export const Color = defineComponent('Color', {
+  schema: { r: u8, g: u8, b: u8 },
+  sync: networked({ rate: 'on-change', interest: 'global', interp: 'step' }),
+});
+
+export const Cosmetic = defineComponent('Cosmetic', {
+  schema: { hatId: u16 },
+  sync: networked({ rate: { every: 10 }, interest: 'global' }),   // sync once per 10 ticks
+});
+```
+
+Not all `networked()` fields are honored at runtime yet. Setting them compiles; the component still syncs with default behavior:
+
+| Field | Value | Honored | Today's behavior |
+|---|---|---|---|
+| `rate` | `'every-tick'` | yes | Sent every snapshot tick if dirty. |
+| `rate` | `'on-change'` | no | Same as `'every-tick'`. Approximate by only mutating when the value changes. |
+| `rate` | `{ every: N }` | no | Same as `'every-tick'`. |
+| `interest` | any | no | Server plugins run `filterSnapshot` on every dirty entity regardless. To scope a component to a subset of peers, write a plugin whose `filterSnapshot` inspects it. |
+| `interp` | `'lerp'`, `'step'`, `'none'` | yes | Per-component dispatch on the client interpolation buffer. |
+| `interp` | `'slerp'` | no | Falls through to `'lerp'`. |
+| `snapThreshold` | number | no | Unread. |
+
+### Intents - typed sugar over `defineIntent`
+
+```ts
+export const intents = defineIntents({
+  move:  { dx: f32, dz: f32 },
+  shoot: { fromX: f32, fromZ: f32, dirX: f32, dirZ: f32 },
+});
+
+export const rpcs = defineRpcs({
+  matchStart: { countdownSec: u16 },
+});
+```
+
+Kinds are auto-assigned starting at 1 (0 is reserved for engine control frames). TypeScript inference flows into `client.sendIntent` and the predictions / handlers maps.
+
+RPCs are bidirectional: one `defineRpcs` map serves both directions (`server.sendRpc` / `server.broadcastRpc` and `client.sendRpc`, with `server.on('rpc')` / `client.on('rpc')` to receive). The method names `__murow_ping` and `__murow_pong` are reserved — the engine auto-registers them to drive `client.ping()` / the `'pong'` event. Don't define RPCs with those names.
+
+### Predictions — deterministic logic that runs on both sides
+
+```ts
+interface PredictionContext {
+  world: World;
+  entity: Entity;            // server-assigned entity for the peer that sent the intent
+  tick: number;
+  deltaTime: number;         // seconds since previous tick
+  rng: SimpleRNG;            // deterministic - seeded per tick, replayed identically on both sides
+
+  // RAW-speed typed-array access for ctx.entity. Returns the same frozen
+  // bundle as world.fields(C), and auto-marks ctx.entity dirty for networked
+  // components so snapshots pick up the write. Zero allocations on the hot path.
+  fields<T extends object>(component: Component<T>): ComponentFields<T>;
+
+  // Explicit dirty mark. Use when bypassing ctx.fields (e.g. reaching into
+  // ctx.world.fields directly) or marking a cross-entity write. Accepts a
+  // single component or an array; entity defaults to ctx.entity. No-ops for
+  // unsynced or unregistered components.
+  markDirty(component: Component<any>, entity?: Entity): void;
+  markDirty(components: ReadonlyArray<Component<any>>, entity?: Entity): void;
+}
+
+type PredictionFn<P> = (payload: P, ctx: PredictionContext) => void;
+
+function definePredictions<I extends IntentSchemaMap>(
+  intents: DefinedIntents<I>,
+  map: { [K in keyof I]?: PredictionFn<IntentPayload<I, K>> },
+): DefinedPredictions<I>;
+```
+
+The recommended prediction body uses `ctx.fields` - zero allocation, auto dirty-tracking, RAW-speed reads/writes:
+
+```ts
+import { definePredictions } from 'murow/netcode';
+
+export const predictions = definePredictions(intents, {
+  move: ({ dx, dz }, ctx) => {
+    if (!ctx.world.has(ctx.entity, Position)) return;
+
+    const pos = ctx.fields(Position);   // typed: { x: Float32Array, z: Float32Array }
+    pos.x[ctx.entity] += dx * MOVE_SPEED * ctx.deltaTime;
+    pos.z[ctx.entity] += dz * MOVE_SPEED * ctx.deltaTime;
+  },
+});
+```
+
+The `world.update({...})` path still works but is ~6x slower in tight loops because it allocates the partial-update object and re-resolves the component every call. Use it for clarity in non-hot code, prefer `ctx.fields` for predictions.
+
+**Determinism rules** (predictions replay during rollback - same input must produce same output):
+
+1. No `Math.random()`. Use `ctx.rng`.
+2. No `Date.now()` / `performance.now()`. Use `ctx.tick` or `ctx.deltaTime`.
+3. No network, audio, file I/O, or DOM.
+4. No reads from module-level mutable state. Keep state in components.
+5. Predictions should only write to **networked** components. Writing local-only state from a prediction lets rollback corrupt UI.
+
+**Cross-entity writes** — when a prediction (or, more commonly, a handler) mutates an entity other than `ctx.entity`, use `ctx.markDirty` so the snapshot pipeline picks up the change:
+
+```ts
+// In a damage handler that hits the victim, not the attacker.
+const hp = ctx.world.fields(Health);
+hp.current[targetId] -= damageDealt;
+ctx.markDirty(Health, targetId);
+
+// Multi-component cross-entity write (one batched dirty mark instead of two).
+const armor = ctx.world.fields(Armor);
+hp.current[targetId] -= damageDealt;
+armor.value[targetId] -= 1;
+ctx.markDirty([Health, Armor], targetId);
+```
+
+### Handlers — server-only logic
+
+For things that should not run on the client (hit detection, gold awards, anything that mutates non-networked state).
+
+```ts
+interface Peer {
+  peerId: string;
+  entity: Entity | -1;       // -1 when no entity has been assigned yet
+}
+
+interface ServerHandlerContext extends PredictionContext {
+  peer: Peer;
+  clientTick: number;                          // tick the client claimed when sending
+  lagCompensated<T>(fn: () => T): T;           // rewind world to clientTick, run fn, restore
+}
+
+type HandlerFn<P> = (payload: P, ctx: ServerHandlerContext) => void;
+
+function defineHandlers<I extends IntentSchemaMap>(
+  intents: DefinedIntents<I>,
+  map: { [K in keyof I]?: HandlerFn<IntentPayload<I, K>> },
+): DefinedHandlers<I>;
+```
+
+```ts
+import { defineHandlers } from 'murow/netcode';
+
+export const handlers = defineHandlers(intents, {
+  shoot: ({ fromX, fromZ, dirX, dirZ }, ctx) => {
+    ctx.lagCompensated(() => {
+      // Hit detection runs against the world as the shooter saw it
+      // (server rewinds Position et al. to `clientTick`).
+    });
+  },
+});
+
+server.use(handlers);
+// client.use(handlers);   // compile error - handlers are server-only by design
+```
+
+Handlers inherit `fields` and `markDirty` from `PredictionContext`, so the same RAW-speed pattern applies on the server side (often where it matters more, since handlers can mutate many entities per intent - explosion radius, AoE damage, etc.).
+
+`lagCompensated` only rewinds components that are registered with the `LagCompensation` plugin (see Plugins below). Without that plugin it's a no-op pass-through.
+
+### Server
+
+```ts
+interface GameServerOptions<I, R> {
+  world: World;
+  loop: GameLoop<any>;
+  transport: ServerTransportAdapter<TransportAdapter>;
+  protocol: {
+    intents: DefinedIntents<I>;
+    rpcs:    DefinedRpcs<R>;
+  };
+  snapshot?: {
+    rate?: number;                  // snapshots per second, clamped to tickRate. Default: min(20, tickRate)
+  };
+  kick?: {
+    ackTimeout?: number;            // ms with no ack before forcing transport close. Default: 2000
+  };
+  schemaFingerprint?: string;       // optional version tag — clients with a mismatch are kicked
+}
+```
+
+```ts
+import { GameLoop, World, BunWebSocketServerTransport } from 'murow';
+import { GameServer, AoiGrid, LagCompensation } from 'murow/netcode';
+
+const world = new World({ maxEntities: 1000, components: [Position, Color] });
+const loop  = new GameLoop({ tickRate: 20, type: 'server-timeout' });
+
+const transport = BunWebSocketServerTransport.create(PORT, { path: '/ws' });
+
+const server = new GameServer({
+  world, loop, transport,
+  protocol: { intents, rpcs },
+  snapshot: { rate: 20 },
+  kick: { ackTimeout: 2000 },
+});
+
+server.use(predictions);
+server.use(handlers);
+server.use(new AoiGrid({ name: 'aoi', cellSize: 32, radius: 50, hysteresisRadius: 4, positionComponent: Position }));
+server.use(new LagCompensation({ tickRate: 20, historyMs: 500, components: [Position] }));
+
+server.on('connection', ({ peer }) => {
+  const e = world.spawn();
+  world.add(e, Position, { x: 0, z: 0 });
+  world.add(e, Color,    { r: 200, g: 100, b: 100 });
+  server.assignEntity(peer, e);                  // tells the client "this entity is yours"
+});
+
+server.on('disconnection', ({ peer, reason }) => {
+  if (peer.entity !== -1 && world.isAlive(peer.entity)) world.despawn(peer.entity);
+});
+
+// Broadcast an RPC
+server.broadcastRpc('matchStart', { countdownSec: 3 });
+server.sendRpc(peer, 'matchStart', { countdownSec: 3 });
+
+loop.start();
+```
+
+### Server instance API
+
+```ts
+class GameServer<I, R> {
+  use(bundle: DefinedPredictions<I>): this;          // overloaded — also takes DefinedHandlers / ServerPlugin
+  use(bundle: DefinedHandlers<I>): this;
+  use(plugin: ServerPlugin): this;
+
+  assignEntity(peer: Peer, entityId: Entity): void;  // claim an entity for a peer; client gets 'assigned'
+  sendRpc<K extends keyof R & string>(peer: Peer, name: K, payload: RpcPayload<R, K>): void;
+  broadcastRpc<K extends keyof R & string>(name: K, payload: RpcPayload<R, K>): void;
+
+  // Soft-kick: sends a KICK frame, waits kick.ackTimeout (default 2000ms) for the
+  // client's ack, then force-closes the transport. The client gets 'kicked'.
+  kick(peer: Peer, reason: string): void;
+}
+```
+
+**Server-spawned (non-player) entities.** Not every entity is owned by a peer. Projectiles, NPCs, pickups, etc. are spawned on the server and never `assignEntity`'d to anyone — they replicate to clients through the normal snapshot path purely by being dirty. Spawn them in a handler or system, `world.add(...)` their networked components, and they appear on every peer's `'spawn'` (subject to interest filtering). Clients tell "mine vs. theirs" apart with `client.assignedEntity`. There is no separate API for this — an unowned networked entity is just one you never assigned.
+
+### Server events
+
+```ts
+server.on('connection',     ({ peer })                          => {});
+server.on('disconnection',  ({ peer, reason })                  => {});
+server.on('intent',         ({ peer, name, payload, tick })     => {});  // observe-only telemetry
+server.on('intent-failed',  ({ peer, kind, reason })            => {});
+server.on('rpc',            ({ peer, name, payload })           => {});  // discriminated union; narrow on `name`
+server.on('snapshot',       ({ peer, tick, byteSize })          => {});
+server.on('error',          ({ error, context })                => {});
+```
+
+`server.on('intent', ...)` is **observe-only** for logging/telemetry. Gameplay logic goes in `defineHandlers` — both coexist.
+
+### Client
+
+```ts
+interface SnapshotInterpolationStrategy {
+  kind: 'snapshot-interpolation';
+  delay?: number;                       // ms behind newest snapshot. Default: 100
+  staleWindow?: number;                 // ms gap before history dropped. Default: delay*2 + 100
+}
+
+type PeerRenderStrategy = SnapshotInterpolationStrategy;   // extrapolation / rollback strategies will slot in here
+
+interface GameClientOptions<I, R> {
+  world: World;
+  loop: GameLoop<any>;
+  transport: TransportAdapter;
+  protocol: {
+    intents: DefinedIntents<I>;
+    rpcs:    DefinedRpcs<R>;
+  };
+  strategy?: PeerRenderStrategy;
+  prediction?: {
+    bufferSize?: number;                // max unacked predictions for rollback. Default: 64
+  };
+}
+```
+
+```ts
+import { GameLoop, World } from 'murow';
+import { GameClient } from 'murow/netcode';
+import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-websocket';
+
+const world = new World({ maxEntities: 1000, components: [Position, Color] });
+const loop  = new GameLoop({ tickRate: 20, type: 'client' });
+
+const transport = new BrowserWebSocketClientTransport(`ws://${location.host}/ws`);
+
+const client = new GameClient({
+  world, loop, transport,
+  protocol: { intents, rpcs },
+  strategy:   { kind: 'snapshot-interpolation', delay: 100, staleWindow: 300 },
+  prediction: { bufferSize: 64 },
+});
+
+client.use(predictions);
+
+loop.events.on('tick', ({ input }) => {
+  let dx = 0, dz = 0;
+  if (input.keys['KeyW']?.down) dz -= 1;
+  if (input.keys['KeyS']?.down) dz += 1;
+  if (input.keys['KeyA']?.down) dx -= 1;
+  if (input.keys['KeyD']?.down) dx += 1;
+  if (dx !== 0 || dz !== 0) {
+    const m = Math.hypot(dx, dz);
+    client.sendIntent('move', { dx: dx / m, dz: dz / m });
+    // sendIntent returns false until the server has assigned an entity to
+    // this peer (also emits an 'error' event with context: 'sendIntent').
+    // Until then the engine drops the call rather than mis-firing the
+    // prediction. `client.assignedEntity` is the live read-only id.
+  }
+});
+
+loop.start();
+```
+
+### Client instance API
+
+```ts
+class GameClient<I, R> {
+  // Public read-only getter: the local entity id the server has
+  // assigned to this peer, or null before the assignment frame arrives.
+  readonly assignedEntity: Entity | null;
+
+  // Returns true when the intent was sent + predicted locally; false when:
+  //   - the intent name isn't in the schema, OR
+  //   - assignedEntity is still null (no server assignment yet).
+  // Both blocked paths also emit an 'error' event (context: 'sendIntent').
+  sendIntent<K extends keyof I & string>(name: K, payload: IntentPayload<I, K>): boolean;
+
+  // Send a typed RPC to the server. Errors emit 'error' (context: 'sendRpc').
+  sendRpc<K extends keyof R & string>(name: K, payload: RpcPayload<R, K>): void;
+
+  // Apply a predictions/handlers bundle.
+  use(predictions: DefinedPredictions<I>): this;
+
+  // RTT probe. `ping()` sends a small RPC; the server echoes it and the
+  // round-trip time fires on the 'pong' event. `rttMs` is the last
+  // measurement (or null until the first pong).
+  ping(): void;
+  readonly rttMs: number | null;
+
+  // Misc read-only state.
+  getLocalTick(): number;
+  getPredictionDepth(): number;
+  readonly interpolationDelay: number;     // current buffer delay in ms
+  setInterpolationDelay(ms: number): void; // tune the play-out delay at runtime
+
+  // The interpolation buffer is exposed for runtime tuning. `setDelay` /
+  // `setStaleWindow` accept ms; the example tunes them from the measured
+  // RTT inside the 'pong' handler.
+  readonly interpBuffer: InterpolationBuffer;
+}
+
+class InterpolationBuffer {
+  setDelay(delayMs: number): void;          // same as client.setInterpolationDelay
+  setStaleWindow(staleWindowMs: number): void;
+  clear(): void;                            // drop buffered history (e.g. on a hard teleport / scene change)
+}
+```
+
+**Tuning interpolation from ping (the recommended pattern).** Fixed `delay: 100` works, but the play-out delay should cover real network jitter. Probe RTT periodically and set the delay from it. A good target is "a couple of ticks of buffer beyond half the RTT":
+
+```ts
+const TICK_MS = loop.ticker.intervalMs;     // 1000 / tickRate
+const SAFETY_TICKS = 2;                     // extra buffer to absorb jitter; raise on bad links
+
+// A fixed delay at init is fine for a stable LAN:
+//   strategy: { kind: 'snapshot-interpolation', delay: SAFETY_TICKS * TICK_MS, staleWindow: ... }
+// To adapt to real conditions, probe RTT and retune. Drive the probe off the
+// loop's own tick instead of setInterval — it's deterministic, pauses with the
+// loop, and leaks no timer:
+loop.events.on('tick', ({ tick }) => {
+  const period = 2;                         // seconds between probes
+  if (tick % (loop.ticker.rate * period) !== 0) return;
+  client.ping();
+});
+
+client.on('pong', ({ rtt }) => {
+  const delay = rtt / 2 + SAFETY_TICKS * TICK_MS;
+  client.setInterpolationDelay(delay);
+  client.interpBuffer.setStaleWindow(delay * 2 + 100);
+});
+```
+
+Run anything periodic off the tick this way (`tick % (rate * seconds) === 0`) rather than `setInterval` — it stays in step with the simulation, stops when the loop pauses, and there's nothing to clear.
+
+Lower delay = more responsive, more likely to stutter on jitter. Higher = smoother, more visual latency. `rttMs` is `null` until the first `pong`.
+
+### Client events
+
+```ts
+client.on('connected',    ()                                    => {});
+client.on('disconnected', ({ reason })                          => {});
+client.on('kicked',       ({ reason })                          => {});
+client.on('snapshot',     ({ tick, byteSize })                  => {});
+client.on('rpc',          ({ name, payload })                   => {});  // discriminated union; narrow on `name`
+client.on('spawn',        ({ entity, components })              => {});
+client.on('despawn',      ({ entity })                          => {});
+client.on('reconciled',   ({ rewindTick, replayed })            => {});  // fires after rollback+replay
+client.on('assigned',     ({ entity })                          => {});  // server assigned us this entity
+client.on('pong',         ({ rtt })                             => {});  // round-trip time in ms (echo from server)
+client.on('error',        ({ error, context })                  => {});
+```
+
+`rewindTick` carries the server's contiguous-applied intent sequence
+(not the game tick) — the cut-off the reconciler used to drop history.
+
+The payload shapes for every event are exported as `ServerEventPayloads` and `ClientEventPayloads` — both `GameServer` and `GameClient` extend `EventSystem<...>` with these so `on()` is fully typed. You can import the payload types if you need to type a handler outside the class:
+
+```ts
+import type { ServerEventPayloads, ClientEventPayloads, Peer } from 'murow/netcode';
+
+function logIntent({ peer, name, payload }: ServerEventPayloads['intent']) {
+  // ...
+}
+```
+
+### Connection lifecycle (typical)
+
+```
+client connects   → server.on('connection',  { peer })
+client receives   → 'connected', then 'spawn' for every existing entity
+server assigns    → server.assignEntity(peer, e) → client.on('assigned', { entity: e })
+client sends      → client.sendIntent('move', { dx, dz })
+                    → prediction runs immediately on client (predicted entity)
+                    → server runs same prediction authoritatively next tick
+                    → next snapshot reconciles (rollback + replay if needed) → 'reconciled'
+client disconnect → server.on('disconnection', { peer, reason })
+```
+
+If the `assigned` frame arrives before the entity exists locally (snapshot ordering), the client buffers it and resolves on the matching spawn.
+
+Every networked entity reaches the client through `'spawn'` — your own player, other players, and server-spawned NPCs/projectiles alike. Tell yours apart with `client.assignedEntity` (or by storing the id from the `'assigned'` event): that's the one you predict and that drives the local camera; the rest are remote and rendered straight from interpolated snapshot state.
+
+### Plugins
+
+```ts
+interface ServerPlugin {
+  readonly name: string;
+  onMount?(server: GameServer<any, any>): void;
+  onUnmount?(server: GameServer<any, any>): void;
+  onTick?(world: World, deltaTime: number): void;
+  onIntent?(
+    peer: Peer,
+    kind: number,
+    name: string,
+    payload: unknown,
+    ctx: ServerHandlerContext,
+  ): void;
+  filterSnapshot?(
+    peer: Peer,
+    world: World,
+    dirtyEntities: ReadonlyArray<Entity>,
+    out: Entity[],                              // push visible entity IDs here
+  ): void;
+  onDisconnect?(peer: Peer): void;
+}
+
+interface ClientPlugin {
+  readonly name: string;
+  onMount?(client: GameClient<any, any>): void;
+  onUnmount?(client: GameClient<any, any>): void;
+  onTick?(world: World, deltaTime: number): void;
+  onSnapshot?(tick: number): void;
+}
+```
+
+Register with `server.use(plugin)` or `client.use(plugin)`. Plugins compose in registration order — `filterSnapshot` calls chain (each plugin pushes into the same `out` array).
+
+**`AoiGrid`** — area-of-interest filtering by radius from the peer's assigned entity:
+
+```ts
+interface AoiGridOptions {
+  name?: string;                              // matches `interest` string on components. Default 'aoi'
+  cellSize: number;                           // grid acceleration cell size (world units)
+  radius: number;                             // AOI radius (world units)
+  hysteresisRadius?: number;                  // extra despawn slack to avoid boundary flicker. Default 0
+  positionComponent: Component<{ x: number; y: number }>;   // any 2D position component
+}
+
+server.use(new AoiGrid({
+  name: 'aoi',
+  cellSize: 32,
+  radius: 50,
+  hysteresisRadius: 4,
+  positionComponent: Position,
+}));
+```
+
+Components opt in by setting `interest: 'aoi'` in their `networked({...})` block. Default `'global'` always replicates.
+
+**`LagCompensation`** — server rewinds component history inside a handler:
+
+```ts
+interface LagCompensationOptions {
+  name?: string;                              // default 'lag-compensation'
+  tickRate: number;
+  historyMs?: number;                         // how far back to retain. Default 500
+  components: Component<any>[];               // components whose history is recorded
+}
+
+class LagCompensation {
+  rewind<T>(clientTick: number, fn: () => T): T;
+}
+
+server.use(new LagCompensation({
+  tickRate: 20,
+  historyMs: 500,
+  components: [Position],
+}));
+
+// Inside a handler:
+ctx.lagCompensated(() => {
+  // The world is rewound to ctx.clientTick. Hit detection here runs
+  // against the world as the shooter saw it. Components NOT registered
+  // with LagCompensation are not rewound.
+});
+```
+
+**Writing your own plugin:**
+
+```ts
+import type { ServerPlugin } from 'murow/netcode';
+
+class TelemetryPlugin implements ServerPlugin {
+  readonly name = 'telemetry';
+
+  onMount(server)                              { /* setup */ }
+  onTick(world, deltaTime)                     { /* per-tick work */ }
+  onIntent(peer, kind, name, payload, ctx)     { /* every dispatched intent */ }
+  filterSnapshot(peer, world, dirty, out)      { for (const e of dirty) out.push(e); /* pass-through */ }
+  onDisconnect(peer)                           { /* cleanup */ }
+}
+
+server.use(new TelemetryPlugin());
+```
+
+### Low-level snapshot codec — `encodeDelta` / `decodeDelta`
+
+`GameServer` and `GameClient` already drive these for you. Use them directly only when you need a custom snapshot pipeline (e.g. recording a replay file, piping snapshots through a non-WebSocket transport, or implementing your own interest-management layer).
+
+```ts
+import { encodeDelta, decodeDelta, type DecodedDelta } from 'murow/netcode';
+
+// Full signatures (you must pass the component set + mask-word count both ways —
+// they define the bitmask layout; the encoder and decoder must agree):
+function encodeDelta(
+  world: World,
+  tick: number,
+  entities: number[],               // server-side entity ids to pack (the dirty set)
+  components: Component<any>[],      // the component registry, in a stable order
+  numMaskWords: number,             // ceil(components.length / 32)
+  despawned?: number[],             // default []
+  clientAckTick?: number,           // default 0
+): Uint8Array;
+
+function decodeDelta(
+  world: World,
+  buf: Uint8Array,
+  components: Component<any>[],      // SAME order/length the encoder used
+  numMaskWords: number,             // SAME value the encoder used
+  ensureEntity: (serverEntityId: number, present: Component<any>[]) => number,  // map server id -> local id, spawning if needed; returns the local entity
+  shouldApply?: (localEntity: number) => boolean,   // default () => true; return false to skip overwriting (e.g. your own predicted entity)
+): DecodedDelta;
+
+interface DecodedDelta {
+  tick: number;
+  clientAckTick: number;
+  entityIds: number[];              // local ids (post-ensureEntity)
+  serverEntityIds: number[];        // the ids as they were on the wire
+  despawnedServerIds: number[];     // server ids to despawn locally
+  valuesByServerEntity: Map<number, Map<Component<any>, Record<string, any>>>;
+}
+
+// Server: pack dirty entities into a wire buffer
+const numMaskWords = Math.ceil(components.length / 32);
+const buf = encodeDelta(world, tick, dirtyEntityIds, components, numMaskWords, despawnedEntityIds, clientAckTick);
+
+// Client: unpack and apply (you own the server-id -> local-id mapping)
+const decoded = decodeDelta(world, buf, components, numMaskWords, (serverId, present) => {
+  // look up or spawn the local entity for this server id, give it `present` components, return its local id
+  return localIdFor(serverId);
+});
+```
+
+Wire format (already validated by the codec — don't hand-construct):
+
+```
+header   : tick u32 | clientAckTick u32 | entityCount u16 | despawnCount u16
+entities : repeated [ entityId u32 | bitmask u32 * N | fields packed by schema ]
+despawns : repeated [ entityId u32 ]
+```
+
+`clientAckTick` is the highest **contiguous-applied intent sequence**
+the server has applied for the receiving peer (the field name is
+historical; it carries a per-send sequence, not a game tick). The
+reconciler uses this to drop confirmed predictions. Server and client
+tick counters are independent.
+
+The matching intent wire format is:
+
+```
+[type=0x01][sequence u32][encoded intent]
+```
+
+Each `sendIntent` increments a per-client monotonic sequence (never
+reused, never skipped). The server applies intents in sequence order
+and only advances `clientAckTick` once every prior sequence has been
+applied — so the client's prediction history cut-off is safe under
+reorder, packet loss, or skipped game ticks (intermittent senders).
+
+### Bundled transports
+
+- `BunWebSocketServerTransport` (from `murow`) — Bun WebSocket server. Works with `GameServer` and lower-level `ServerNetwork`.
+- `BrowserWebSocketClientTransport` (from `murow/net/adapters/browser-websocket`) — browser WebSocket client. Works with `GameClient` and lower-level `ClientNetwork`.
+- `MemoryServerTransport` (from `murow/netcode`) — in-process server/client pair for tests:
+
+```ts
+import { MemoryServerTransport } from 'murow/netcode';
+
+class MemoryServerTransport implements ServerTransportAdapter<MemoryPeerTransport> {
+  connectClient(): { client: TransportAdapter; peerId: string };   // spawn a paired client transport
+  onConnection(handler: (peer: MemoryPeerTransport, peerId: string) => void): void;
+  onDisconnection(handler: (peerId: string) => void): void;
+  getPeer(peerId: string): MemoryPeerTransport | undefined;
+  getPeerIds(): string[];
+  close(): void;
+}
+
+// Usage in a test:
+const serverTransport = new MemoryServerTransport();
+const server = new GameServer({ transport: serverTransport, /* ... */ });
+
+const { client: clientTransport } = serverTransport.connectClient();
+const client = new GameClient({ transport: clientTransport, /* ... */ });
+```
+
+The netcode layer assumes **ordered delivery**. WebSocket over TCP satisfies that; UDP would need its own ordering layer.
+
+### Tick rates
+
+`GameServer` and `GameClient` read the tick rate from `loop.ticker.rate`. Snapshot scheduling, `ctx.deltaTime`, and lag-compensation history sizing all adapt to it.
+
+**Server and client should share the same tick rate when predictions are in use.** Predictions assume both sides advance at the same `deltaTime`.
+
+---
+
+## Renderer Abstractions (in `murow`)
+
+`murow` ships abstract renderer contracts and the asset pipeline. Everything here is **pure CPU** — no GPU, no canvas, no device. The `webgpu` (or any) backend is responsible for the upload step.
+
+### Implementing a custom backend (PixiJS, Three.js, Babylon, …)
+
+Subclass `Base2DRenderer` or `Base3DRenderer` and consume a `PrefabBucket` to drive sizing and uploads:
+
+```ts
+import {
+  Base3DRenderer,
+  parseGltf,
+  type PrefabBucket3D,
+  type Renderer3DOptions,
+} from 'murow';
+
+class MyBackendRenderer extends Base3DRenderer {
+  constructor(canvas: HTMLCanvasElement, options: Renderer3DOptions & { prefabs?: PrefabBucket3D }) {
+    super(canvas, options);
+    // Read options.prefabs to size your GPU buffers
+  }
+  async init() {
+    // Walk bucket.entries() and upload each parsed prefab to your renderer's primitives
+  }
+  render(alpha: number) { /* draw with interpolation alpha */ }
+  destroy()             { /* cleanup */ }
+}
+```
+
+`@murow/webgpu` is the reference implementation. You only need to write a backend if WebGPU doesn't fit (older browsers, native target via Skia, integrating into an existing Three.js scene, etc.). Everything else in the engine — ECS, game loop, netcode — is renderer-independent.
+
+### `PrefabBucket` — typed asset registry
+
+Declare every spawnable asset up-front, parallel-load, look up by id with full type safety. **The bucket sizes the renderer's GPU buffers** — no magic numbers.
+
+#### 3D spec types
+
+```ts
+interface PartOffset {
+  position?: readonly [number, number, number];
+  rotation?: readonly [number, number, number];
+}
+
+interface GltfSpec {
+  type: 'gltf';
+  id: string;
+  src: string;                                    // URL to .gltf / .glb
+  animations?: readonly string[];                 // names to eager-load (rest are loadable on demand)
+  freezeAnimations?: boolean;                     // pre-bake animations as buffers (faster, no live edit)
+  metadata?: Record<string, unknown>;             // literal-typed; persisted on the prefab
+  hitbox?: string;                                // name into the bucket's HitboxLibrary (see Hitboxes & Picking)
+}
+
+interface GridSpec {
+  type: 'grid';
+  id: string;
+  size: number;                                   // total grid extent
+  step: number;                                   // cell size
+  lineWidth: number;
+  metadata?: Record<string, unknown>;
+  hitbox?: string;
+}
+
+interface CubeSpec {
+  type: 'cube';
+  id: string;
+  size?: number;                                  // default 1
+  metadata?: Record<string, unknown>;
+  hitbox?: string;
+}
+
+interface CompositeSpec {
+  type: 'composite';
+  id: string;
+  parts: readonly { partId: string; offset?: PartOffset }[];
+  metadata?: Record<string, unknown>;
+  hitbox?: string;
+}
+```
+
+When a `HitboxLibrary` is attached with `bucket.hitboxes(lib)`, the `hitbox` field is type-narrowed to the library's registered names (autocompleted, typo-checked). Without a library it cannot be set.
+
+#### 2D spec types
+
+```ts
+interface SpritesheetSpec {
+  type: 'spritesheet';
+  id: string;
+  src: string;
+  frameWidth?: number;                            // grid mode — combine with frameHeight
+  frameHeight?: number;
+  data?: string;                                  // texture-packer JSON URL (alternative to frameWidth/Height)
+  metadata?: Record<string, unknown>;
+  hitbox?: string;                                // name into the bucket's HitboxLibrary
+}
+```
+
+#### Parsed prefab types (returned by `bucket.get(id)`)
+
+Each spec parses into a typed prefab. Literals from the spec flow through, so `metadata` and animation names stay narrow.
+
+```ts
+type GltfPrefab<S extends GltfSpec = GltfSpec> = {
+  type: 'gltf';
+  id: S['id'];
+  parsed: ParsedGltf;
+  skinnedPartCount: number;
+  jointCount: number;
+  totalVertexCount: number;
+  metadata: MetadataOf<S>;
+  animations?: Record<S['animations'][number], string>;   // typed literal names
+  animationList?: readonly S['animations'][number][];
+  loadAnimations?:   (names: readonly string[]) => Promise<void>;
+  unloadAnimations?: (names: readonly string[]) => void;
+  resetAnimations?:  () => void;
+};
+
+type GridPrefab<S extends GridSpec = GridSpec> = {
+  type: 'grid'; id: S['id'];
+  size: number; step: number; lineWidth: number;
+  metadata: MetadataOf<S>;
+};
+
+type CubePrefab<S extends CubeSpec = CubeSpec> = {
+  type: 'cube'; id: S['id'];
+  size: number;
+  metadata: MetadataOf<S>;
+};
+
+type CompositePrefab<S extends CompositeSpec = CompositeSpec> = {
+  type: 'composite'; id: S['id'];
+  parts: readonly { partId: string; offset?: PartOffset }[];
+  metadata: MetadataOf<S>;
+};
+
+type SpritesheetPrefab<S extends SpritesheetSpec = SpritesheetSpec> = {
+  type: 'spritesheet'; id: S['id'];
+  parsed: ParsedSpritesheet;
+  frameCount: number; width: number; height: number;
+  metadata: MetadataOf<S>;
+};
+```
+
+#### Usage
+
+```ts
+const bucket = new PrefabBucket('3d')          // '2d' | '3d' — narrows what add() accepts
+  .add({ type: 'cube', id: 'crate', size: 1, metadata: { hp: 10 } })
+  .add({ type: 'grid', id: 'floor', size: 50, step: 1, lineWidth: 0.01 })
+  .add({
+    type: 'gltf',
+    id: 'hero',
+    src: '/hero.glb',
+    animations: ['Idle', 'Run'],
+    metadata: { scale: 0.01 },
+  })
+  // Multi-part prefab — spawnable as a single instance with per-part offsets
+  .addGroup('campfire', [
+    { type: 'cube', id: 'logs',  size: 1 },                                          // bucket.get('campfire.logs')
+    { type: 'cube', id: 'flame', size: 0.3, offset: { position: [0, 0.3, 0] } },     // bucket.get('campfire.flame')
+    { type: 'cube',              size: 0.5, offset: { position: [0, 0.8, 0] } },     // bucket.get('campfire.<hex>')
+  ]);
+
+await bucket.load();                            // parallel fetch + parse — frozen after this
+
+const hero = bucket.get('hero');                // typed as GltfPrefab
+hero.animations.Idle;                           // typed literal 'Idle'
+hero.animationList;                             // readonly ['Idle', 'Run']
+hero.metadata.scale;                            // typed as 0.01 (literal)
+hero.totalVertexCount;
+
+bucket.get('typo');                             // ❌ compile error: not assignable to known ids
+bucket.getAllByType('gltf');                    // GltfPrefab[]
+bucket.getGroup('campfire').asComposite();      // spawn the whole group as one logical instance
+bucket.entries();                               // iterable [id, prefab] pairs — for renderer self-sizing
+```
+
+For 2D:
+
+```ts
+const bucket = new PrefabBucket('2d').add({
+  type: 'spritesheet',
+  id: 'characters',
+  src: '/characters.png',
+  frameWidth: 32,
+  frameHeight: 32,
+});
+```
+
+#### Loading animations on demand
+
+Eager-load only the animations you'll need at spawn time. Load others later (e.g. before an attack triggers) without restarting the renderer:
+
+```ts
+const bucket = new PrefabBucket('3d').add({
+  type: 'gltf', id: 'hero', src: '/hero.glb',
+  animations: ['Idle'],                          // eager-loaded
+});
+await bucket.load();
+
+const hero = bucket.get('hero');
+await hero.loadAnimations?.(['Run', 'Attack']);  // fetch + parse on demand
+instance.play?.('Attack', { loop: false });
+
+hero.unloadAnimations?.(['Attack']);             // free GPU bone-matrix buffers
+```
+
+### Pure CPU helpers
+
+```ts
+parseGltf(url)            // → parsed glTF / .glb in a renderer-agnostic shape
+parseSpritesheet(opts)    // → sprite UV map
+SkeletalAnimation         // → CPU-side bone evaluation for skinned meshes
+```
+
+These are used by the WebGPU backend, but they're available for custom backends too.
+
+---
+
+## WebGPU Renderer (`murow/webgpu`)
+
+Concrete WebGPU 2D/3D renderer powered by **TypeGPU** (write WGSL in TypeScript with full type safety). Both renderers follow the same shape: `new` → `await init()` → drive instances → `render(alpha)`.
+
+### What the renderer does automatically
+
+You don't write any of this. The renderer handles it under the hood as long as you call `storePreviousState()` in `pre-tick` and `render(alpha)` in `render`:
+
+| Feature | What it does |
+|---|---|
+| **GPU-side frame interpolation (lerp)** | `mix(prev, curr, alpha)` runs in the vertex shader, not on CPU. Low tick rates (15-30 Hz simulation) look smooth at 144 Hz render. Call `renderer.storePreviousState()` in `pre-tick` to capture the previous transform snapshot. |
+| **Frustum culling** | 3D: per-instance visibility check against the camera frustum. Off-screen instances skip their draw call. |
+| **Distance-based animation culling** | 3D: skinned-mesh skinning is skipped for instances farther than `animationCullDistance`. Bone math is the most expensive thing in a glTF pipeline; this is the single biggest win for crowd scenes. |
+| **Sparse-batched draw calls** | 2D: sprites are bucketed by (layer, spritesheet) and drawn in one call per bucket. 10k sprites across 1 sheet = 1 draw call. |
+| **Instance recycling** | `handle.destroy()` returns the slot + bone-matrix block to a free list. Respawning reuses them without growing GPU buffers. |
+| **Auto canvas resize** | With `autoResize: true`, the renderer attaches a `ResizeObserver`, updates the swap chain, and reprojects the camera. |
+| **Buffer self-sizing from `PrefabBucket`** | The bucket reports total vertex count, joint count, skinned-part count etc. The renderer allocates GPU buffers from those numbers — no magic constants. |
+| **glTF skeletal animation** | Crossfading, looping, `onEnd` callbacks, typed animation names. On-demand load/unload via `hero.loadAnimations(['Attack'])`. |
+| **Fixed directional + ambient lighting (3D)** | The 3D shader applies a single hard-coded directional light (`dir ~= (0.3, 0.8, 0.5)`) plus a constant ambient term. See "Lighting" below. |
+| **Zero-GC hot path** | `Float32Array` buffers + `FreeList` slot allocation. No per-frame object creation. |
+
+### Lighting (3D)
+
+The 3D renderer is **not a PBR/material engine.** It applies one **hard-coded directional light** plus a constant ambient term in the shader. There is **no public API** to move the light, add lights, change ambient, or set shadows/fog/skybox/specular/metallic/emissive — none of those exist. Per-instance `color` (a flat tint, see below) is the only surface property you control.
+
+If you need configurable or multiple lights, shadows, or a real material model, that's a job for a custom backend (subclass `Base3DRenderer`) or a different renderer — the WebGPU backend deliberately ships a single fixed look.
+
+### Renderer shape
+
+### 2D — `WebGPU2DRenderer`
+
+```ts
+interface WebGPU2DRendererOptions {
+  prefabs?: PrefabBucket2D;
+  maxInstances?: number;          // also accepts `maxSprites` as an alias
+  maxSprites?: number;
+  clearColor?: [number, number, number, number];
+  autoResize?: boolean;
+}
+
+const renderer = new WebGPU2DRenderer(canvas, {
+  prefabs,
+  maxSprites: 60_000,
+  clearColor: [0.2, 0.05, 0.15, 1],
+  autoResize: true,
+});
+await renderer.init();
+
+renderer.camera.x = 600;         // world-space center
+renderer.camera.y = 400;
+renderer.camera.zoom = 1;
+renderer.camera.screenToWorld(sx, sy);   // [wx, wy]
+
+// Sprite-sheet from PrefabBucket:
+const sheet = prefabs.get('characters');
+// Or directly (no bucket):
+const sheet2 = await renderer.loadSpritesheet({ image: '/sprites.png', frameWidth: 32, frameHeight: 32 });
+
+const sprite = renderer.addSprite({
+  sheet,
+  sprite: 0,                     // frame index
+  position: [100, 200],
+  scale: 32,                     // world-space size
+  layer: 0,                      // optional, for back-to-front draw order
+});
+
+// addSprite returns a SpriteHandle (a SpriteAccessor at runtime). Transform,
+// opacity, layer, and flip are PROPERTIES (assign directly); tint is a method.
+sprite.x = 150;                  // direct property assignment — picked up next render
+sprite.y = 200;
+sprite.rotation = 0.5;
+sprite.scaleX = 1.5;
+sprite.scaleY = 1.5;
+sprite.opacity = 0.5;            // property, not setOpacity()
+sprite.flipX = true;             // properties, not setFlip()
+sprite.flipY = false;
+sprite.layer = 2;
+sprite.setTint(1, 0, 0, 1);      // setTint IS a method (r, g, b, a=1)
+renderer.removeSprite(sprite);   // no sprite.destroy() — remove via the renderer
+
+renderer.storePreviousState();   // call in 'pre-tick' for GPU lerp
+renderer.render(alpha);
+renderer.onResize((w, h) => { /* ... */ });
+```
+
+### 3D — `WebGPU3DRenderer`
+
+```ts
+interface WebGPU3DRendererOptions {
+  prefabs?: PrefabBucket3D;
+  maxInstances?: number;
+  maxSkinnedInstances?: number;          // cap on simultaneously animated meshes
+  maxBonesPerSkin?: number;              // cap on bones per skinned model
+  animationCullDistance?: number;         // skip CPU skinning for instances farther than this
+  clearColor?: [number, number, number, number];
+  autoResize?: boolean;
+}
+
+interface MeshInstanceOptions {
+  model: ModelHandle | GltfModel | Prefab3D;
+  position?: readonly [x: number, y: number, z: number];
+  rotation?: readonly [x: number, y: number, z: number];
+  scale?: number | readonly [x: number, y: number, z: number];
+  color?: readonly [r: number, g: number, b: number];   // flat tint, SET-AT-SPAWN ONLY — there is no setColor on the handle
+}
+
+const renderer = new WebGPU3DRenderer(canvas, {
+  prefabs,
+  maxInstances: 5000,
+  clearColor: [0.05, 0.07, 0.13, 1],
+  autoResize: true,
+  animationCullDistance: 15,
+});
+await renderer.init();
+
+const hero   = prefabs.get('hero');
+const handle = renderer.addInstance({
+  model: hero,
+  position: [0, 0, 0],
+  rotation: [0, 0, 0],
+  scale: [1, 1, 1],                       // or a single number
+  color:  [1, 0.5, 0.2],                  // tint, optional
+});
+
+handle.setPosition(x, y, z);
+handle.setRotation(x, y, z);
+handle.setScale(sx, sy, sz);
+handle.teleport(x, y, z);                 // snap without interpolation (use after a respawn)
+handle.position;                          // [x, y, z] — read-only reference (shared)
+handle.rotation;
+handle.scale;
+handle.play?.(hero.animations.Idle, { loop: true, crossfade: 0.15, onEnd: () => { /* ... */ } });
+handle.stop?.();
+handle.destroy();                         // frees the slot + bone-matrix block; respawns reuse them
+
+renderer.removeInstance(handle as MeshInstanceHandle);
+renderer.setAnimationCullDistance(20);
+renderer.maxSkinned;                      // capacity for skinned (animated) instances
+renderer.storePreviousState();            // call in 'pre-tick' for GPU lerp
+renderer.render(alpha);                   // call in 'render'
+
+renderer.raycast.update(input);           // cursor picking — see "Hitboxes & Picking"
+renderer.raycast.hit({ filter });
+renderer.debug.hitboxes = true;           // draw hitbox wireframes (green = hovered, magenta = idle)
+
+// Primitive + model factories (return a ModelHandle / GltfModel you pass to addInstance):
+const grid  = renderer.createGrid({ size: 50, step: 1, lineWidth: 0.01 });
+const cube  = renderer.createCube({ size: 1 });
+const model = renderer.loadModel(rawModelData);          // raw geometry (ModelData), no bucket
+const gltf  = await renderer.loadGltf('https://example.com/model.glb', { animations: ['Idle'] });  // manual glTF path
+const up    = renderer.uploadParsedGltf(parsedGltf);     // GPU-upload an already-parsed glTF (CPU/GPU split)
+const k     = renderer.createCompute('name', { workgroupSize: 256 });   // compute kernel (see Compute Shaders)
+```
+
+(`WebGPU2DRenderer` exposes the same `renderer.raycast` against sprite hitboxes, sorted topmost-first.)
+
+`addInstance` returns an `InstanceHandle`. For single-mesh prefabs it's also a `MeshInstanceHandle` at runtime — both names work; cast when calling `removeInstance`.
+
+**Per-instance color is immutable after spawn.** Set it once via `addInstance({ color: [r, g, b] })`. There is no `setColor` / `setTint` on the 3D handle — to recolor, `destroy()` the instance and re-add it. (2D sprites differ: `SpriteHandle.setTint(...)` is live — see the 2D section.)
+
+### Camera (2D)
+
+```ts
+class Camera2D {
+  // Public mutable properties
+  x: number;
+  y: number;
+  zoom: number;
+  rotation: number;
+
+  constructor(width: number, height: number);
+
+  get width(): number;
+  get height(): number;
+  setViewport(width: number, height: number): void;
+  setPosition(x: number, y: number): void;
+  move(x: number, y: number): void;
+  screenToWorld(sx: number, sy: number): [number, number];  // reusable tuple — don't retain
+  follow(targetX: number, targetY: number, smoothing?: number): void;  // smoothing default 1
+  storePrevious(): void;                  // call in 'pre-tick' for GPU lerp (already done by renderer.storePreviousState)
+  interpolate(alpha: number): void;
+  getMatrix(): Float32Array;              // 3x3 std140, 12 floats
+}
+```
+
+### Camera (3D)
+
+```ts
+class Camera3D {
+  // Public mutable properties — tuples are shared references; prefer setPosition / setTarget
+  position: [number, number, number];
+  target:   [number, number, number];
+  up:       [number, number, number];
+  fov: number;
+  near: number;
+  far: number;
+  aspect: number;
+  movement: 'local' | 'grounded' | 'global';
+  // 'local'    — move relative to facing (FPS/fly camera)
+  // 'grounded' — XZ movement only, ignores pitch (RTS / FPS-walk camera)
+  // 'global'   — world-aligned axes (debug fly)
+
+  setPosition(x: number, y: number, z: number): void;
+  setTarget(x: number, y: number, z: number): void;
+  setAspect(width: number, height: number): void;
+  move(right: number, up: number, forward: number): void;  // WASD-style relative
+  orbit(yawDelta: number, pitchDelta: number): void;
+  zoom(delta: number): void;
+  screenToRay(sx: number, sy: number): Ray3D;              // for picking
+  follow(tx: number, ty: number, tz: number, smoothing?: number): void;
+  storePrevious(): void;
+  interpolate(alpha: number): void;
+  getViewMatrix(): Float32Array;
+  getProjectionMatrix(): Float32Array;
+  getViewProjectionMatrix(): Float32Array;
+}
+```
+
+### Particles
+
+```ts
+interface Range { min: number; max: number; }
+
+interface ParticleEmitterConfig {
+  max: number;
+  lifetime:  Range;
+  speed:     Range;
+  size:      Range;
+  gravity?:  [number, number];
+  color:     [number, number, number, number];
+  direction: Range;                       // degrees
+  fadeOut?:  boolean;
+  sheet?:    SpritesheetHandle;
+  sprite?:   number;                      // frame index
+  seed?:     number;                      // deterministic emission
+}
+
+class ParticleEmitter {
+  constructor(renderer: WebGPU2DRenderer, config: ParticleEmitterConfig);
+  emit(x: number, y: number, count?: number): void;   // count default 1
+  update(deltaTime: number): void;
+  getActiveCount(): number;
+  clear(): void;
+}
+
+const particles = new ParticleEmitter(renderer, {
+  max: 5000,
+  lifetime:  { min: 0.5, max: 1.5 },
+  speed:     { min: 50, max: 200 },
+  size:      { min: 2, max: 6 },
+  gravity:   [0, -200],
+  color:     [1, 0.6, 0.1, 1],
+  direction: { min: 45, max: 135 },
+  fadeOut:   true,
+  sheet,
+  sprite:    1,
+});
+
+particles.emit(x, y, 50);
+particles.update(deltaTime);
+```
+
+### `SpriteAccessor` — direct buffer access for 2D sprites
+
+`SpriteHandle` is the public ergonomic façade. If you need raw zero-alloc writes (e.g. inside a hot system that owns thousands of sprites), use `SpriteAccessor` directly:
+
+```ts
+class SpriteAccessor {
+  readonly slot: number;
+  readonly sheetId: number;
+
+  x: number;
+  y: number;
+  rotation: number;
+  scaleX: number;
+  scaleY: number;
+  layer: number;
+  flipX: boolean;
+  flipY: boolean;
+  opacity: number;
+
+  readonly prevX: number;
+  readonly prevY: number;
+  readonly prevRotation: number;
+  storePrevious(): void;
+
+  readonly tintR: number;
+  readonly tintG: number;
+  readonly tintB: number;
+  readonly tintA: number;
+  setTint(r: number, g: number, b: number, a?: number): void;   // a default 1
+
+  readonly uvMinX: number;
+  readonly uvMinY: number;
+  readonly uvMaxX: number;
+  readonly uvMaxY: number;
+}
+```
+
+### Typed shader DSL — `d` and `std`
+
+`d` builds GPU data layouts; `std` is the WGSL math namespace usable inside compute/vertex/fragment closures. The renderer compiles your JS closures to WGSL via TypeGPU.
+
+```ts
+const Particle = d.struct({
+  posX: d.f32, posY: d.f32,
+  velX: d.f32, velY: d.f32,
+  life: d.f32,
+});
+```
+
+- Data types: `d.f32`, `d.u32`, `d.i32`, `d.vec2f`, `d.vec3f`, `d.vec4f`, `d.mat3x3f`, `d.mat4x4f`
+- Composite: `d.struct({...})`, `d.arrayOf(type, length)`, `d.sizeOf(type)`
+- Math (same names as WGSL): `std.abs`, `std.min`, `std.max`, `std.saturate`, `std.step`, `std.length`, `std.distance`, `std.pow`, `std.sin`, `std.cos`, `std.normalize`, `std.reflect`, `std.refract`
+
+### Compute shaders — `ComputeBuilder` / `ComputeKernel`
+
+```ts
+interface ComputeOptions {
+  workgroupSize: number | [number, number] | [number, number, number];
+}
+
+interface ComputeBufferDef {
+  storage?: AnyWgslData;                  // typed array data — use d.arrayOf(Struct, N)
+  uniform?: AnyWgslData;                  // uniform block — use d.struct({...})
+  readwrite?: boolean;                    // storage only; default false (read-only)
+  external?: TgpuBuffer<AnyWgslData>;     // bind an existing buffer
+}
+
+// ComputeInput passed to the shader closure as the second arg:
+interface ComputeInput {
+  globalId:      { x: number; y: number; z: number };
+  localId:       { x: number; y: number; z: number };
+  localIndex:    number;
+  workgroupId:   { x: number; y: number; z: number };
+  numWorkgroups: { x: number; y: number; z: number };
+}
+
+class ComputeKernel<TBuffers> {
+  write<K extends keyof TBuffers & string>(bufferName: K, data: unknown): void;
+  read(bufferName: keyof TBuffers & string): Promise<unknown>;
+  dispatch(countOrGroups: number | [number, number?, number?]): void;
+  encode(encoder: GPUCommandEncoder, countOrGroups: number | [number, number?, number?]): void;
+  getBuffer(bufferName: keyof TBuffers & string): TgpuBuffer<AnyWgslData>;
+  destroy(): void;
+}
+```
+
+Usage:
+
+```ts
+const compute = renderer
+  .createCompute('particle-physics', { workgroupSize: 256 })
+  .buffers({
+    particles: { storage: d.arrayOf(Particle, 10_000), readwrite: true },
+    config:    { uniform: d.struct({ deltaTime: d.f32, gravity: d.f32, count: d.u32 }) },
+  })
+  .shader(({ particles, config }, { globalId }) => {
+    const idx = globalId.x;
+    if (idx >= config.count) return;
+    const p = particles[idx];
+    p.velY = p.velY + config.gravity * config.deltaTime;
+    p.posY = p.posY + p.velY * config.deltaTime;
+  })
+  .build();
+
+compute.write('config',    { deltaTime: 1/60, gravity: 0.3, count: 10_000 });
+compute.write('particles', initialArray);
+compute.dispatch(10_000);                          // 1D dispatch
+compute.dispatch([10, 10]);                        // 2D dispatch
+const data = await compute.read('particles');      // round-trips to CPU
+compute.destroy();
+```
+
+### Custom instanced geometry — `GeometryBuilder` / `CustomGeometry`
+
+```ts
+interface GeometryOptions {
+  maxInstances: number;
+  geometry: 'quad' | 'triangle' | GeometryData;    // built-in or custom vertex layout
+}
+
+interface InstanceLayoutConfig<D, S> {
+  dynamic: D;                                       // updated per frame — written via setInstanceData
+  static:  S;                                       // immutable per instance — set at addInstance time
+}
+
+// Shader closure receives the ShaderContext (lazy GPU-side accessors):
+interface ShaderContext<TDynamic, TStatic, TUniforms> {
+  readonly dynamic:  Readonly<Record<number, Readonly<ResolveRecord<TDynamic>>>>;
+  readonly statics:  Readonly<Record<number, Readonly<ResolveRecord<TStatic>>>>;
+  readonly uniforms: Readonly<ResolveRecord<TUniforms>>;
+  readonly layout:   TgpuBindGroupLayout;
+}
+
+// And the vertex input:
+interface VertexInput {
+  vertexIndex:   number;
+  instanceIndex: number;
+}
+
+class CustomGeometry<TDynamic, TStatic, TUniforms> {
+  addInstance(data: FieldValues<TDynamic> & FieldValues<TStatic>): number;   // returns slot
+  removeInstance(slot: number): void;
+  setInstanceData(slot: number, data: FieldValues<TDynamic> & FieldValues<TStatic>): void;
+  getInstance(slot: number): InstanceAccessor<TDynamic, TStatic>;
+  updateAll(cb: (ctx: InstanceContext<TDynamic, TStatic>, slot: number) => void): void;
+  updateUniforms(values: Partial<FieldValues<TUniforms>>): void;
+  getActiveCount(): number;
+  render(): void;
+  destroy(): void;
+}
+
+// Per-slot accessor for batch updates (zero-alloc reusable context):
+class InstanceContext<TDynamic, TStatic> {
+  get(field: string): number | number[];
+  set(field: string, value: number | number[]): void;
+}
+```
+
+Usage:
+
+```ts
+const render = renderer
+  .createGeometry('particle-vis', { maxInstances: 10_000, geometry: 'quad' })
+  .instanceLayout({
+    dynamic: { posX: d.f32, posY: d.f32, life: d.f32 },   // updated per frame
+    static:  { hue:  d.f32 },                              // set once
+  })
+  .fromCompute(compute, 'particles')                       // ← zero-copy: reads compute buffer directly
+  .uniforms({ resolution: d.vec2f, time: d.f32 })
+  .shaders({
+    vertex: {
+      out: { vLife: d.f32, localUV: d.vec2f },
+      fn({ dynamic, statics, uniforms }, input) {
+        const p = dynamic[input.instanceIndex];
+        return { pos: d.vec4f(p.posX, p.posY, 0, 1), vLife: p.life, localUV: d.vec2f(0, 0) };
+      },
+    },
+    fragment: {
+      fn({ localUV, vLife }) {
+        return d.vec4f(1, 0, 0, vLife as number);
+      },
+    },
+  })
+  .build();
+
+render.addInstance({ posX: 0.5, posY: 0.5, life: 1, hue: 0.3 });
+render.updateUniforms({ resolution: [canvas.width, canvas.height], time: 0 });
+render.render();
+
+// Batch-update many instances without per-slot object allocation:
+render.updateAll((ctx, slot) => {
+  ctx.set('life', (ctx.get('life') as number) - deltaTime);
+});
+```
+
+- `.fromCompute(compute, bufferName)` skips `addInstance` — instance data lives in the compute buffer. Use one or the other, not both.
+- `renderer.onResize((w, h) => render.updateUniforms({ resolution: [w, h] }))` keeps screen-relative shaders correct.
+
+### `AnimationController` — 2D spritesheet animation
+
+Drives frame index over time. The output `frame: number` is read by `SpriteAccessor` / `SpriteHandle` to pick the UV slice.
+
+```ts
+interface AnimationClipConfig {
+  name: string;
+  frames: number[];           // frame indices into the spritesheet
+  durations: number[];        // seconds per frame (same length as frames)
+  loop: boolean;
+}
+
+interface AnimationClip {
+  readonly id: number;
+  readonly name: string;
+  readonly frames: Uint16Array;
+  readonly durations: Float32Array;
+  readonly frameCount: number;
+  readonly totalDuration: number;
+  readonly loop: boolean;
+}
+
+interface AnimationState {
+  clipId: number;
+  frame: number;              // current spritesheet frame index
+  time: number;               // seconds into the current clip
+  speed: number;              // 1.0 = real-time, 0.5 = half-speed
+  playing: boolean;
+}
+
+class AnimationController {
+  loadClip(config: AnimationClipConfig): number;
+  getClipId(name: string): number;
+  getClip(id: number): AnimationClip;
+  createState(clipId: number, speed?: number, playing?: boolean): AnimationState;
+  update(state: AnimationState, deltaTime: number): number;  // returns the current frame index
+  play(state: AnimationState, clipId: number, speed?: number): void;
+  stop(state: AnimationState): void;
+  resume(state: AnimationState): void;
+  get clipCount(): number;
+}
+```
+
+### `MorphAnimation` — 3D morph-target animation
+
+Evaluates morph weights (or vertex deltas) on the CPU and writes the result into a `Float32Array` you supply each frame. Use for facial animation, blendshapes, low-poly skin alternatives.
+
+```ts
+interface MorphClipConfig {
+  name: string;
+  keyframes: Float32Array[];  // per-frame vertex/weight payload
+  durations: number[];        // seconds per keyframe
+  loop: boolean;
+}
+
+interface MorphClip {
+  readonly id: number;
+  readonly name: string;
+  readonly keyframes: Float32Array[];
+  readonly durations: Float32Array;
+  readonly frameCount: number;
+  readonly totalDuration: number;
+  readonly loop: boolean;
+  readonly vertexCount: number;
+}
+
+interface MorphState {
+  clipId: number;
+  time: number;
+  speed: number;
+  playing: boolean;
+}
+
+class MorphAnimation {
+  loadClip(config: MorphClipConfig): number;
+  getClipId(name: string): number;
+  getClip(id: number): MorphClip;
+  createState(clipId: number, speed?: number, playing?: boolean): MorphState;
+  update(state: MorphState, deltaTime: number, output: Float32Array): void;  // writes interpolated payload into `output`
+  play(state: MorphState, clipId: number, speed?: number): void;
+  stop(state: MorphState): void;
+  resume(state: MorphState): void;
+  get clipCount(): number;
+}
+```
+
+### Other WebGPU exports
+
+- `Spritesheet`, `createTextureFromBitmap` — manual GPU texture/atlas building if you're not going through `PrefabBucket`.
+- `GeometryData`, `BuiltInGeometry`, `resolveBuiltInGeometry` — for plugging custom vertex layouts into `createGeometry`.
+- `DynamicSprite`, `StaticSprite`, `SpriteUniforms`, `DynamicInstance3D`, `StaticInstance3D`, `DynamicMesh`, `StaticMesh`, `SkinnedStaticMesh`, `MeshUniforms` — exported `d.struct` shapes the renderer uses internally. Use these if you want to pack data into the same format the renderer reads.
+
+### Shader util signatures (TypeGPU functions — call inside vertex/fragment closures)
+
+```ts
+rotate2d(point: d.v2f, angle: number): d.v2f;
+worldToClip2d(worldPos: d.v2f, cameraMatrix: d.m3x3f): d.v4f;
+worldToClip3d(worldPos: d.v3f, vpMatrix: d.m4x4f): d.v4f;
+remap(value: number, inMin: number, inMax: number, outMin: number, outMax: number): number;
+scaleRotate2d(scale: d.v2f, angle: number): d.m2x2f;
+inverseLerp(min: number, max: number, value: number): number;
+```
+
+---
+
+## Common Mistakes
+
+| Wrong | Right |
+|---|---|
+| `const p = world.get(eid, Position); p.x += 10;` | `world.update(eid, Position, { x: p.x + 10 })` - `get` returns a *view*, mutation does not persist |
+| Calling `world.update(eid, C, {...})` in a prediction hot path | Use `ctx.fields(C)` and write directly to the typed arrays - ~6x faster, zero allocation, auto dirty-marks |
+| Writing to `ctx.world.fields(C)` directly in a prediction | That bypasses dirty tracking; the snapshot codec won't pick it up. Prefer `ctx.fields(C)` (auto-marks), or call `ctx.markDirty(C)` after the write |
+| Cross-entity write in a handler without `ctx.markDirty(C, targetId)` | The target entity's snapshot won't include the change. Either go through `world.update(targetId, ...)` or pair raw writes with `ctx.markDirty(C, targetId)` |
+| `Math.random()` inside `definePredictions` | Use `ctx.rng` - predictions must be deterministic across server/client |
+| `Date.now()` / `performance.now()` inside `definePredictions` | Use `ctx.tick` / `ctx.deltaTime` |
+| Writing to a local-only (non-networked) component from a prediction | Rollback can corrupt that state - predictions should only write networked components |
+| `client.use(handlers)` | Handlers are server-only by design - `defineHandlers` does not type-check on the client |
+| Forgetting `renderer.storePreviousState()` in `pre-tick` | Add `loop.events.on('pre-tick', () => renderer.storePreviousState())` - without it, motion snaps at low tick rates |
+| Iterating `world.query(...)` to find despawned entities | Use `world.getDespawned()` + `world.flushDespawned()` - `O(deaths)`, not `O(maxEntities)` |
+| Calling `renderer.removeInstance(handle)` then `handle.setPosition(...)` later | `removeInstance` invalidates the handle - calls after are undefined |
+| `new World()` with no `components` array | All components must be registered up-front; `world.add(eid, NewComponent, ...)` will fail otherwise |
+| `defineComponent('Pos', { x: f32 })` for networked state | Networked components use the descriptor form: `defineComponent('Pos', { schema: { x: f32 }, sync: networked({...}) })` |
+| `'KeyW'` for the *letter* W key, `'W'` for shift+w | DOM `code` strings are always `KeyW`, `KeyA`, `Space`, `ShiftLeft`, `Digit1`, etc. - never the printed character |
+| Reading `input.mouse.position.y` as world Y in a 2D game | Mouse Y is screen-space (top = 0). Flip: `worldY = canvas.height - input.mouse.position.y` |
+| Calling `mouseLook.lock(canvas)` without a click handler | Pointer Lock requires a user gesture. Bind it inside `canvas.addEventListener('click', ...)` |
+| `renderer.camera.position[0] = 5` | Tuple property is a shared reference; use `renderer.camera.setPosition(5, y, z)` |
+| `addInstance({ model: 'hero' })` (string id) | Pass the prefab object: `addInstance({ model: prefabs.get('hero') })` |
+| Calling `prefabs.add(...)` after `bucket.load()` | All prefabs must be registered before `load()` |
+| `client.sendIntent('move', dx, dz)` (positional args) | `client.sendIntent('move', { dx, dz })` - intents are objects keyed by schema field names |
+| Calling `client.sendIntent(...)` before the server has assigned an entity | Returns `false` and emits an `'error'` event - the engine drops the call rather than running prediction against entity 0. Either listen for `'assigned'` first or check `client.assignedEntity !== null` |
+| Destructuring `{ name, args }` from the `'rpc'` event | The field is `payload`, not `args` - `({ name, payload }) => ...`. The pair is a discriminated union: narrowing on `name` types `payload` to that RPC's schema |
+| Holding the `Float32Array` returned from `mouseLook.forward` across frames | Buffer is shared and overwritten - copy values out if you need to retain them |
+| Holding a `PooledCodec.decode(buf)` result across decode calls | The pool reuses objects - copy fields you need before the next `decode()`, or call `codec.release(obj)` |
+| `generateId({ prefix: 'p_' })` (object arg) | `generateId()` - no arguments, returns a 16-char hex string |
+| `nav.findPath([sx, sy], [ex, ey])` (positional args) | `nav.findPath({ from: { x: sx, y: sy }, to: { x: ex, y: ey } })` |
+| `new NavMesh()` with no mode | `new NavMesh('grid')` or `new NavMesh('graph')` |
+| Defining a `'polygon'` obstacle with world-space points | Polygon `points` must be **local (0,0-based)**; `pos` is the world anchor |
+| Mutating `ctx.world.get(ctx.entity, C)` inside a prediction | Use `ctx.fields(C)` for hot paths, or `ctx.world.update(ctx.entity, C, { ... })` for clarity |
+| `client.use(predictions); client.use(predictions);` | Apply each prediction/handler/plugin bundle once |
+| Setting `tickRate: 60` because "more is better" | Higher tick rate = more bandwidth + CPU. 15-30 Hz is typical for multiplayer; render interpolates the rest |
+| Server tickRate != client tickRate when predictions are in use | Predictions assume both sides advance at the same `deltaTime` - match the rates |
+| Custom transport that queues internally without copying buffers in `send()` | Network layer reuses memory - your transport MUST copy if it queues |
+| Using `Math.random()` in a procgen system you also want as a replay | Seed a `SimpleRNG` instead - `new SimpleRNG(seed)` is deterministic and ~5x faster |
+| Calling `server.on('intent', handler)` to implement gameplay | That event is **observe-only** telemetry. Gameplay belongs in `defineHandlers(intents, {...})`. Both can coexist |
+| Casting `world.fields(C)` results to specific typed arrays | Don't - the return type is precisely inferred from the schema (`f32 -> Float32Array`, `u8 -> Uint8Array`, etc.). Casts only mask bugs |
+| Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `addInstance({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
+| Expecting to move/add lights, set shadows, or pick a material on the 3D renderer | The WebGPU 3D renderer has ONE hard-coded directional light + ambient, no public lighting/material API. Write a custom `Base3DRenderer` backend if you need more |
+| `import { type Vec2 } from 'murow'` | Not exported. Use a `{ x: number; y: number }` literal (NavMesh, etc. accept it). `Vector2` exists at `murow/core/input` if you want a named type |
+| Treating `world.query(...)` as a fresh array you can keep | It's a reused, cached buffer rebuilt on any structural change. Iterate it now; re-query after spawn/despawn/add/remove. Same for `getEntities()` / `getDespawned()` |
+| Assuming `world.getDespawned()` is an `Entity[]` | It's a reused `Uint32Array` subarray - valid until `flushDespawned()`; don't retain it |
+| Defining an RPC named `__murow_ping` / `__murow_pong` | Reserved by the engine for `client.ping()` / the `'pong'` event - pick another name |
+| Calling `encodeDelta(world, tick, ids, despawns, ack)` (old 5-arg form) | The real signature needs `components` + `numMaskWords`: `encodeDelta(world, tick, ids, components, numMaskWords, despawns?, ack?)`. `decodeDelta` also needs them plus an `ensureEntity` callback |
+| Defining a peer-owned entity and an unowned NPC differently | They're the same - an unowned networked entity is just one you never `assignEntity`'d. It replicates via snapshots like any dirty entity |
+| Listening for `render` on a server loop | Server loops never emit `render` (no `alpha`). It exists only on `'client'` / `'manual-client'` loops |
+
+---
+
+## Project Structure & Build (Multiplayer)
+
+A multiplayer game is **two programs that share their game definitions.** Prediction only works if the *same* component schemas, intent schemas, and prediction functions run on both the server (authoritative) and the client (predicted). So the canonical layout is a **`shared/` module imported by both sides**:
+
+```
+my-game/
+  shared/
+    constants.ts     // TICK_RATE, WS_PATH, MOVE_SPEED, world bounds — one source of truth
+    components.ts     // defineComponent(...) for every networked + local component
+    protocol.ts       // defineIntents({...}) and defineRpcs({...})
+    predictions.ts    // definePredictions(intents, {...}) — runs on BOTH sides
+    handlers.ts       // defineHandlers(intents, {...}) — server-only (imported only by server)
+    index.ts          // re-exports the above
+  server/
+    index.ts          // GameServer + BunWebSocketServerTransport, serves the client bundle
+  client/
+    index.html        // canvas + HUD
+    index.ts          // GameClient + WebGPU renderer
+  vite.config.ts      // client bundler (REQUIRED — see below)
+  package.json
+```
+
+**Why a shared module is mandatory.** `tickRate`, the component set, the intent kinds, and the prediction bodies must be byte-for-byte identical on both sides or reconciliation diverges. Put them in `shared/` and import from both `server/` and `client/`. A common touch: a tiny `Arena` helper that builds the `World` + `GameLoop` from the shared tick rate and component list, parameterised by driver type:
+
+```ts
+// shared/arena.ts
+import { GameLoop, World, type DriverType } from 'murow';
+import { Components } from './components';
+import { TICK_RATE } from './constants';
+
+export class Arena<T extends DriverType = 'client'> {
+  readonly world: World;
+  readonly loop: GameLoop<T>;
+  constructor(public readonly type: T, opts?: { maxEntities?: number }) {
+    this.world = new World({ maxEntities: opts?.maxEntities ?? 256, components: Object.values(Components) });
+    this.loop  = new GameLoop({ type, tickRate: TICK_RATE });
+  }
+}
+// server: new Arena('server-timeout')   client: new Arena('client')
+```
+
+(Components can be grouped however you like — a `namespace Components { export const Position = ... }` reads well and gives `Object.values(Components)` straight to the `World` config.)
+
+### The client MUST be bundled with Vite + `unplugin-typegpu`
+
+The WebGPU renderer authors shaders with TypeGPU, which needs a build-time transform to embed shader metadata. **Bun's bundler does not run it** — using `murow/webgpu` through `bun build` throws `Missing metadata for tgpu.fn` at runtime. So:
+
+- **Client → Vite** with the `unplugin-typegpu` plugin.
+- **Server → Bun directly** (`bun run server/index.ts`) — the server never imports the renderer, so it has no TypeGPU dependency.
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite';
+import typegpu from 'unplugin-typegpu/vite';
+
+export default defineConfig({
+  root: 'client',
+  plugins: [typegpu({})],                         // ← the part you cannot skip
+  build: { outDir: 'client/dist', target: ['chrome95', 'firefox92', 'safari15', 'es2022'] },
+  server: {
+    port: 5173,
+    proxy: { '/ws': { target: 'ws://localhost:3010', ws: true, changeOrigin: true } },  // dev: Vite page talks to Bun server
+  },
+});
+```
+
+`target` must allow top-level `await` (the example uses `await renderer.init()` at module top level). WebGPU already requires modern browsers, so this costs nothing.
+
+### One port for HTTP + WebSocket (server)
+
+`BunWebSocketServerTransport.create(port, { path, fetch })` upgrades WebSocket on `path` and serves everything else through `fetch` — so the built client bundle and the game socket share one port. The client dials `ws://${location.host}${WS_PATH}`; in dev, Vite's proxy forwards `/ws` to the Bun server so dev and prod speak the same relative URL.
+
+```ts
+// server/index.ts (shape)
+const transport = BunWebSocketServerTransport.create(PORT, {
+  path: WS_PATH,
+  async fetch(req) {
+    const url = new URL(req.url);
+    const p = url.pathname === '/' ? '/index.html' : url.pathname;
+    const file = Bun.file(`./client/dist${p}`);
+    if (await file.exists()) return new Response(file);
+    return new Response('Not Found', { status: 404 });
+  },
+});
+const server = new GameServer({ world: arena.world, loop: arena.loop, transport, protocol: { intents, rpcs }, snapshot: { rate: TICK_RATE } });
+server.use(predictions);
+server.on('connection', ({ peer }) => {
+  const e = arena.world.spawn();
+  arena.world.add(e, Components.Position, { x: spawnX, z: spawnZ });
+  arena.world.add(e, Components.Color, { r, g, b });    // server-authoritative spawn + color
+  server.assignEntity(peer, e);
+});
+arena.loop.start();
+```
+
+### Dev vs. build scripts (Bun-driven)
+
+```jsonc
+// package.json scripts
+{
+  "dev:client": "vite",                                   // HMR client at :5173 (proxy to server)
+  "server":     "bun run server/index.ts",                // game server at :3010
+  "build:client": "vite build",                           // -> client/dist
+  "build":      "bun run scripts/build.ts"                // vite build + `bun build server/index.ts --target=bun`, assemble dist/
+}
+```
+
+Dev loop: run `bun run server` and `bun run dev:client` in two terminals. Production: `bun run build` produces a self-contained `dist/` (`server.js` + `client/dist/`); deploy and `bun server.js` (reads `process.env.PORT`, default 3010).
+
+A complete, runnable version of all of the above — plus on-screen mobile controls (`pointerdown`/`up` buttons feeding the same movement input), a connection/player-count/ping HUD, and ping-driven interpolation tuning — is published as the `multiplayer-cube-arena` example in the source repo (https://github.com/moureau-dev/murow, under `examples/`). It is NOT part of the installed npm package, so it won't be in `node_modules`.
+
+---
+
+## Full Multiplayer Game (End to End)
+
+A complete, runnable game across all three files: `shared/` (imported by both sides), the server, and the client. Players are cubes on a grid; WASD moves them; the server is authoritative; the client predicts and interpolates. This is the whole thing — nothing is elided.
+
+### `shared/` — imported by BOTH server and client
+
+```ts
+// shared/constants.ts — single source of truth for anything both sides must agree on
+export const WS_PATH    = '/ws';
+export const TICK_RATE  = 16;     // logic ticks/sec — MUST match on both sides for prediction
+export const MOVE_SPEED = 4;      // world units/sec
+export const ARENA_HALF = 9;      // players clamped to +/- ARENA_HALF
+export const CELL_SIZE  = 1;      // grid cell / floor step
+
+// shared/components.ts
+import { defineComponent, f32, u8 } from 'murow';
+import { networked } from 'murow/netcode';
+
+export namespace Components {
+  export const Position = defineComponent('Position', {
+    schema: { x: f32, z: f32 },                              // XZ plane; Y is always 0 here
+    sync: networked({ rate: 'every-tick', interest: 'global', interp: 'lerp' }),
+  });
+  export const Color = defineComponent('Color', {
+    schema: { r: u8, g: u8, b: u8 },
+    sync: networked({ rate: 'on-change', interest: 'global', interp: 'step' }),
+  });
+}
+
+// shared/protocol.ts
+import { f32 } from 'murow';
+import { defineIntents, defineRpcs } from 'murow/netcode';
+
+export const intents = defineIntents({
+  move: { dx: f32, dz: f32 },        // normalized direction in [-1, 1]
+});
+export const rpcs = defineRpcs({});  // none needed: spawn flows through snapshots
+
+// shared/predictions.ts — runs on the server (authoritative) AND the client (predicted)
+import { definePredictions } from 'murow/netcode';
+import { intents } from './protocol';
+import { Components } from './components';
+import { ARENA_HALF, MOVE_SPEED } from './constants';
+
+export const predictions = definePredictions(intents, {
+  move: ({ dx, dz }, ctx) => {
+    if (!ctx.world.has(ctx.entity, Components.Position)) return;
+    const pos = ctx.fields(Components.Position);             // RAW-speed + auto dirty-mark
+    const x = pos.x[ctx.entity] + dx * MOVE_SPEED * ctx.deltaTime;
+    const z = pos.z[ctx.entity] + dz * MOVE_SPEED * ctx.deltaTime;
+    pos.x[ctx.entity] = Math.max(-ARENA_HALF * 2, Math.min(ARENA_HALF * 2, x));
+    pos.z[ctx.entity] = Math.max(-ARENA_HALF * 2, Math.min(ARENA_HALF * 2, z));
+  },
+});
+
+// shared/arena.ts — World + GameLoop pair built from the shared schema + tick rate
+import { GameLoop, World, type DriverType } from 'murow';
+import { Components } from './components';
+import { TICK_RATE } from './constants';
+
+export class Arena<T extends DriverType = 'client'> {
+  readonly world: World;
+  readonly loop: GameLoop<T>;
+  constructor(public readonly type: T, opts?: { maxEntities?: number }) {
+    this.world = new World({ maxEntities: opts?.maxEntities ?? 256, components: Object.values(Components) });
+    this.loop  = new GameLoop({ type, tickRate: TICK_RATE });
+  }
+}
+
+// shared/index.ts
+export * from './constants';
+export * from './components';
+export * from './protocol';
+export * from './predictions';
+export * from './arena';
+```
+
+### Server — authoritative, run with `bun run server/index.ts`
+
+```ts
+import { BunWebSocketServerTransport, SimpleRNG } from 'murow';
+import { GameServer } from 'murow/netcode';
+import { TICK_RATE, WS_PATH, Arena, intents, predictions, Components, rpcs } from '../shared';
+
+const PORT  = Number(process.env.PORT) || 3010;
+const arena = new Arena('server-timeout');           // fixed-step server loop, no renderer
+
+// One Bun listener: WS upgrades on WS_PATH, everything else serves the built client bundle.
+const distRoot = './client/dist';
+const transport = BunWebSocketServerTransport.create(PORT, {
+  path: WS_PATH,
+  async fetch(req) {
+    const url = new URL(req.url);
+    const p = url.pathname === '/' ? '/index.html' : url.pathname;
+    const file = Bun.file(`${distRoot}${p}`);
+    if (await file.exists()) return new Response(file);
+    if (!p.includes('.'))                              // SPA fallback
+      return new Response(Bun.file(`${distRoot}/index.html`), { headers: { 'Content-Type': 'text/html' } });
+    return new Response('Not Found', { status: 404 });
+  },
+});
+
+const server = new GameServer({
+  world: arena.world, loop: arena.loop, transport,
+  protocol: { intents, rpcs },
+  snapshot: { rate: TICK_RATE },
+});
+server.use(predictions);                              // same bundle the client uses; here it's authoritative
+
+// Deterministic spawn so reconnects don't stack on one point.
+const rng = new SimpleRNG(0xC0FFEE);
+const PALETTE: [number, number, number][] = [[78,205,196],[255,107,107],[255,211,105],[186,220,88],[165,105,189],[86,152,234]];
+
+server.on('connection', ({ peer }) => {
+  const e = arena.world.spawn();
+  arena.world.add(e, Components.Position, { x: (rng.rand() - 0.5) * 12, z: (rng.rand() - 0.5) * 12 });
+  const [r, g, b] = rng.pick(PALETTE);
+  arena.world.add(e, Components.Color, { r, g, b });
+  server.assignEntity(peer, e);                       // -> client.on('assigned', { entity: e })
+});
+
+server.on('disconnection', ({ peer }) => {
+  if (peer.entity !== -1 && arena.world.isAlive(peer.entity)) arena.world.despawn(peer.entity);
+});
+
+server.on('error', ({ error, context }) => console.error(`[server] ${context}:`, error));
+
+arena.loop.start();
+```
+
+### Client — predicts + renders, bundled with Vite (see Project Structure & Build)
+
+```ts
+import { PrefabBucket, World, GameLoop, type Entity } from 'murow';
+import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-websocket';
+import { GameClient } from 'murow/netcode';
+import { WebGPU3DRenderer, type InstanceHandle } from 'murow/webgpu';
+import { Components, intents, rpcs, predictions } from './shared';
+
+const canvas  = document.getElementById('canvas') as HTMLCanvasElement;
+const prefabs = new PrefabBucket('3d').add({ type: 'cube', id: 'player', size: 0.9 });
+await prefabs.load();
+
+const renderer = new WebGPU3DRenderer(canvas, { prefabs, maxInstances: 64, autoResize: true });
+await renderer.init();
+
+const world = new World({ maxEntities: 64, components: Object.values(Components) });
+const loop  = new GameLoop({ tickRate: 20, type: 'client' });
+
+const client = new GameClient({
+  world, loop,
+  transport: new BrowserWebSocketClientTransport(`ws://${location.host}/ws`),
+  protocol:  { intents, rpcs },
+  strategy:  { kind: 'snapshot-interpolation', delay: 200, staleWindow: 500 },
+});
+client.use(predictions);
+
+const handles = new Map<Entity, InstanceHandle>();
+client.on('spawn',   ({ entity }) => handles.set(entity, renderer.addInstance({ model: prefabs.get('player'), position: [0, 0.45, 0] })));
+client.on('despawn', ({ entity }) => { handles.get(entity)?.destroy(); handles.delete(entity); });
+
+// lerp in the GPU
+loop.events.on('pre-tick', () => renderer.storePreviousState());
+loop.events.on('render', ({ alpha }) => renderer.render(alpha));
+
+// keyboard -> send intent (triggers the prediction for the move intent)
+loop.events.on('tick', ({ input }) => {
+  let dx = 0, dz = 0;
+  if (input.keys['KeyW']?.down) dz -= 1;
+  if (input.keys['KeyS']?.down) dz += 1;
+  if (input.keys['KeyA']?.down) dx -= 1;
+  if (input.keys['KeyD']?.down) dx += 1;
+  if (dx || dz) {
+    const m = Math.hypot(dx, dz);
+    client.sendIntent('move', { dx: dx / m, dz: dz / m });
+  }
+});
+
+// world state -> renderer. Pre-resolve the position bundle once: the same
+// Float32Array refs live for the whole World lifetime, so no refetch.
+const positions = world.fields(Components.Position);
+loop.events.on('tick', () => {
+  for (const [e, h] of handles) {
+    if (!world.has(e, Components.Position)) continue;
+    h.setPosition(positions.x[e], 0.45, positions.z[e]);
+  }
+});
+
+loop.start();
+```
+
+That's the entire game. The `shared/` module defines components, intents, and the movement prediction once; the server applies that prediction authoritatively and ships snapshot deltas; the client runs the *same* prediction speculatively, reconciles against snapshots (rollback + replay), interpolates remote players, and renders with GPU lerp. Note what is NOT here: no manual snapshot encoding, no socket plumbing, no reconciliation code — `GameServer` / `GameClient` + the shared bundle handle all of it. The only thing the server and client implement differently is presentation (the client renders; the server doesn't) and authority (server-only spawn/assign). A fuller version — mobile controls, a HUD, ping-driven interpolation tuning, and the build scripts — is the `multiplayer-cube-arena` example in the source repo (https://github.com/moureau-dev/murow); it is not shipped inside the npm package.

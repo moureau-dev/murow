@@ -3,6 +3,7 @@ import Newstack, { NewstackClientContext } from "@moureau/newstack";
 
 /* ---------- Pages ---------- */
 import { Home } from "./Home";
+import { Package } from "./Package";
 
 /* ---------- Styles ---------- */
 import "./styles.css";
@@ -18,6 +19,7 @@ export class Application extends Newstack {
     return (
       <main>
         <Home route="/" />
+        <Package route="/package" />
       </main>
     );
   }
