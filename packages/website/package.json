@@ -4,9 +4,14 @@
   "type": "module",
   "scripts": {
     "start": "newstack start",
+    "prebuild": "cp ../../llms.txt ./public/llms.txt",
     "build": "newstack build --mode=ssg"
   },
   "dependencies": {
     "@moureau/newstack": "latest"
+  },
+  "devDependencies": {
+    "@moureau/basebox": "latest",
+    "@types/node": "^25.7.0"
   }
 }

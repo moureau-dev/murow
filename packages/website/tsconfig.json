@@ -1,15 +1,15 @@
 {
   "compilerOptions": {
     "lib": [
-      "es2017",
-      "DOM"
+      "DOM",
+      "ES2022"
     ],
     "strict": false,
     "noImplicitAny": false,
     "jsx": "preserve",
     "skipLibCheck": true,
     "downlevelIteration": true,
-    "module": "ESNext",
+    "module": "ES2022",
     "moduleResolution": "bundler",
     "esModuleInterop": true,
     "typeRoots": [

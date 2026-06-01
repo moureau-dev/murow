@@ -1,0 +1,3 @@
+# Murow — AI Reference Guide
+
+Murow is a TypeScript game engine for **server-authoritative multiplayer** games. It ships three packages from a single npm install (`murow`):
