@@ -1,5 +1,5 @@
 /* ---------- External ---------- */
-import Newstack from "@moureau/newstack";
+import Newstack, { NewstackClientContext } from "@moureau/newstack";
 
 /* ---------- Pages ---------- */
 import { Home } from "./Home";
@@ -8,11 +8,17 @@ import { Home } from "./Home";
 import "./styles.css";
 
 export class Application extends Newstack {
+  prepare({ project }: NewstackClientContext) {
+    project.domain = "murow.moureau.dev";
+    project.name = "Murow";
+    project.shortName = "Murow";
+  }
+
   render() {
     return (
-      <div>
+      <main>
         <Home route="/" />
-      </div>
+      </main>
     );
   }
 }
