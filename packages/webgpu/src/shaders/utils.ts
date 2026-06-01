@@ -123,19 +123,28 @@ export const lightContribution = tgpu.fn(
         const atten = std.saturate(1.0 - dist / std.max(range, 0.0001));
         const falloff = atten * atten;
 
-        // Spot cone: narrows between outerCos and innerCos. A point light passes
-        // a zero-length axis, which signals "no cone" — cone stays 1 and the
-        // degenerate normalize is avoided (would otherwise be NaN).
+        // Spot cone: smoothstep-feathered falloff from outerCos (edge, 0) to innerCos (full, 1).
         const axisLen = std.length(axis);
-        let cone = 1.0;
-        if (axisLen > 0.0001) {
-            const safeAxis = d.vec3f(axis.x / axisLen, axis.y / axisLen, axis.z / axisLen);
-            const cosAngle = std.dot(safeAxis, d.vec3f(-dir.x, -dir.y, -dir.z));
-            cone = std.saturate((cosAngle - outerCos) / std.max(innerCos - outerCos, 0.0001));
-        }
+        const isSpot = axisLen > 0.0001;
+        const safeAxis = std.select(d.vec3f(0.0, 0.0, 1.0), axis, isSpot);
+        const cosAngle = std.dot(std.normalize(safeAxis), d.vec3f(-dir.x, -dir.y, -dir.z));
+        const spotCone = std.smoothstep(outerCos, innerCos, cosAngle);
+        const cone = std.select(1.0, spotCone, isSpot);
 
         const shadowFactor = 1.0;
         const scale = lambert * falloff * cone * intensity * shadowFactor;
         return d.vec3f(color.x * scale, color.y * scale, color.z * scale);
+    },
+);
+
+/**
+ * Reinhard tone map: rolls accumulated light smoothly toward white instead of
+ * hard-clipping at 1.0. Without it, summed lights flat-top to white and any
+ * gradient (e.g. a feathered spot edge) collapses into a thin visible ring.
+ */
+export const tonemap = tgpu.fn([d.vec3f], d.vec3f)(
+    function tonemap(c: d.v3f) {
+        'use gpu';
+        return d.vec3f(c.x / (1.0 + c.x), c.y / (1.0 + c.y), c.z / (1.0 + c.z));
     },
 );

@@ -9,7 +9,7 @@ import tgpu from 'typegpu';
 import * as d from 'typegpu/data';
 import * as std from 'typegpu/std';
 import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms, Light } from '../core/types';
-import { lightContribution } from '../shaders/utils';
+import { lightContribution, tonemap } from '../shaders/utils';
 
 /** Max point/spot lights the mesh shaders' storage buffer holds. */
 export const MAX_LIGHTS = 64;
@@ -157,13 +157,25 @@ export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataL
             baseColor.z * (u.ambientB + u.lightDirB * diff),
         );
 
-        // Dynamic point/spot lights — per-light math is the shared lightContribution fn.
+        // Dynamic point/spot lights — interpolate pos/dir by alpha, then the
+        // shared lightContribution fn does the per-light shading math.
         const count = u.lightCount;
+        const a = u.alpha;
         for (let i = d.u32(0); i < count; i++) {
             const L = meshLayout.$.lights[i];
+            const pos = d.vec3f(
+                std.mix(L.prevPosX, L.currPosX, a),
+                std.mix(L.prevPosY, L.currPosY, a),
+                std.mix(L.prevPosZ, L.currPosZ, a),
+            );
+            const axis = d.vec3f(
+                std.mix(L.prevDirX, L.currDirX, a),
+                std.mix(L.prevDirY, L.currDirY, a),
+                std.mix(L.prevDirZ, L.currDirZ, a),
+            );
             const c = lightContribution(
-                d.vec3f(L.posX, L.posY, L.posZ),
-                d.vec3f(L.dirX, L.dirY, L.dirZ),
+                pos,
+                axis,
                 d.vec3f(L.colorR, L.colorG, L.colorB),
                 d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos),
                 normal,
@@ -176,7 +188,8 @@ export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataL
             );
         }
 
-        return d.vec4f(acc.x, acc.y, acc.z, 1.0);
+        const mapped = tonemap(acc);
+        return d.vec4f(mapped.x, mapped.y, mapped.z, 1.0);
     });
 }
 
@@ -332,11 +345,22 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
         );
 
         const count = u.lightCount;
+        const a = u.alpha;
         for (let i = d.u32(0); i < count; i++) {
             const L = meshLayout.$.lights[i];
+            const pos = d.vec3f(
+                std.mix(L.prevPosX, L.currPosX, a),
+                std.mix(L.prevPosY, L.currPosY, a),
+                std.mix(L.prevPosZ, L.currPosZ, a),
+            );
+            const axis = d.vec3f(
+                std.mix(L.prevDirX, L.currDirX, a),
+                std.mix(L.prevDirY, L.currDirY, a),
+                std.mix(L.prevDirZ, L.currDirZ, a),
+            );
             const c = lightContribution(
-                d.vec3f(L.posX, L.posY, L.posZ),
-                d.vec3f(L.dirX, L.dirY, L.dirZ),
+                pos,
+                axis,
                 d.vec3f(L.colorR, L.colorG, L.colorB),
                 d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos),
                 normal,
@@ -349,7 +373,8 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
             );
         }
 
-        return d.vec4f(acc.x, acc.y, acc.z, texColor.w);
+        const mapped = tonemap(acc);
+        return d.vec4f(mapped.x, mapped.y, mapped.z, texColor.w);
     });
 }
 
@@ -521,8 +546,68 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
 }
 
 /**
- * Fragment shader for skinned meshes — reuses the textured fragment shader.
- * For untextured skinned meshes, reuse createMeshFragment.
+ * Fragment shader for untextured skinned meshes. The skinned vertex shader
+ * always emits `vUV` (location 2) because it is shared with the textured path,
+ * so this fragment must declare `vUV` in its `in` too, otherwise `vWorldPos`
+ * lands on location 2 and collides with the vertex's `vUV` (vec2 vs vec3). The
+ * UV is simply unused here. Lighting matches createMeshFragment.
  */
-export { createMeshFragment as createSkinnedMeshFragment };
+export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
+    return tgpu.fragmentFn({
+        in: {
+            vNormal: d.vec3f,
+            vColor: d.vec3f,
+            vUV: d.vec2f,
+            vWorldPos: d.vec3f,
+        },
+        out: d.vec4f,
+    })(function(input) {
+        const u = meshLayout.$.uniforms;
+        const baseColor = input.vColor;
+        const worldPos = input.vWorldPos;
+        const normal = std.normalize(input.vNormal);
+
+        const lightDir = std.normalize(d.vec3f(u.lightDirX, u.lightDirY, u.lightDirZ));
+        const diff = std.max(std.dot(normal, lightDir), 0.0) * u.lightDirIntensity;
+
+        let acc = d.vec3f(
+            baseColor.x * (u.ambientR + u.lightDirR * diff),
+            baseColor.y * (u.ambientG + u.lightDirG * diff),
+            baseColor.z * (u.ambientB + u.lightDirB * diff),
+        );
+
+        const count = u.lightCount;
+        const a = u.alpha;
+        for (let i = d.u32(0); i < count; i++) {
+            const L = meshLayout.$.lights[i];
+            const pos = d.vec3f(
+                std.mix(L.prevPosX, L.currPosX, a),
+                std.mix(L.prevPosY, L.currPosY, a),
+                std.mix(L.prevPosZ, L.currPosZ, a),
+            );
+            const axis = d.vec3f(
+                std.mix(L.prevDirX, L.currDirX, a),
+                std.mix(L.prevDirY, L.currDirY, a),
+                std.mix(L.prevDirZ, L.currDirZ, a),
+            );
+            const c = lightContribution(
+                pos,
+                axis,
+                d.vec3f(L.colorR, L.colorG, L.colorB),
+                d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos),
+                normal,
+                worldPos,
+            );
+            acc = d.vec3f(
+                acc.x + baseColor.x * c.x,
+                acc.y + baseColor.y * c.y,
+                acc.z + baseColor.z * c.z,
+            );
+        }
+
+        const mapped = tonemap(acc);
+        return d.vec4f(mapped.x, mapped.y, mapped.z, 1.0);
+    });
+}
+
 export { createTexturedMeshFragment as createSkinnedTexturedMeshFragment };

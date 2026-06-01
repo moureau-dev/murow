@@ -1957,6 +1957,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                     { binding: 2, resource: { buffer: this.rawSkinnedStaticBuffer } },
                     { binding: 3, resource: { buffer: this.rawSkinnedSlotIndexBuffer } },
                     { binding: 4, resource: { buffer: rawBoneBuffer } },
+                    { binding: 5, resource: { buffer: this.rawLightBuffer } },
                 ],
             });
 
@@ -2115,6 +2116,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 sDyn[base + DYN_PREV_RZ] = sDyn[base + DYN_CURR_RZ];
             }
         });
+
+        // Dynamic lights — snapshot curr -> prev so moving lights interpolate.
+        this.lights.storePrevious();
     }
 
     /** Resolve an instance's declared hitbox name to its Hitbox via the bucket's library. */

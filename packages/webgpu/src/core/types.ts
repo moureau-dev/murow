@@ -149,6 +149,10 @@ export const MESH_UNIFORM_FLOATS = 28;
  * buffer; the fragment shader loops `[0, lightCount)`. Kept f32-contiguous (no
  * vec types) to match the flat Float32Array the renderer uploads.
  *
+ * Position and direction carry `prev` + `curr` snapshots so the fragment shader
+ * can `mix(prev, curr, alpha)`, moving lights interpolate at render rate, the
+ * same as mesh instances, instead of snapping at the tick boundary.
+ *
  * `kind`: 1 = point, 2 = spot (0/directional is the global term in MeshUniforms).
  * `castsShadow` / `shadowMapIndex` are reserved for shadow-map support: the
  * fragment loop already multiplies each light by a shadow factor (currently
@@ -156,12 +160,18 @@ export const MESH_UNIFORM_FLOATS = 28;
  */
 export const Light = d.struct({
     kind: d.f32,
-    posX: d.f32,
-    posY: d.f32,
-    posZ: d.f32,
-    dirX: d.f32,
-    dirY: d.f32,
-    dirZ: d.f32,
+    currPosX: d.f32,
+    currPosY: d.f32,
+    currPosZ: d.f32,
+    prevPosX: d.f32,
+    prevPosY: d.f32,
+    prevPosZ: d.f32,
+    currDirX: d.f32,
+    currDirY: d.f32,
+    currDirZ: d.f32,
+    prevDirX: d.f32,
+    prevDirY: d.f32,
+    prevDirZ: d.f32,
     colorR: d.f32,
     colorG: d.f32,
     colorB: d.f32,
@@ -173,7 +183,7 @@ export const Light = d.struct({
     shadowMapIndex: d.f32,
 });
 
-export const LIGHT_FLOATS = 16;
+export const LIGHT_FLOATS = 22;
 
 export const LIGHT_KIND_POINT = 1;
 export const LIGHT_KIND_SPOT = 2;

@@ -187,5 +187,50 @@ describe('shader utils (CPU execution)', () => {
             );
             expect(outside.x).toBeCloseTo(0, 5);
         });
+
+        test('the cone edge is smoothstep-feathered, not a linear ramp', () => {
+            // Spot at the origin pointing down -Y. Sample surfaces on a sphere of
+            // fixed radius so distance (-> falloff) and the lambert term are
+            // identical across samples; only the cone angle differs. That isolates
+            // the cone term, so the contribution ratio reflects the falloff curve.
+            const R = 5;
+            const spotPos = d.vec3f(0, 0, 0);
+            const axis = d.vec3f(0, -1, 0);
+            // Wide band so a sample can sit at a known fraction t through it.
+            const outer = Math.cos(1.2);
+            const inner = Math.cos(0.2);
+            const params = d.vec4f(1, 100, inner, outer); // range >> R so falloff ~ constant
+
+            // Build a surface point whose light-to-surface angle puts it at a
+            // chosen `t` = (cosAngle - outer) / (inner - outer) through the band.
+            const sample = (t: number) => {
+                const cosAngle = outer + t * (inner - outer);
+                const ang = Math.acos(cosAngle);            // angle off the -Y axis
+                // surface position on the sphere at that polar angle
+                const sx = R * Math.sin(ang);
+                const sy = -R * Math.cos(ang);
+                // normal points back at the light so lambert is constant (=1-ish);
+                // use straight-up normal — lambert varies little and cancels in ratio.
+                const normal = d.vec3f(0, 1, 0);
+                const c = lightContribution(spotPos, axis, d.vec3f(1, 1, 1), params, normal, d.vec3f(sx, sy, 0));
+                return c.x;
+            };
+
+            // At t this shader returns cone = t*t*(3-2t). A linear ramp would give t.
+            // Compare an early-band sample (t=0.25) to a late one (t=0.75). With a
+            // linear cone the ratio would be 0.25/0.75 = 0.333; smoothstep pushes
+            // the early sample down hard (0.156/0.844 = 0.185), so the measured
+            // ratio sits well below the linear value. (Geometry makes lambert vary
+            // slightly between samples, so we assert the curve's shape, not an
+            // exact ratio.)
+            const t1 = 0.25, t2 = 0.75;
+            const ratio = sample(t1) / sample(t2);
+            const linearRatio = t1 / t2;                    // 0.333
+
+            // A linear edge would give ~0.333; smoothstep gives noticeably less.
+            // The early-band contribution is suppressed -> the edge is feathered.
+            expect(ratio).toBeLessThan(linearRatio - 0.1);
+            expect(ratio).toBeGreaterThan(0);
+        });
     });
 });

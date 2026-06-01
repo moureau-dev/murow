@@ -4,6 +4,17 @@ import { LIGHT_FLOATS, MESH_UNIFORM_FLOATS, MESH_UNIFORM_LIGHT_OFFSET } from '..
 
 const L = MESH_UNIFORM_LIGHT_OFFSET;
 
+// Light record field offsets (mirror the Light struct in core/types).
+const F = {
+    KIND: 0,
+    CURR_POS_X: 1, CURR_POS_Y: 2, CURR_POS_Z: 3,
+    PREV_POS_X: 4, PREV_POS_Y: 5, PREV_POS_Z: 6,
+    CURR_DIR_X: 7, CURR_DIR_Y: 8, CURR_DIR_Z: 9,
+    PREV_DIR_X: 10, PREV_DIR_Y: 11, PREV_DIR_Z: 12,
+    COL_R: 13, COL_G: 14, COL_B: 15, INTENSITY: 16, RANGE: 17,
+    INNER_COS: 18, OUTER_COS: 19, CASTS_SHADOW: 20, SHADOW_INDEX: 21,
+} as const;
+
 /** Read field f of the i-th packed record. */
 function packedField(data: Float32Array, record: number, field: number): number {
     return data[record * LIGHT_FLOATS + field];
@@ -16,39 +27,66 @@ describe('LightSystem', () => {
             ls.add({ type: 'point', position: [1, 2, 3], color: [0.5, 0.6, 0.7], intensity: 4, range: 9 });
             const { data, count } = ls.pack();
             expect(count).toBe(1);
-            expect(packedField(data, 0, 0)).toBe(1);   // kind = point
-            expect(packedField(data, 0, 1)).toBe(1);   // pos x
-            expect(packedField(data, 0, 2)).toBe(2);
-            expect(packedField(data, 0, 3)).toBe(3);
-            expect(packedField(data, 0, 7)).toBeCloseTo(0.5); // color r
-            expect(packedField(data, 0, 10)).toBe(4);  // intensity
-            expect(packedField(data, 0, 11)).toBe(9);  // range
+            expect(packedField(data, 0, F.KIND)).toBe(1);   // point
+            expect(packedField(data, 0, F.CURR_POS_X)).toBe(1);
+            expect(packedField(data, 0, F.CURR_POS_Y)).toBe(2);
+            expect(packedField(data, 0, F.CURR_POS_Z)).toBe(3);
+            expect(packedField(data, 0, F.COL_R)).toBeCloseTo(0.5);
+            expect(packedField(data, 0, F.INTENSITY)).toBe(4);
+            expect(packedField(data, 0, F.RANGE)).toBe(9);
+        });
+
+        test('a freshly added light seeds prev = curr (no spawn lerp)', () => {
+            const ls = new LightSystem(8);
+            ls.add({ type: 'spot', position: [1, 2, 3], direction: [0, -1, 0] });
+            const { data } = ls.pack();
+            expect(packedField(data, 0, F.PREV_POS_X)).toBe(1);
+            expect(packedField(data, 0, F.PREV_POS_Y)).toBe(2);
+            expect(packedField(data, 0, F.PREV_POS_Z)).toBe(3);
+            expect(packedField(data, 0, F.PREV_DIR_Y)).toBe(-1);
         });
 
         test('a point light disables the cone (innerCos=1, outerCos=-1)', () => {
             const ls = new LightSystem(8);
             ls.add({ type: 'point', position: [0, 0, 0] });
             const { data } = ls.pack();
-            expect(packedField(data, 0, 12)).toBe(1);
-            expect(packedField(data, 0, 13)).toBe(-1);
+            expect(packedField(data, 0, F.INNER_COS)).toBe(1);
+            expect(packedField(data, 0, F.OUTER_COS)).toBe(-1);
         });
 
-        test('a spot light packs direction and cone cosines', () => {
+        test('a spot light derives cone cosines from angle + smoothness', () => {
             const ls = new LightSystem(8);
-            ls.add({ type: 'spot', position: [0, 5, 0], direction: [0, -1, 0], innerAngle: 0.3, outerAngle: 0.5 });
+            // angle 0.5 (outer edge), smoothness 0.4 -> inner edge at 0.5*(1-0.4)=0.3
+            ls.add({ type: 'spot', position: [0, 5, 0], direction: [0, -1, 0], angle: 0.5, smoothness: 0.4 });
             const { data } = ls.pack();
-            expect(packedField(data, 0, 0)).toBe(2);   // kind = spot
-            expect(packedField(data, 0, 5)).toBe(-1);  // dir y
-            expect(packedField(data, 0, 12)).toBeCloseTo(Math.cos(0.3));
-            expect(packedField(data, 0, 13)).toBeCloseTo(Math.cos(0.5));
+            expect(packedField(data, 0, F.KIND)).toBe(2);   // spot
+            expect(packedField(data, 0, F.CURR_DIR_Y)).toBe(-1);
+            expect(packedField(data, 0, F.OUTER_COS)).toBeCloseTo(Math.cos(0.5));
+            expect(packedField(data, 0, F.INNER_COS)).toBeCloseTo(Math.cos(0.3));
+        });
+
+        test('smoothness 0 is a hard edge (inner == outer)', () => {
+            const ls = new LightSystem(8);
+            ls.add({ type: 'spot', position: [0, 5, 0], direction: [0, -1, 0], angle: 0.5, smoothness: 0 });
+            const { data } = ls.pack();
+            expect(packedField(data, 0, F.INNER_COS)).toBeCloseTo(packedField(data, 0, F.OUTER_COS));
+            expect(packedField(data, 0, F.OUTER_COS)).toBeCloseTo(Math.cos(0.5));
+        });
+
+        test('smoothness 1 fades from the cone center (inner cos = 1)', () => {
+            const ls = new LightSystem(8);
+            ls.add({ type: 'spot', position: [0, 5, 0], direction: [0, -1, 0], angle: 0.5, smoothness: 1 });
+            const { data } = ls.pack();
+            expect(packedField(data, 0, F.INNER_COS)).toBeCloseTo(1); // cos(0) = full from center
+            expect(packedField(data, 0, F.OUTER_COS)).toBeCloseTo(Math.cos(0.5));
         });
 
         test('reserved shadow fields default to 0 / -1', () => {
             const ls = new LightSystem(8);
             ls.add({ type: 'point', position: [0, 0, 0] });
             const { data } = ls.pack();
-            expect(packedField(data, 0, 14)).toBe(0);   // castsShadow
-            expect(packedField(data, 0, 15)).toBe(-1);  // shadowMapIndex
+            expect(packedField(data, 0, F.CASTS_SHADOW)).toBe(0);
+            expect(packedField(data, 0, F.SHADOW_INDEX)).toBe(-1);
         });
 
         test('throws past capacity', () => {
@@ -68,10 +106,10 @@ describe('LightSystem', () => {
             h.intensity = 7;
             h.range = 20;
             const { data } = ls.pack();
-            expect(packedField(data, 0, 1)).toBe(10);
-            expect(packedField(data, 0, 7)).toBeCloseTo(0.1);
-            expect(packedField(data, 0, 10)).toBe(7);
-            expect(packedField(data, 0, 11)).toBe(20);
+            expect(packedField(data, 0, F.CURR_POS_X)).toBe(10);
+            expect(packedField(data, 0, F.COL_R)).toBeCloseTo(0.1);
+            expect(packedField(data, 0, F.INTENSITY)).toBe(7);
+            expect(packedField(data, 0, F.RANGE)).toBe(20);
             expect(h.intensity).toBe(7);
             expect(h.range).toBe(20);
         });
@@ -95,6 +133,36 @@ describe('LightSystem', () => {
             expect(h.color[0]).toBeCloseTo(0.1);
         });
 
+        test('angle and smoothness are readable and live-settable', () => {
+            const ls = new LightSystem(8);
+            const h = ls.add({ type: 'spot', position: [0, 0, 0], direction: [0, -1, 0], angle: 0.5, smoothness: 0.4 });
+            expect(h.angle).toBeCloseTo(0.5);
+            expect(h.smoothness).toBeCloseTo(0.4);
+
+            h.smoothness = 0;   // hard edge -> inner cos == outer cos
+            let data = ls.pack().data;
+            expect(packedField(data, 0, F.INNER_COS)).toBeCloseTo(packedField(data, 0, F.OUTER_COS));
+            expect(h.smoothness).toBe(0);
+
+            h.smoothness = 1;   // fades from center -> inner cos = 1
+            data = ls.pack().data;
+            expect(packedField(data, 0, F.INNER_COS)).toBeCloseTo(1);
+
+            h.angle = 0.8;      // widen the cone -> outer cos = cos(0.8)
+            data = ls.pack().data;
+            expect(h.angle).toBeCloseTo(0.8);
+            expect(packedField(data, 0, F.OUTER_COS)).toBeCloseTo(Math.cos(0.8));
+        });
+
+        test('smoothness is clamped to 0..1', () => {
+            const ls = new LightSystem(8);
+            const h = ls.add({ type: 'spot', position: [0, 0, 0], direction: [0, -1, 0], angle: 0.5, smoothness: 0.5 });
+            h.smoothness = 5;
+            expect(h.smoothness).toBe(1);
+            h.smoothness = -3;
+            expect(h.smoothness).toBe(0);
+        });
+
         test('destroy frees the slot and drops it from the pack', () => {
             const ls = new LightSystem(8);
             const a = ls.add({ type: 'point', position: [1, 0, 0] });
@@ -105,6 +173,54 @@ describe('LightSystem', () => {
             // double destroy is a no-op
             expect(() => a.destroy()).not.toThrow();
             expect(ls.count).toBe(1);
+        });
+    });
+
+    describe('interpolation', () => {
+        test('storePrevious snapshots curr into prev, leaving curr untouched', () => {
+            const ls = new LightSystem(8);
+            const h = ls.add({ type: 'point', position: [0, 0, 0] });
+            h.setPosition(10, 20, 30);
+            // prev still holds the spawn position until we snapshot.
+            let data = ls.pack().data;
+            expect(packedField(data, 0, F.PREV_POS_X)).toBe(0);
+            expect(packedField(data, 0, F.CURR_POS_X)).toBe(10);
+
+            ls.storePrevious();
+            data = ls.pack().data;
+            expect(packedField(data, 0, F.PREV_POS_X)).toBe(10);
+            expect(packedField(data, 0, F.PREV_POS_Y)).toBe(20);
+            expect(packedField(data, 0, F.CURR_POS_X)).toBe(10); // curr unchanged
+        });
+
+        test('a move after storePrevious leaves prev and curr distinct (lerp range)', () => {
+            const ls = new LightSystem(8);
+            const h = ls.add({ type: 'point', position: [0, 0, 0] });
+            ls.storePrevious();      // prev = curr = 0
+            h.setPosition(4, 0, 0);  // curr = 4, prev still 0
+            const data = ls.pack().data;
+            expect(packedField(data, 0, F.PREV_POS_X)).toBe(0);
+            expect(packedField(data, 0, F.CURR_POS_X)).toBe(4);
+        });
+
+        test('teleport snaps prev to curr (no interpolation)', () => {
+            const ls = new LightSystem(8);
+            const h = ls.add({ type: 'point', position: [0, 0, 0] });
+            ls.storePrevious();
+            h.teleport(100, 0, 0);
+            const data = ls.pack().data;
+            expect(packedField(data, 0, F.PREV_POS_X)).toBe(100);
+            expect(packedField(data, 0, F.CURR_POS_X)).toBe(100);
+        });
+
+        test('storePrevious also snapshots direction', () => {
+            const ls = new LightSystem(8);
+            const h = ls.add({ type: 'spot', position: [0, 0, 0], direction: [0, -1, 0] });
+            h.setDirection(1, 0, 0);
+            ls.storePrevious();
+            const data = ls.pack().data;
+            expect(packedField(data, 0, F.PREV_DIR_X)).toBe(1);
+            expect(packedField(data, 0, F.CURR_DIR_X)).toBe(1);
         });
     });
 

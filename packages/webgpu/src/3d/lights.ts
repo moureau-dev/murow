@@ -33,10 +33,14 @@ export type LightSpec =
         color?: readonly [r: number, g: number, b: number];
         intensity?: number;
         range?: number;
-        /** Inner cone half-angle (radians); full brightness inside. Defaults to `0.3`. */
-        innerAngle?: number;
-        /** Outer cone half-angle (radians); falls to zero by here. Defaults to `0.5`. */
-        outerAngle?: number;
+        /** Cone half-angle in radians (the outer edge). Defaults to `0.5`. */
+        angle?: number;
+        /**
+         * Edge softness, 0..1. `0` = hard edge at `angle`; `1` = the cone fades
+         * all the way from its center. The feathered band is `angle * smoothness`
+         * wide, measured inward from the edge. Defaults to `0.5`.
+         */
+        smoothness?: number;
     };
 
 /**
@@ -51,21 +55,31 @@ export interface LightHandle {
     readonly slot: number;
     setPosition(x: number, y: number, z: number): void;
     setDirection(x: number, y: number, z: number): void;
+    /** Snap to a position without interpolating from the previous one (use after a discontinuous move). */
+    teleport(x: number, y: number, z: number): void;
     setColor(r: number, g: number, b: number): void;
     readonly position: readonly [number, number, number];
     readonly direction: readonly [number, number, number];
     readonly color: readonly [number, number, number];
     intensity: number;
     range: number;
+    /** Cone half-angle in radians (spot only; `0` for point lights). Readable + settable. */
+    angle: number;
+    /** Edge softness 0..1 (spot only). `0` = hard edge, `1` = fades from center. Readable + settable. */
+    smoothness: number;
     /** Whether the light contributes this frame. Toggling does not free the slot. */
     enabled: boolean;
     destroy(): void;
 }
 
 /** Light field offsets within a record (see the `Light` struct in core/types). */
-const KIND = 0, POS_X = 1, POS_Y = 2, POS_Z = 3, DIR_X = 4, DIR_Y = 5, DIR_Z = 6;
-const COL_R = 7, COL_G = 8, COL_B = 9, INTENSITY = 10, RANGE = 11;
-const INNER_COS = 12, OUTER_COS = 13, CASTS_SHADOW = 14, SHADOW_INDEX = 15;
+const KIND = 0;
+const CURR_POS_X = 1, CURR_POS_Y = 2, CURR_POS_Z = 3;
+const PREV_POS_X = 4, PREV_POS_Y = 5, PREV_POS_Z = 6;
+const CURR_DIR_X = 7, CURR_DIR_Y = 8, CURR_DIR_Z = 9;
+const PREV_DIR_X = 10, PREV_DIR_Y = 11, PREV_DIR_Z = 12;
+const COL_R = 13, COL_G = 14, COL_B = 15, INTENSITY = 16, RANGE = 17;
+const INNER_COS = 18, OUTER_COS = 19, CASTS_SHADOW = 20, SHADOW_INDEX = 21;
 
 export class LightSystem {
     private readonly data: Float32Array;
@@ -74,6 +88,9 @@ export class LightSystem {
     private readonly handles: (LightHandle | null)[];
     /** Dense scratch buffer of enabled lights, packed each frame for upload. */
     private readonly uploadData: Float32Array;
+    /** CPU-side spot cone params per slot (the GPU only needs the derived cosines). */
+    private readonly angle: Float32Array;
+    private readonly smoothness: Float32Array;
 
     // Global directional + ambient terms (the classic fixed look; now configurable).
     private dirDir: [number, number, number] = [0.3, 0.8, 0.5];
@@ -87,6 +104,8 @@ export class LightSystem {
         this.enabled = new Uint8Array(maxLights).fill(1);
         this.handles = new Array(maxLights).fill(null);
         this.uploadData = new Float32Array(maxLights * LIGHT_FLOATS);
+        this.angle = new Float32Array(maxLights);
+        this.smoothness = new Float32Array(maxLights);
     }
 
     /** Add a dynamic point or spot light. Throws past `maxLights`. */
@@ -101,6 +120,8 @@ export class LightSystem {
         const enabledArr = this.enabled;
         const slots = this.slots;
         const handles = this.handles;
+        const angleArr = this.angle;
+        const smoothArr = this.smoothness;
         const base = slot * LIGHT_FLOATS;
         let destroyed = false;
 
@@ -111,15 +132,19 @@ export class LightSystem {
 
         const handle: LightHandle = {
             slot,
-            setPosition(x, y, z) { data[base + POS_X] = x; data[base + POS_Y] = y; data[base + POS_Z] = z; },
-            setDirection(x, y, z) { data[base + DIR_X] = x; data[base + DIR_Y] = y; data[base + DIR_Z] = z; },
+            setPosition(x, y, z) { data[base + CURR_POS_X] = x; data[base + CURR_POS_Y] = y; data[base + CURR_POS_Z] = z; },
+            setDirection(x, y, z) { data[base + CURR_DIR_X] = x; data[base + CURR_DIR_Y] = y; data[base + CURR_DIR_Z] = z; },
+            teleport(x, y, z) {
+                data[base + CURR_POS_X] = x; data[base + CURR_POS_Y] = y; data[base + CURR_POS_Z] = z;
+                data[base + PREV_POS_X] = x; data[base + PREV_POS_Y] = y; data[base + PREV_POS_Z] = z;
+            },
             setColor(r, g, b) { data[base + COL_R] = r; data[base + COL_G] = g; data[base + COL_B] = b; },
             get position(): readonly [number, number, number] {
-                posOut[0] = data[base + POS_X]; posOut[1] = data[base + POS_Y]; posOut[2] = data[base + POS_Z];
+                posOut[0] = data[base + CURR_POS_X]; posOut[1] = data[base + CURR_POS_Y]; posOut[2] = data[base + CURR_POS_Z];
                 return posOut;
             },
             get direction(): readonly [number, number, number] {
-                dirOut[0] = data[base + DIR_X]; dirOut[1] = data[base + DIR_Y]; dirOut[2] = data[base + DIR_Z];
+                dirOut[0] = data[base + CURR_DIR_X]; dirOut[1] = data[base + CURR_DIR_Y]; dirOut[2] = data[base + CURR_DIR_Z];
                 return dirOut;
             },
             get color(): readonly [number, number, number] {
@@ -130,6 +155,19 @@ export class LightSystem {
             set intensity(v) { data[base + INTENSITY] = v; },
             get range() { return data[base + RANGE]; },
             set range(v) { data[base + RANGE] = v; },
+            get angle() { return angleArr[slot]; },
+            set angle(v) {
+                angleArr[slot] = v;
+                const { innerCos, outerCos } = coneCosines(v, smoothArr[slot]);
+                data[base + INNER_COS] = innerCos; data[base + OUTER_COS] = outerCos;
+            },
+            get smoothness() { return smoothArr[slot]; },
+            set smoothness(v) {
+                const s = v < 0 ? 0 : v > 1 ? 1 : v;
+                smoothArr[slot] = s;
+                const { innerCos, outerCos } = coneCosines(angleArr[slot], s);
+                data[base + INNER_COS] = innerCos; data[base + OUTER_COS] = outerCos;
+            },
             get enabled() { return enabledArr[slot] === 1; },
             set enabled(v) { enabledArr[slot] = v ? 1 : 0; },
             destroy() {
@@ -210,15 +248,37 @@ export class LightSystem {
         new Uint32Array(uniformData.buffer)[offset + 10] = count;
     }
 
-    /** Write a light spec into its CPU slot. */
+    /**
+     * Snapshot every live light's current position/direction into its prev
+     * slot. Called from the renderer's `storePreviousState()` in `pre-tick`, so
+     * the shader can `mix(prev, curr, alpha)` and moving lights interpolate at
+     * render rate instead of snapping at the tick boundary.
+     */
+    storePrevious(): void {
+        const active = this.slots.activeSlots;
+        const size = this.slots.size;
+        const data = this.data;
+        for (let i = 0; i < size; i++) {
+            const base = active[i]! * LIGHT_FLOATS;
+            data[base + PREV_POS_X] = data[base + CURR_POS_X];
+            data[base + PREV_POS_Y] = data[base + CURR_POS_Y];
+            data[base + PREV_POS_Z] = data[base + CURR_POS_Z];
+            data[base + PREV_DIR_X] = data[base + CURR_DIR_X];
+            data[base + PREV_DIR_Y] = data[base + CURR_DIR_Y];
+            data[base + PREV_DIR_Z] = data[base + CURR_DIR_Z];
+        }
+    }
+
+    /** Write a light spec into its CPU slot. Prev is seeded to curr (no spawn lerp). */
     private writeSlot(slot: number, spec: LightSpec): void {
         const base = slot * LIGHT_FLOATS;
         const data = this.data;
         const color = spec.color ?? [1, 1, 1];
+        const [px, py, pz] = spec.position;
         data[base + KIND] = spec.type === 'spot' ? LIGHT_KIND_SPOT : LIGHT_KIND_POINT;
-        data[base + POS_X] = spec.position[0];
-        data[base + POS_Y] = spec.position[1];
-        data[base + POS_Z] = spec.position[2];
+        data[base + CURR_POS_X] = px; data[base + PREV_POS_X] = px;
+        data[base + CURR_POS_Y] = py; data[base + PREV_POS_Y] = py;
+        data[base + CURR_POS_Z] = pz; data[base + PREV_POS_Z] = pz;
         data[base + COL_R] = color[0];
         data[base + COL_G] = color[1];
         data[base + COL_B] = color[2];
@@ -227,18 +287,38 @@ export class LightSystem {
         data[base + CASTS_SHADOW] = 0;   // reserved
         data[base + SHADOW_INDEX] = -1;  // reserved
         if (spec.type === 'spot') {
-            data[base + DIR_X] = spec.direction[0];
-            data[base + DIR_Y] = spec.direction[1];
-            data[base + DIR_Z] = spec.direction[2];
-            data[base + INNER_COS] = Math.cos(spec.innerAngle ?? 0.3);
-            data[base + OUTER_COS] = Math.cos(spec.outerAngle ?? 0.5);
+            const [dx, dy, dz] = spec.direction;
+            data[base + CURR_DIR_X] = dx; data[base + PREV_DIR_X] = dx;
+            data[base + CURR_DIR_Y] = dy; data[base + PREV_DIR_Y] = dy;
+            data[base + CURR_DIR_Z] = dz; data[base + PREV_DIR_Z] = dz;
+            const angle = spec.angle ?? 0.5;
+            const smoothness = Math.min(1, Math.max(0, spec.smoothness ?? 0.5));
+            this.angle[slot] = angle;
+            this.smoothness[slot] = smoothness;
+            const { innerCos, outerCos } = coneCosines(angle, smoothness);
+            data[base + INNER_COS] = innerCos;
+            data[base + OUTER_COS] = outerCos;
         } else {
-            data[base + DIR_X] = 0;
-            data[base + DIR_Y] = 0;
-            data[base + DIR_Z] = 0;
+            data[base + CURR_DIR_X] = 0; data[base + PREV_DIR_X] = 0;
+            data[base + CURR_DIR_Y] = 0; data[base + PREV_DIR_Y] = 0;
+            data[base + CURR_DIR_Z] = 0; data[base + PREV_DIR_Z] = 0;
+            this.angle[slot] = 0;
+            this.smoothness[slot] = 0;
             // Point lights disable the cone term (zero axis -> cone = 1 in the shader).
             data[base + INNER_COS] = 1;
             data[base + OUTER_COS] = -1;
         }
     }
+}
+
+/**
+ * Derive the inner/outer cone cosines the shader reads from a high-level cone
+ * `angle` (half-extent, radians) and `smoothness` (0..1). The feathered band is
+ * `angle * smoothness` wide, measured inward from the edge: smoothness 0 makes
+ * inner == outer (hard edge), 1 makes the inner angle 0 (fades from center).
+ */
+function coneCosines(angle: number, smoothness: number): { innerCos: number; outerCos: number } {
+    const outerCos = Math.cos(angle);
+    const innerCos = Math.cos(angle * (1 - smoothness));
+    return { innerCos, outerCos };
 }
