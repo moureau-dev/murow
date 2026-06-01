@@ -1,6 +1,6 @@
 {
   "name": "murow",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A lightweight TypeScript game engine for server-authoritative multiplayer games",
   "types": "dist/types/index.d.ts",
   "type": "module",
