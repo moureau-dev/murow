@@ -1,0 +1,12 @@
+{
+  "name": "@murow/website",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "start": "newstack start",
+    "build": "newstack build --mode=ssg"
+  },
+  "dependencies": {
+    "@moureau/newstack": "latest"
+  }
+}

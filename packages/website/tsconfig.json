@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "lib": [
+      "es2017",
+      "DOM"
+    ],
+    "strict": false,
+    "noImplicitAny": false,
+    "jsx": "preserve",
+    "skipLibCheck": true,
+    "downlevelIteration": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "typeRoots": [
+      "./node_modules/@types",
+      "./src/@types"
+    ]
+  },
+  "exclude": [
+    "node_modules"
+  ]
+}
