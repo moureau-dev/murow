@@ -28,7 +28,7 @@ import type { AnyWgslData, AnyData } from 'typegpu/data';
 import { d, std } from '../shaders/typegpu';
 import type { BuiltInGeometry, GeometryData } from './built-in';
 import { resolveBuiltInGeometry } from './built-in';
-import { FreeList } from 'murow/core/free-list';
+import { SlotMap } from 'murow/core/slot-map';
 import { attachShaderMetadata } from '../shaders/runtime-transpile';
 import type { ComputeKernel } from '../compute/compute-builder';
 
@@ -188,7 +188,7 @@ export class CustomGeometry<
     readonly geometryData: GeometryData;
 
     private root: TgpuRoot;
-    private freeList: FreeList;
+    private slots: SlotMap;
     private layoutConfig: InstanceLayoutConfig<TDynamic, TStatic>;
 
     private dynamicFieldNames: string[];
@@ -205,9 +205,6 @@ export class CustomGeometry<
     private _isComputeSourced = false;
     private _drawCount = 0;
 
-    private activeSlots: Uint32Array;
-    private activeCount = 0;
-    private slotToActive: Int32Array;
     private _ctx: InstanceContext<TDynamic, TStatic>;
 
     private dynamicBuffer: TgpuBuffer<AnyWgslData>;
@@ -243,7 +240,7 @@ export class CustomGeometry<
         this.staticFloatsPerInstance = 0;
         for (const n of this.staticFieldNames) this.staticFloatsPerInstance += getFieldFloats(layoutConfig.static[n]);
 
-        this.freeList = new FreeList(maxInstances);
+        this.slots = new SlotMap(maxInstances);
         this.dynamicData = new Float32Array(maxInstances * this.dynamicFloatsPerInstance);
         this.staticData = new Float32Array(maxInstances * this.staticFloatsPerInstance);
         this.uniformValues = { ...uniformValues };
@@ -256,8 +253,6 @@ export class CustomGeometry<
         this.canvas = canvas;
         this.clearColor = clearColor;
 
-        this.activeSlots = new Uint32Array(maxInstances);
-        this.slotToActive = new Int32Array(maxInstances).fill(-1);
         this._ctx = new InstanceContext<TDynamic, TStatic>();
         this._isComputeSourced = isComputeSourced;
         if (isComputeSourced) this._drawCount = maxInstances;
@@ -272,19 +267,13 @@ export class CustomGeometry<
     }
 
     addInstance(data: FieldValues<TDynamic> & FieldValues<TStatic>): number {
-        const slot = this.freeList.allocate();
+        const slot = this.slots.add();
         if (slot === -1) throw new Error(`Max instances (${this.maxInstances}) reached for "${this.name}"`);
         this.setInstanceData(slot, data);
-
-        this.activeSlots[this.activeCount] = slot;
-        this.slotToActive[slot] = this.activeCount;
-        this.activeCount++;
-
         return slot;
     }
 
     removeInstance(slot: number): void {
-        this.freeList.free(slot);
         const dynBase = slot * this.dynamicFloatsPerInstance;
         const statBase = slot * this.staticFloatsPerInstance;
         this.dynamicData.fill(0, dynBase, dynBase + this.dynamicFloatsPerInstance);
@@ -292,17 +281,7 @@ export class CustomGeometry<
         this._dynamicDirty = true;
         this._staticDirty = true;
 
-        const activeIdx = this.slotToActive[slot];
-        if (activeIdx !== -1) {
-            const lastIdx = this.activeCount - 1;
-            if (activeIdx !== lastIdx) {
-                const lastSlot = this.activeSlots[lastIdx];
-                this.activeSlots[activeIdx] = lastSlot;
-                this.slotToActive[lastSlot] = activeIdx;
-            }
-            this.slotToActive[slot] = -1;
-            this.activeCount--;
-        }
+        this.slots.remove(slot);
     }
 
     setInstanceData(slot: number, data: FieldValues<TDynamic> & FieldValues<TStatic>): void {
@@ -359,7 +338,7 @@ export class CustomGeometry<
     }
 
     getActiveCount(): number {
-        return this.freeList.getAllocatedCount();
+        return this.slots.size;
     }
 
     updateAll(callback: (ctx: InstanceContext<TDynamic, TStatic>, slot: number) => void): void {
@@ -367,10 +346,10 @@ export class CustomGeometry<
             this.dynamicFloatsPerInstance, this.staticFloatsPerInstance,
             this.dynamicFieldNames, this.staticFieldNames, this.layoutConfig);
 
-        const count = this.activeCount;
-        const slots = this.activeSlots;
+        const count = this.slots.size;
+        const slots = this.slots.activeSlots;
         for (let i = 0; i < count; i++) {
-            const slot = slots[i];
+            const slot = slots[i]!;
             this._ctx._setSlot(slot);
             callback(this._ctx, slot);
         }
@@ -381,7 +360,7 @@ export class CustomGeometry<
 
     render(): void {
         const device = this.root.device;
-        const count = this._isComputeSourced ? this._drawCount : this.freeList.getAllocatedCount();
+        const count = this._isComputeSourced ? this._drawCount : this.slots.size;
         if (count === 0) return;
 
         const context = this.canvas.getContext('webgpu');

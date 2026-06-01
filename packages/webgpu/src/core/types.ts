@@ -124,7 +124,59 @@ export const MeshUniforms = d.struct({
     lightDirX: d.f32,
     lightDirY: d.f32,
     lightDirZ: d.f32,
+    lightDirR: d.f32,
+    lightDirG: d.f32,
+    lightDirB: d.f32,
+    lightDirIntensity: d.f32,
+    ambientR: d.f32,
+    ambientG: d.f32,
+    ambientB: d.f32,
+    lightCount: d.u32,
 });
+
+// Float offsets into MeshUniforms, named so the renderer never hard-codes them.
+/** viewProjection occupies floats [0, 16). */
+export const MESH_UNIFORM_ALPHA_OFFSET = 16;
+/** The directional/ambient/count block starts right after `alpha`. */
+export const MESH_UNIFORM_LIGHT_OFFSET = 17;
+/** Total f32 slots in MeshUniforms (mat4x4 16 + alpha 1 + 10 light terms + count 1). */
+export const MESH_UNIFORM_FLOATS = 28;
+
+// --- 3D Dynamic Lights ---
+
+/**
+ * Point/spot light record. One entry per slot in the renderer's light storage
+ * buffer; the fragment shader loops `[0, lightCount)`. Kept f32-contiguous (no
+ * vec types) to match the flat Float32Array the renderer uploads.
+ *
+ * `kind`: 1 = point, 2 = spot (0/directional is the global term in MeshUniforms).
+ * `castsShadow` / `shadowMapIndex` are reserved for shadow-map support: the
+ * fragment loop already multiplies each light by a shadow factor (currently
+ * 1.0), so a shadow pass can populate these without reshaping the buffer.
+ */
+export const Light = d.struct({
+    kind: d.f32,
+    posX: d.f32,
+    posY: d.f32,
+    posZ: d.f32,
+    dirX: d.f32,
+    dirY: d.f32,
+    dirZ: d.f32,
+    colorR: d.f32,
+    colorG: d.f32,
+    colorB: d.f32,
+    intensity: d.f32,
+    range: d.f32,
+    innerCos: d.f32,
+    outerCos: d.f32,
+    castsShadow: d.f32,
+    shadowMapIndex: d.f32,
+});
+
+export const LIGHT_FLOATS = 16;
+
+export const LIGHT_KIND_POINT = 1;
+export const LIGHT_KIND_SPOT = 2;
 
 // --- GPU Skeletal Animation Structs ---
 

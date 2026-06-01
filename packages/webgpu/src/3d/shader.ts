@@ -8,7 +8,11 @@
 import tgpu from 'typegpu';
 import * as d from 'typegpu/data';
 import * as std from 'typegpu/std';
-import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms } from '../core/types';
+import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms, Light } from '../core/types';
+import { lightContribution } from '../shaders/utils';
+
+/** Max point/spot lights the mesh shaders' storage buffer holds. */
+export const MAX_LIGHTS = 64;
 
 export function createMeshLayout(maxInstances: number) {
     return tgpu.bindGroupLayout({
@@ -16,6 +20,7 @@ export function createMeshLayout(maxInstances: number) {
         dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
         staticInstances: { storage: d.arrayOf(StaticMesh, maxInstances) },
         slotIndices: { storage: d.arrayOf(d.u32, maxInstances) },
+        lights: { storage: d.arrayOf(Light, MAX_LIGHTS) },
     });
 }
 
@@ -32,6 +37,7 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             pos: d.builtin.position,
             vNormal: d.vec3f,
             vColor: d.vec3f,
+            vWorldPos: d.vec3f,
         },
     })(function(input) {
         const instanceIndex = input.instanceIndex;
@@ -122,35 +128,55 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             pos: clipPos,
             vNormal: nRx,
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
+            vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
         };
     });
 }
 
-export function createMeshFragment(meshLayout: MeshDataLayout) {
+export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout) {
     return tgpu.fragmentFn({
         in: {
             vNormal: d.vec3f,
             vColor: d.vec3f,
+            vWorldPos: d.vec3f,
         },
         out: d.vec4f,
     })(function(input) {
+        const u = meshLayout.$.uniforms;
+        const baseColor = input.vColor;
+        const worldPos = input.vWorldPos;
         const normal = std.normalize(input.vNormal);
-        const lightDir = std.normalize(d.vec3f(
-            meshLayout.$.uniforms.lightDirX,
-            meshLayout.$.uniforms.lightDirY,
-            meshLayout.$.uniforms.lightDirZ,
-        ));
 
-        const diff = std.max(std.dot(normal, lightDir), 0.0);
-        const ambient = std.mul(input.vColor, 0.3);
-        const diffuse = std.mul(input.vColor, diff);
+        // Fixed directional light (the engine's classic look) + ambient.
+        const lightDir = std.normalize(d.vec3f(u.lightDirX, u.lightDirY, u.lightDirZ));
+        const diff = std.max(std.dot(normal, lightDir), 0.0) * u.lightDirIntensity;
 
-        return d.vec4f(
-            std.add(ambient.x, diffuse.x),
-            std.add(ambient.y, diffuse.y),
-            std.add(ambient.z, diffuse.z),
-            1.0,
+        let acc = d.vec3f(
+            baseColor.x * (u.ambientR + u.lightDirR * diff),
+            baseColor.y * (u.ambientG + u.lightDirG * diff),
+            baseColor.z * (u.ambientB + u.lightDirB * diff),
         );
+
+        // Dynamic point/spot lights — per-light math is the shared lightContribution fn.
+        const count = u.lightCount;
+        for (let i = d.u32(0); i < count; i++) {
+            const L = meshLayout.$.lights[i];
+            const c = lightContribution(
+                d.vec3f(L.posX, L.posY, L.posZ),
+                d.vec3f(L.dirX, L.dirY, L.dirZ),
+                d.vec3f(L.colorR, L.colorG, L.colorB),
+                d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos),
+                normal,
+                worldPos,
+            );
+            acc = d.vec3f(
+                acc.x + baseColor.x * c.x,
+                acc.y + baseColor.y * c.y,
+                acc.z + baseColor.z * c.z,
+            );
+        }
+
+        return d.vec4f(acc.x, acc.y, acc.z, 1.0);
     });
 }
 
@@ -178,6 +204,7 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
             vNormal: d.vec3f,
             vColor: d.vec3f,
             vUV: d.vec2f,
+            vWorldPos: d.vec3f,
         },
     })(function(input) {
         const instanceIndex = input.instanceIndex;
@@ -268,25 +295,24 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
             vNormal: nRx,
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vUV: input.uv,
+            vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
         };
     });
 }
 
-export function createTexturedMeshFragment(meshLayout: MeshDataLayout, texLayout: TextureBindGroupLayout) {
+export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout, texLayout: TextureBindGroupLayout) {
     return tgpu.fragmentFn({
         in: {
             vNormal: d.vec3f,
             vColor: d.vec3f,
             vUV: d.vec2f,
+            vWorldPos: d.vec3f,
         },
         out: d.vec4f,
     })(function(input) {
+        const u = meshLayout.$.uniforms;
+        const worldPos = input.vWorldPos;
         const normal = std.normalize(input.vNormal);
-        const lightDir = std.normalize(d.vec3f(
-            meshLayout.$.uniforms.lightDirX,
-            meshLayout.$.uniforms.lightDirY,
-            meshLayout.$.uniforms.lightDirZ,
-        ));
 
         // Sample texture, multiply by instance color (tint)
         const texColor = std.textureSample(texLayout.$.modelTexture, texLayout.$.modelSampler, input.vUV);
@@ -296,16 +322,34 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout, texLayout
             std.mul(texColor.z, input.vColor.z),
         );
 
-        const diff = std.max(std.dot(normal, lightDir), 0.0);
-        const ambient = std.mul(baseColor, 0.3);
-        const diffuse = std.mul(baseColor, diff);
+        const lightDir = std.normalize(d.vec3f(u.lightDirX, u.lightDirY, u.lightDirZ));
+        const diff = std.max(std.dot(normal, lightDir), 0.0) * u.lightDirIntensity;
 
-        return d.vec4f(
-            std.add(ambient.x, diffuse.x),
-            std.add(ambient.y, diffuse.y),
-            std.add(ambient.z, diffuse.z),
-            std.mul(texColor.w, 1.0),
+        let acc = d.vec3f(
+            baseColor.x * (u.ambientR + u.lightDirR * diff),
+            baseColor.y * (u.ambientG + u.lightDirG * diff),
+            baseColor.z * (u.ambientB + u.lightDirB * diff),
         );
+
+        const count = u.lightCount;
+        for (let i = d.u32(0); i < count; i++) {
+            const L = meshLayout.$.lights[i];
+            const c = lightContribution(
+                d.vec3f(L.posX, L.posY, L.posZ),
+                d.vec3f(L.dirX, L.dirY, L.dirZ),
+                d.vec3f(L.colorR, L.colorG, L.colorB),
+                d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos),
+                normal,
+                worldPos,
+            );
+            acc = d.vec3f(
+                acc.x + baseColor.x * c.x,
+                acc.y + baseColor.y * c.y,
+                acc.z + baseColor.z * c.z,
+            );
+        }
+
+        return d.vec4f(acc.x, acc.y, acc.z, texColor.w);
     });
 }
 
@@ -320,6 +364,7 @@ export function createSkinnedMeshLayout(maxInstances: number, maxBones: number) 
         staticInstances: { storage: d.arrayOf(SkinnedStaticMesh, maxInstances) },
         slotIndices: { storage: d.arrayOf(d.u32, maxInstances) },
         boneMatrices: { storage: d.arrayOf(d.mat4x4f, maxBones) },
+        lights: { storage: d.arrayOf(Light, MAX_LIGHTS) },
     });
 }
 
@@ -340,6 +385,7 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
             vNormal: d.vec3f,
             vColor: d.vec3f,
             vUV: d.vec2f,
+            vWorldPos: d.vec3f,
         },
     })(function(input) {
         const slot = layout.$.slotIndices[input.instanceIndex];
@@ -469,6 +515,7 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
             vNormal: nRx,
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vUV: input.uv,
+            vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
         };
     });
 }

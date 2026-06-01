@@ -23,7 +23,13 @@ import {
     StaticMesh,
     SkinnedStaticMesh,
     MeshUniforms,
+    MESH_UNIFORM_ALPHA_OFFSET,
+    MESH_UNIFORM_LIGHT_OFFSET,
+    MESH_UNIFORM_FLOATS,
+    Light,
 } from '../core/types';
+import { MAX_LIGHTS } from './shader';
+import { LightSystem, type LightSpec, type LightHandle } from './lights';
 import { Camera3D } from '../camera/camera-3d';
 import { createTextureFromBitmap } from '../spritesheet/spritesheet';
 import {
@@ -408,9 +414,15 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     // Frustum planes (6 planes × 4 floats each), extracted from VP matrix
     private frustumPlanes = new Float32Array(24);
 
+    // Dynamic lights — CPU state (SoA, slots, globals) lives in LightSystem;
+    // the renderer owns only the GPU buffer it packs into each frame.
+    private lights = new LightSystem(MAX_LIGHTS);
+    private lightBuffer!: TgpuBuffer<any>;
+    private rawLightBuffer!: GPUBuffer;
+
     readonly camera: Camera3D;
     readonly raycast: WebGPURaycast3D;
-    private uniformData = new Float32Array(24); // mat4x4 (16) + alpha (1) + lightDir (3) + padding (4)
+    private uniformData = new Float32Array(MESH_UNIFORM_FLOATS);
     private lastRenderTime = 0;
 
     private readonly _prefabs: PrefabBucket3D | null;
@@ -588,12 +600,14 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         this.staticBuffer = this.root.createBuffer(d.arrayOf(StaticMesh, this.maxInstances)).$usage('storage');
         this.uniformBuffer = this.root.createBuffer(MeshUniforms).$usage('uniform');
         this.slotIndexBuffer = this.root.createBuffer(d.arrayOf(d.u32, this.maxInstances)).$usage('storage');
+        this.lightBuffer = this.root.createBuffer(d.arrayOf(Light, MAX_LIGHTS)).$usage('storage');
 
         // Bind group (raw, using TypeGPU layout)
         this.rawDynamicBuffer = this.root.unwrap(this.dynamicBuffer) as any;
         this.rawStaticBuffer = this.root.unwrap(this.staticBuffer) as any;
         this.rawUniformBuffer = this.root.unwrap(this.uniformBuffer) as any;
         this.rawSlotIndexBuffer = this.root.unwrap(this.slotIndexBuffer) as any;
+        this.rawLightBuffer = this.root.unwrap(this.lightBuffer) as any;
 
         this.rawBindGroup = this.device.createBindGroup({
             layout: rawBGL,
@@ -602,6 +616,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 { binding: 1, resource: { buffer: this.rawDynamicBuffer } },
                 { binding: 2, resource: { buffer: this.rawStaticBuffer } },
                 { binding: 3, resource: { buffer: this.rawSlotIndexBuffer } },
+                { binding: 4, resource: { buffer: this.rawLightBuffer } },
             ],
         });
 
@@ -669,6 +684,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
                 { binding: 2, resource: { buffer: this.rawSkinnedStaticBuffer } },
                 { binding: 3, resource: { buffer: this.rawSkinnedSlotIndexBuffer } },
                 { binding: 4, resource: { buffer: this.rawBoneMatrixBuffer } },
+                { binding: 5, resource: { buffer: this.rawLightBuffer } },
             ],
         });
 
@@ -814,6 +830,41 @@ export class WebGPU3DRenderer extends Base3DRenderer {
      */
     get maxSkinned(): number {
         return this.maxSkinnedInstances;
+    }
+
+    /**
+     * Add a dynamic point or spot light. Returns a live handle whose position,
+     * color, intensity, range, and enabled state can all be changed every frame.
+     * Up to `MAX_LIGHTS` (64) lights may be live at once; throws past that.
+     *
+     * The global directional + ambient terms are separate — see
+     * `setDirectionalLight` / `setAmbient`.
+     */
+    addLight(spec: LightSpec): LightHandle {
+        return this.lights.add(spec);
+    }
+
+    /**
+     * Set the global directional light (the "sun"). `direction` points from the
+     * surface toward the light. Defaults to `(0.3, 0.8, 0.5)`, white, intensity 1
+     * — the engine's classic fixed look.
+     */
+    setDirectionalLight(
+        direction: readonly [number, number, number],
+        color: readonly [number, number, number] = [1, 1, 1],
+        intensity = 1,
+    ): void {
+        this.lights.setDirectional(direction, color, intensity);
+    }
+
+    /** Set the global ambient term. Defaults to `(0.3, 0.3, 0.3)`. */
+    setAmbient(color: readonly [number, number, number]): void {
+        this.lights.setAmbient(color);
+    }
+
+    /** Number of live dynamic lights. */
+    get lightCount(): number {
+        return this.lights.count;
     }
 
     /**
@@ -2191,17 +2242,24 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             this.staticDirty = false;
         }
 
-        // Upload uniforms: VP matrix + alpha + light dir
+        // Pack enabled lights densely and upload them.
+        const packed = this.lights.pack();
+        if (packed.count > 0) {
+            this.device.queue.writeBuffer(
+                this.rawLightBuffer, 0,
+                packed.data.buffer, packed.data.byteOffset, packed.byteLength,
+            );
+        }
+
+        // Upload uniforms: VP matrix + alpha, then the directional/ambient/count block.
         const vpMatrix = this.camera.getViewProjectionMatrix();
         this.uniformData.set(vpMatrix, 0);
-        this.uniformData[16] = alpha;
-        this.uniformData[17] = 0.3;
-        this.uniformData[18] = 0.8;
-        this.uniformData[19] = 0.5;
+        this.uniformData[MESH_UNIFORM_ALPHA_OFFSET] = alpha;
+        this.lights.writeUniforms(this.uniformData, MESH_UNIFORM_LIGHT_OFFSET, packed.count);
         this.device.queue.writeBuffer(
             this.rawUniformBuffer, 0,
             this.uniformData.buffer, this.uniformData.byteOffset,
-            80,
+            this.uniformData.byteLength,
         );
 
         // Extract frustum planes from VP matrix for culling

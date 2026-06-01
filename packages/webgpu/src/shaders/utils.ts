@@ -84,3 +84,58 @@ export const inverseLerp = tgpu.fn([d.f32, d.f32, d.f32], d.f32)(
         return std.saturate((value - min) / (max - min));
     },
 );
+
+/**
+ * Diffuse contribution of one point/spot light at a surface point. Returns the
+ * light's color scaled by Lambert term, distance attenuation, spot cone, and a
+ * shadow factor. The shadow factor is currently fixed at 1.0; a shadow-map pass
+ * replaces it by sampling the light's shadow map without changing this loop.
+ *
+ * Takes the light's fields as vectors (rather than the `Light` struct) so the
+ * signature is portable across the mesh and skinned fragment shaders, which
+ * each read the struct from their own bind-group storage buffer:
+ *   `pos`      light position (point/spot)
+ *   `axis`     spot direction (unused for point lights)
+ *   `color`    light rgb
+ *   `params`   (intensity, range, innerCos, outerCos); a point light passes
+ *              innerCos = 1, outerCos = -1 so the cone term is always 1.
+ *   `normal`   surface normal (world space, normalized)
+ *   `worldPos` surface position (world space)
+ */
+export const lightContribution = tgpu.fn(
+    [d.vec3f, d.vec3f, d.vec3f, d.vec4f, d.vec3f, d.vec3f],
+    d.vec3f,
+)(
+    function lightContribution(pos: d.v3f, axis: d.v3f, color: d.v3f, params: d.v4f, normal: d.v3f, worldPos: d.v3f) {
+        'use gpu';
+        const intensity = params.x;
+        const range = params.y;
+        const innerCos = params.z;
+        const outerCos = params.w;
+
+        const toLight = d.vec3f(pos.x - worldPos.x, pos.y - worldPos.y, pos.z - worldPos.z);
+        const dist = std.length(toLight);
+        const dir = std.normalize(toLight);
+
+        const lambert = std.max(std.dot(normal, dir), 0.0);
+
+        // Smooth range falloff: 1 at the source, 0 at range.
+        const atten = std.saturate(1.0 - dist / std.max(range, 0.0001));
+        const falloff = atten * atten;
+
+        // Spot cone: narrows between outerCos and innerCos. A point light passes
+        // a zero-length axis, which signals "no cone" — cone stays 1 and the
+        // degenerate normalize is avoided (would otherwise be NaN).
+        const axisLen = std.length(axis);
+        let cone = 1.0;
+        if (axisLen > 0.0001) {
+            const safeAxis = d.vec3f(axis.x / axisLen, axis.y / axisLen, axis.z / axisLen);
+            const cosAngle = std.dot(safeAxis, d.vec3f(-dir.x, -dir.y, -dir.z));
+            cone = std.saturate((cosAngle - outerCos) / std.max(innerCos - outerCos, 0.0001));
+        }
+
+        const shadowFactor = 1.0;
+        const scale = lambert * falloff * cone * intensity * shadowFactor;
+        return d.vec3f(color.x * scale, color.y * scale, color.z * scale);
+    },
+);
