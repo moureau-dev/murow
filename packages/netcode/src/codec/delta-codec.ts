@@ -12,7 +12,17 @@ import type { Component, World } from 'murow/ecs';
  * confirmed predictions. Server and client tick counters are independent.
  */
 
-const HEADER_BYTES = 4 + 4 + 2 + 2;
+const HEADER_BYTES = 4 + 4 + 4 + 2 + 2;
+
+function readU32(dv: DataView, off: number, end: number): number {
+  if (off + 4 > end) throw new RangeError('readU32: out of bounds');
+  return dv.getUint32(off, true);
+}
+
+function readU16(dv: DataView, off: number, end: number): number {
+  if (off + 2 > end) throw new RangeError('readU16: out of bounds');
+  return dv.getUint16(off, true);
+}
 
 export function encodeDelta(
     world: World,
@@ -22,6 +32,7 @@ export function encodeDelta(
     numMaskWords: number,
     despawned: number[] = [],
     clientAckTick: number = 0,
+    configHash: number = 0,
 ): Uint8Array {
     const perEntityMasks: Uint32Array[] = new Array(entities.length);
     const perEntityBitmaskBytes = numMaskWords * 4;
@@ -48,6 +59,7 @@ export function encodeDelta(
     const dv = new DataView(buf.buffer);
     let off = 0;
 
+    dv.setUint32(off, configHash >>> 0, true); off += 4;
     dv.setUint32(off, tick >>> 0, true); off += 4;
     dv.setUint32(off, clientAckTick >>> 0, true); off += 4;
     dv.setUint16(off, entities.length, true); off += 2;
@@ -132,6 +144,7 @@ export function encodeDelta(
 }
 
 export interface DecodedDelta {
+    configHash: number;
     tick: number;
     clientAckTick: number;
     entityIds: number[];
@@ -154,24 +167,26 @@ export function decodeDelta(
     shouldApply: (localEntity: number) => boolean = () => true,
 ): DecodedDelta {
     const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const end = buf.byteLength;
     let off = 0;
 
-    const tick = dv.getUint32(off, true); off += 4;
-    const clientAckTick = dv.getUint32(off, true); off += 4;
-    const entityCount = dv.getUint16(off, true); off += 2;
-    const despawnCount = dv.getUint16(off, true); off += 2;
+    const configHash = readU32(dv, off, end); off += 4;
+    const tick = readU32(dv, off, end); off += 4;
+    const clientAckTick = readU32(dv, off, end); off += 4;
+    const entityCount = Math.min(readU16(dv, off, end), world.getMaxEntities()); off += 2;
+    const despawnCount = Math.min(readU16(dv, off, end), world.getMaxEntities()); off += 2;
 
     const localEntityIds: number[] = [];
     const serverEntityIds: number[] = [];
     const valuesByServerEntity = new Map<number, Map<Component<any>, Record<string, any>>>();
 
     for (let i = 0; i < entityCount; i++) {
-        const serverEid = dv.getUint32(off, true); off += 4;
+        const serverEid = readU32(dv, off, end); off += 4;
         serverEntityIds.push(serverEid);
 
         const mask = new Uint32Array(numMaskWords);
         for (let w = 0; w < numMaskWords; w++) {
-            mask[w] = dv.getUint32(off, true); off += 4;
+            mask[w] = readU32(dv, off, end); off += 4;
         }
 
         const present: Component<any>[] = [];
@@ -203,8 +218,6 @@ export function decodeDelta(
                     world.update(localEid, c, update as any);
                 }
             } else if (!world.has(localEid, c)) {
-                // First-appearance archetype init even when skipping
-                // updates, so subsequent reads find the component.
                 world.add(localEid, c, update as any);
             }
         }
@@ -213,11 +226,12 @@ export function decodeDelta(
 
     const despawnedServerIds: number[] = [];
     for (let i = 0; i < despawnCount; i++) {
-        despawnedServerIds.push(dv.getUint32(off, true));
+        despawnedServerIds.push(readU32(dv, off, end));
         off += 4;
     }
 
     return {
+        configHash,
         tick,
         clientAckTick,
         entityIds: localEntityIds,

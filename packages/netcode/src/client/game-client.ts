@@ -83,6 +83,15 @@ export interface GameClientOptions<
     now?: () => number;
 }
 
+function fnv1a(str: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = (h * 16777619) >>> 0;
+    }
+    return h;
+}
+
 export class GameClient<
     I extends IntentSchemaMap = IntentSchemaMap,
     R extends RpcSchemaMap = RpcSchemaMap,
@@ -92,6 +101,7 @@ export class GameClient<
     readonly transport: TransportAdapter;
     readonly intents: DefinedIntents<I>;
     readonly rpcs: DefinedRpcs<R>;
+    readonly expectedHash: number;
 
     private predictionMap: DefinedPredictions<I>['map'] | null = null;
     private predictionBufferSize: number;
@@ -172,6 +182,14 @@ export class GameClient<
         );
 
         this.discoverSyncedComponents();
+
+        const allComponents = (this.world as any).components as Component<any>[];
+        this.expectedHash = fnv1a([
+            ...allComponents.map((c: Component<any>) => c.name).sort(),
+            ...Object.entries(this.intents.nameByKind).sort().map(([k, v]) => `${k}:${v}`),
+            ...Object.values(this.rpcs.defs).map((d: any) => d.methodName).sort(),
+        ].join(','));
+
         this.wireTransport();
         this.wireLoop();
     }
@@ -221,7 +239,7 @@ export class GameClient<
             return;
         }
         if (type === MSG_KICK) {
-            const reason = new TextDecoder().decode(data.subarray(1));
+            const reason = new TextDecoder().decode(data.subarray(1, 1 + 256));
             this.emit('kicked', { reason });
             const ack = new Uint8Array([CMSG_KICK_ACK]);
             this.transport.send(ack);
@@ -259,6 +277,14 @@ export class GameClient<
                 // archetype-inits first-appearance components.
                 () => false,
             );
+            if (decoded.configHash !== this.expectedHash) {
+                console.error(
+                    `Protocol mismatch: local=0x${this.expectedHash.toString(16)} remote=0x${decoded.configHash.toString(16)}`,
+                );
+                this.transport.close();
+                this.emit('disconnected', { reason: 'protocol-mismatch' });
+                return;
+            }
             this.lastServerTick = decoded.tick;
             this.emit('snapshot', { tick: decoded.tick, byteSize: payload.length + 1 });
 

@@ -291,7 +291,9 @@ export class BinaryPrimitives {
 
       const intView = new Uint32Array([f32bits]);
       const floatView = new Float32Array(intView.buffer);
-      return floatView[0];
+      const v = floatView[0];
+      if (!Number.isFinite(v)) throw new Error('non-finite value');
+      return v;
     },
     toNil: () => 0,
   };
@@ -300,7 +302,11 @@ export class BinaryPrimitives {
   static readonly f32: Field<number, Float32Array> = {
     size: 4,
     write: (dv, o, v) => dv.setFloat32(o, v, false),
-    read: (dv, o) => dv.getFloat32(o, false),
+    read: (dv, o) => {
+      const v = dv.getFloat32(o, false);
+      if (!Number.isFinite(v)) throw new Error('non-finite value');
+      return v;
+    },
     toNil: () => 0,
   };
 
@@ -308,7 +314,11 @@ export class BinaryPrimitives {
   static readonly f64: Field<number, Float64Array> = {
     size: 8,
     write: (dv, o, v) => dv.setFloat64(o, v, false),
-    read: (dv, o) => dv.getFloat64(o, false),
+    read: (dv, o) => {
+      const v = dv.getFloat64(o, false);
+      if (!Number.isFinite(v)) throw new Error('non-finite value');
+      return v;
+    },
     toNil: () => 0,
   };
 
@@ -354,7 +364,10 @@ export class BinaryPrimitives {
       dv.setFloat32(o + 4, v.y, false);
     },
     read(dv, o) {
-      return { x: dv.getFloat32(o, false), y: dv.getFloat32(o + 4, false) };
+      const x = dv.getFloat32(o, false);
+      const y = dv.getFloat32(o + 4, false);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('non-finite value');
+      return { x, y };
     },
     toNil: () => ({ x: 0, y: 0 }),
   };
@@ -368,11 +381,11 @@ export class BinaryPrimitives {
       dv.setFloat32(o + 8, v.z, false);
     },
     read(dv, o) {
-      return {
-        x: dv.getFloat32(o, false),
-        y: dv.getFloat32(o + 4, false),
-        z: dv.getFloat32(o + 8, false),
-      };
+      const x = dv.getFloat32(o, false);
+      const y = dv.getFloat32(o + 4, false);
+      const z = dv.getFloat32(o + 8, false);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) throw new Error('non-finite value');
+      return { x, y, z };
     },
     toNil: () => ({ x: 0, y: 0, z: 0 }),
   };
@@ -401,7 +414,11 @@ export class BinaryPrimitives {
   static readonly f32_le: Field<number, Float32Array> = {
     size: 4,
     write: (dv, o, v) => dv.setFloat32(o, v, true),
-    read: (dv, o) => dv.getFloat32(o, true),
+    read: (dv, o) => {
+      const v = dv.getFloat32(o, true);
+      if (!Number.isFinite(v)) throw new Error('non-finite value');
+      return v;
+    },
     toNil: () => 0,
   };
 
@@ -409,7 +426,11 @@ export class BinaryPrimitives {
   static readonly f64_le: Field<number, Float64Array> = {
     size: 8,
     write: (dv, o, v) => dv.setFloat64(o, v, true),
-    read: (dv, o) => dv.getFloat64(o, true),
+    read: (dv, o) => {
+      const v = dv.getFloat64(o, true);
+      if (!Number.isFinite(v)) throw new Error('non-finite value');
+      return v;
+    },
     toNil: () => 0,
   };
 
@@ -455,10 +476,12 @@ export class BinaryPrimitives {
       dv.setFloat32(o, v[0], true);
       dv.setFloat32(o + 4, v[1], true);
     },
-    read: (dv, o) => [
-      dv.getFloat32(o, true),
-      dv.getFloat32(o + 4, true),
-    ],
+    read: (dv, o) => {
+      const x = dv.getFloat32(o, true);
+      const y = dv.getFloat32(o + 4, true);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('non-finite value');
+      return [x, y];
+    },
     toNil: () => [0, 0],
   };
 
@@ -473,11 +496,13 @@ export class BinaryPrimitives {
       dv.setFloat32(o + 4, v[1], true);
       dv.setFloat32(o + 8, v[2], true);
     },
-    read: (dv, o) => [
-      dv.getFloat32(o, true),
-      dv.getFloat32(o + 4, true),
-      dv.getFloat32(o + 8, true),
-    ],
+    read: (dv, o) => {
+      const x = dv.getFloat32(o, true);
+      const y = dv.getFloat32(o + 4, true);
+      const z = dv.getFloat32(o + 8, true);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) throw new Error('non-finite value');
+      return [x, y, z];
+    },
     toNil: () => [0, 0, 0],
   };
 
@@ -493,12 +518,14 @@ export class BinaryPrimitives {
       dv.setFloat32(o + 8, v[2], true);
       dv.setFloat32(o + 12, v[3], true);
     },
-    read: (dv, o) => [
-      dv.getFloat32(o, true),
-      dv.getFloat32(o + 4, true),
-      dv.getFloat32(o + 8, true),
-      dv.getFloat32(o + 12, true),
-    ],
+    read: (dv, o) => {
+      const x = dv.getFloat32(o, true);
+      const y = dv.getFloat32(o + 4, true);
+      const z = dv.getFloat32(o + 8, true);
+      const w = dv.getFloat32(o + 12, true);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z) || !Number.isFinite(w)) throw new Error('non-finite value');
+      return [x, y, z, w];
+    },
     toNil: () => [0, 0, 0, 0],
   };
 }
