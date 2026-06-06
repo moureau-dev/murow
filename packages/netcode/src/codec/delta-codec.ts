@@ -22,6 +22,7 @@ export function encodeDelta(
     numMaskWords: number,
     despawned: number[] = [],
     clientAckTick: number = 0,
+    includeComponent: (entity: number, component: Component<any>) => boolean = () => true,
 ): Uint8Array {
     const perEntityMasks: Uint32Array[] = new Array(entities.length);
     const perEntityBitmaskBytes = numMaskWords * 4;
@@ -34,6 +35,7 @@ export function encodeDelta(
         for (let ci = 0; ci < components.length; ci++) {
             const c = components[ci];
             if (!world.has(eid, c)) continue;
+            if (!includeComponent(eid, c)) continue;
             const wordIndex = ci >>> 5;
             const bitIndex = ci & 31;
             mask[wordIndex] |= 1 << bitIndex;

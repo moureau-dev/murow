@@ -45,3 +45,14 @@ export interface SyncSpec {
 export function networked(spec: SyncSpec): SyncSpec {
     return spec;
 }
+
+/**
+ * Whether a component's value rides along in the snapshot for the given
+ * tick. `every-tick` always; `on-change` only when the field changed
+ * since the last snapshot; `{ every: N }` on every Nth tick or on change.
+ */
+export function rateIncludes(rate: SyncRate, dirty: boolean, tick: number): boolean {
+    if (rate === 'every-tick') return true;
+    if (rate === 'on-change') return dirty;
+    return dirty || (rate.every > 0 && tick % rate.every === 0);
+}

@@ -6,6 +6,7 @@ import { u16 } from 'murow/core/binary-codec';
 import { defineRPC } from 'murow/protocol';
 import { Network } from '../network/base';
 import { encodeDelta } from '../codec/delta-codec';
+import { rateIncludes, type SyncSpec } from '../components/sync-spec';
 import type { DefinedIntents, IntentSchemaMap } from '../intents/define-intents';
 import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs';
 import type { DefinedPredictions } from '../predictions/define-predictions';
@@ -291,6 +292,11 @@ export class GameServer<
             // header + clientAckTick. Established peers skip empty deltas.
             if (current.length === 0 && despawned.length === 0 && !peer.needsBaseline) continue;
 
+            const include = peer.needsBaseline
+                ? undefined
+                : (eid: Entity, c: Component<any>) =>
+                      rateIncludes((c.__sync as SyncSpec).rate, this.world.isDirty(eid, c), this.tickCounter);
+
             const buf = encodeDelta(
                 this.world,
                 this.tickCounter,
@@ -299,6 +305,7 @@ export class GameServer<
                 this.syncedNumMaskWords,
                 despawned,
                 peer.lastAckedClientTick,
+                include,
             );
 
             const framed = new Uint8Array(buf.length + 1);
