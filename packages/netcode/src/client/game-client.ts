@@ -110,6 +110,8 @@ export class GameClient<
     private predictedEntities = new Set<Entity>();
     /** Set when MSG_ASSIGN_ENTITY lands before the matching spawn. */
     private pendingAssignedServerEid: number | null = null;
+    /** Spawns discovered during a decode, emitted once values are written. */
+    private deferredSpawns: { entity: Entity; components: Record<string, unknown>; assigned: boolean }[] = [];
     /** Resolved local entity for the server's assignment. Default for sendIntent. */
     private _assignedEntity: Entity | null = null;
     interpBuffer: InterpolationBuffer;
@@ -247,6 +249,7 @@ export class GameClient<
 
     private handleSnapshot(payload: Uint8Array): void {
         try {
+            this.deferredSpawns.length = 0;
             const decoded = decodeDelta(
                 this.world,
                 payload,
@@ -260,6 +263,13 @@ export class GameClient<
                 () => false,
             );
             this.lastServerTick = decoded.tick;
+
+            for (const spawn of this.deferredSpawns) {
+                this.emit('spawn', { entity: spawn.entity, components: spawn.components });
+                if (spawn.assigned) this.emit('assigned', { entity: spawn.entity });
+            }
+            this.deferredSpawns.length = 0;
+
             this.emit('snapshot', { tick: decoded.tick, byteSize: payload.length + 1 });
 
             this.interpBuffer.record({
@@ -293,14 +303,16 @@ export class GameClient<
             this.serverToLocal.set(serverEid, localEid);
             const components: Record<string, unknown> = {};
             for (const c of present) components[c.name] = true;
-            this.emit('spawn', { entity: localEid, components });
 
+            let assigned = false;
             if (this.pendingAssignedServerEid === serverEid) {
                 this.pendingAssignedServerEid = null;
                 this.predictedEntities.add(localEid);
                 this._assignedEntity = localEid;
-                this.emit('assigned', { entity: localEid });
+                assigned = true;
             }
+
+            this.deferredSpawns.push({ entity: localEid, components, assigned });
         }
         return localEid;
     }
