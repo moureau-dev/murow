@@ -104,10 +104,11 @@ multiplayer-cube-arena/
 - `shared/constants.ts → TICK_RATE` — try 10, 15, 30. Both sides read the
   same value, so changing one number changes the whole sim.
 - `shared/constants.ts → MOVE_SPEED` — world units per second.
-- `client/index.ts → safetyTicks` (inside the `'pong'` handler) — how
-  many ticks behind newest the interpolation clock sits. Higher =
-  smoother peers under jitter, more visible lag. The actual buffer
-  delay is recomputed from this on every pong.
+- `MIN_DELAY_MS` / `MAX_DELAY_MS` in `client/index.ts` bound the
+  interpolation delay. The `'pong'` handler recomputes the delay each
+  ping from the running mean RTT plus a jitter margin, clamped to this
+  range. Raise the floor for steadier peers under bad jitter at the cost
+  of more visible lag; lower the ceiling to cap worst-case lag.
 - `client/index.ts → ScrollZoom` initial / min / max — third-person
   zoom range.
 - `PORT` env var — server listen port (default 3010).

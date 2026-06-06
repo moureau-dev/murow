@@ -14,6 +14,9 @@ function modeFor(c: Component<any>): InterpolationMode {
     return sync?.interp ?? 'lerp';
 }
 
+/** Desync past which the play-out clock hard-snaps instead of warping. */
+const DEFAULT_MAX_DESYNC = 500;
+
 /**
  * Holds the last few snapshots and writes a fixed-cadence value into World
  * each tick. With `delayMs > 0`, renders `delayMs` behind the newest snapshot,
@@ -36,17 +39,21 @@ export class InterpolationBuffer {
      * peer slowly through stale territory.
      */
     staleWindow: number;
+    /** Desync past which the play-out clock snaps instead of warping, ms. */
+    maxDesync: number;
 
     constructor(
         serverToLocal: Map<number, Entity>,
         capacity: number,
         delayMs: number,
         staleWindowMs: number,
+        maxDesyncMs: number = DEFAULT_MAX_DESYNC,
     ) {
         this.serverToLocal = serverToLocal;
         this.capacity = capacity;
         this.delay = delayMs;
         this.staleWindow = staleWindowMs;
+        this.maxDesync = maxDesyncMs;
     }
 
     setDelay(delayMs: number): void {
@@ -55,6 +62,10 @@ export class InterpolationBuffer {
 
     setStaleWindow(staleWindowMs: number): void {
         this.staleWindow = staleWindowMs;
+    }
+
+    setMaxDesync(maxDesyncMs: number): void {
+        this.maxDesync = maxDesyncMs;
     }
 
     record(snapshot: BufferedSnapshot): void {
@@ -123,10 +134,10 @@ export class InterpolationBuffer {
             this.renderTick = targetTick;
         } else {
             const drift = targetTick - this.renderTick;
-            if (drift > 2) {
+            if (drift > this.maxDesync / tickRateMs) {
                 this.renderTick = targetTick;
             } else {
-                const warp = Math.max(0.9, Math.min(1.1, 1 + drift * 0.05));
+                const warp = Math.max(0.6, Math.min(1.4, 1 + drift * 0.1));
                 this.renderTick += warp;
             }
         }

@@ -48,6 +48,11 @@ export interface SnapshotInterpolationStrategy {
      * Defaults to `delay * 2 + 100`.
      */
     staleWindow?: number;
+    /**
+     * Desync past which the play-out clock snaps instead of warping, ms.
+     * Scaled by tick rate internally. Default 500.
+     */
+    maxDesync?: number;
 }
 
 /**
@@ -171,6 +176,7 @@ export class GameClient<
             16,
             interpolationDelay,
             staleWindowMs,
+            strategy.maxDesync,
         );
 
         this.discoverSyncedComponents();
@@ -527,5 +533,9 @@ export class GameClient<
 
     setInterpolationDelay(ms: number): void {
         this.interpBuffer.setDelay(ms);
+    }
+
+    setMaxDesync(ms: number): void {
+        this.interpBuffer.setMaxDesync(ms);
     }
 }

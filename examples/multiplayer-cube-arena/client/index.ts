@@ -78,8 +78,8 @@ const transport = new BrowserWebSocketClientTransport(
     `${wsScheme}//${location.host}${WS_PATH}`,
 );
 
-const safetyTicks = 2;
-const delay = safetyTicks * arena.loop.ticker.intervalMs;
+const MIN_DELAY_MS = 3 * arena.loop.ticker.intervalMs;
+const MAX_DELAY_MS = 600;
 
 const client = new GameClient({
     world: arena.world,
@@ -88,8 +88,9 @@ const client = new GameClient({
     protocol: { intents, rpcs },
     strategy: {
         kind: 'snapshot-interpolation',
-        delay,
-        staleWindow: delay * 2 + 100,
+        delay: MIN_DELAY_MS,
+        staleWindow: 1200,
+        maxDesync: 700,
     },
 });
 client.use(predictions);
@@ -185,18 +186,19 @@ arena.loop.events.on('render', ({ alpha }) => {
 
 const pingEl = document.getElementById('ping')!;
 
-// ping game server every 2s for RTT measurement
+// Ping twice a second so the delay estimate tracks RTT swings.
 arena.loop.events.on('tick', ({ tick }) => {
-    /** Period to send ping to server */
-    const period = 2;
-    const rate = arena.loop.ticker.rate;
-    if (tick % (rate * period) !== 0) return;
-
+    if (tick % Math.round(arena.loop.ticker.rate / 2) !== 0) return;
     client.ping();
 });
 
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
 client.on('pong', ({ rtt }) => {
-    pingEl.textContent = `(${safetyTicks} ticks behind) ${rtt}`;
+    const ping = rtt / 2 + arena.loop.ticker.intervalMs;
+    const target = clamp(ping, MIN_DELAY_MS, MAX_DELAY_MS);
+    client.setInterpolationDelay(target);
+    pingEl.textContent = `${Math.round(rtt)} ms (buffer ${Math.round(target)} ms)`;
 });
 
 // controls

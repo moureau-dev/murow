@@ -179,4 +179,33 @@ describe('InterpolationBuffer', () => {
         buf.apply(world, 1300, [Position], () => false);
         expect(world.get(localEid, Position).x).toBeGreaterThan(60);
     });
+
+    test('maxDesync controls snap-vs-warp of the play-out clock', () => {
+        // Seven snapshots 100ms apart; x advances 10 per tick.
+        const snapshots = Array.from({ length: 7 }, (_, i) =>
+            snap(1000 + i * 100, i + 1, [
+                { serverEid: 100, comp: Position, value: { x: i * 10, y: 0 } },
+            ]),
+        );
+
+        // Render 500ms (5 ticks) behind, seed the clock at tick 2, then apply
+        // again 350ms later with no new snapshots: a delivery gap that leaves
+        // the clock ~3.5 ticks behind where it should be.
+        function playOut(maxDesync: number): number {
+            const { world, serverToLocal, localEid } = setup();
+            const buf = new InterpolationBuffer(serverToLocal, 16, 500, 2000, maxDesync);
+            for (const s of snapshots) buf.record(s);
+            buf.apply(world, 1600, [Position], () => false);
+            buf.apply(world, 1950, [Position], () => false);
+            return world.get(localEid, Position).x;
+        }
+
+        // 300ms / 100ms = 3 tick budget: the 3.5 drift exceeds it, the clock
+        // snaps forward to tick 5.5.
+        expect(playOut(300)).toBeCloseTo(45);
+
+        // 2000ms / 100ms = 20 tick budget: the drift is absorbed, the clock
+        // warps one capped step to tick 3.35 and still lags.
+        expect(playOut(2000)).toBeCloseTo(23.5);
+    });
 });
