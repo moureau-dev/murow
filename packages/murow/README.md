@@ -42,7 +42,7 @@ High-performance ECS with **SoA (Structure of Arrays)** storage, bitmask queries
 - `EntityHandle` — Fluent chainable entity API
 
 ### [Game](./src/game) — Game loop abstractions
-- [`GameLoop`](./src/game/loop) — Client/server tick loop with `sync` / `pre-tick` / `tick` / `post-tick` / `render` phases, plus input tracking and frame interpolation
+- [`GameLoop`](./src/game/loop) — Client/server tick loop with `sync` / `pre-tick` / `tick` / `post-tick` / `render` phases, `every(...)` interval scheduling, plus input tracking and frame interpolation
 
 ### [Protocol](./src/protocol) — Networking primitives
 Minimalist networking primitives:
