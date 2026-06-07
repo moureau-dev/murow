@@ -34,6 +34,32 @@ loop.pause();
 loop.resume();
 ```
 
+## Schedules
+
+Run a callback on a fixed interval with `every`. Units are sugar: `seconds` and
+`milliseconds` are converted to a tick count from the loop's `tickRate`, so a
+schedule fires in lockstep with the simulation no matter which unit you pick.
+
+```typescript
+const waveId = loop.every(2).seconds(spawnWave);
+loop.every(4).ticks(stepAi);
+loop.every(500).milliseconds(pollServer);
+
+// Cancel one schedule, or all of them.
+loop.clearSchedule(waveId);
+loop.clearSchedules();
+```
+
+- `every(...)` returns a numeric id for `clearSchedule`, or `-1` if the pool is full.
+- They fire after `post-tick` and realign from the current tick, so a long frame fires once, not a burst.
+- They survive `stop()` and re-anchor on the next `start()` — no need to re-register.
+
+The pool is fixed-capacity and zero-GC (default 32 concurrent schedules). Raise it with `maxSchedules`:
+
+```typescript
+const loop = new GameLoop({ type: 'server-immediate', tickRate: 30, maxSchedules: 64 });
+```
+
 ## Manual Mode
 
 `manual-client` and `manual-server` do not start an internal [driver](../../core/driver).

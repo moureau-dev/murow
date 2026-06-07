@@ -6,6 +6,7 @@ import {
     LoopDriver,
 } from "../../core";
 import { InputManager, BrowserInputSource, type InputSnapshot } from "../../core/input";
+import { TickerSchedule } from "./ticker-schedule";
 
 /**
  * GameLoop class that manages the main game loop with tick events and optional rendering.
@@ -39,6 +40,8 @@ export class GameLoop<T extends GameLoopType = DriverType> {
     private _skipData = { ticks: 0 };
     private _renderData = { deltaTime: 0, alpha: 0, input: null as InputSnapshot };
 
+    private _scheduler: TickerSchedule;
+
     constructor(public options: GameLoopOptions<T>) {
         const CLIENT_TYPES = new Set<GameLoopType>([
             "client",
@@ -52,6 +55,8 @@ export class GameLoop<T extends GameLoopType = DriverType> {
 
         this._isClient = CLIENT_TYPES.has(this.options.type);
         this._isManual = MANUAL_TYPES.has(this.options.type);
+
+        this._scheduler = new TickerSchedule(this.options.maxSchedules ?? 32);
 
         const eventNames = [
             "sync",
@@ -93,6 +98,8 @@ export class GameLoop<T extends GameLoopType = DriverType> {
                 this.options.onTick?.(deltaTime, tick, input);
                 baseEvents.emit("tick", this._tickData);
                 baseEvents.emit("post-tick", this._tickData);
+
+                this._scheduler.run(tick);
             },
             onTickSkipped: (skippedTicks) => {
                 this._skipData.ticks = skippedTicks;
@@ -205,6 +212,8 @@ export class GameLoop<T extends GameLoopType = DriverType> {
             this._driver.start();
         }
 
+        this._scheduler.rebase(this.ticker.tickCount);
+
         this.status = "running";
         (this.events as EventSystem<BaseEvents>).emit("start", { startedAt: Date.now() });
 
@@ -230,11 +239,56 @@ export class GameLoop<T extends GameLoopType = DriverType> {
             this._input.unlisten();
         }
     }
+
+    /**
+     * Registers a callback to run on a fixed tick interval.
+     *
+     * The unit methods resolve to a tick count from the loop's `tickRate`, so
+     * every schedule fires in lockstep with the simulation regardless of unit.
+     *
+     * @example
+     * const id = loop.every(2).seconds(spawnWave);
+     * loop.clearSchedule(id);
+     */
+    every(count: number): ScheduleBuilder {
+        const rate = this.ticker.rate;
+        const tick = this.ticker.tickCount;
+        return {
+            ticks: (cb) => this._scheduler.every(count, cb, tick),
+            seconds: (cb) => this._scheduler.every(count * rate, cb, tick),
+            milliseconds: (cb) => this._scheduler.every((count / 1000) * rate, cb, tick),
+        };
+    }
+
+    /**
+     * Cancels a single schedule by the id returned from `every`.
+     */
+    clearSchedule(id: number): boolean {
+        return this._scheduler.clear(id);
+    }
+
+    /**
+     * Cancels every registered schedule.
+     */
+    clearSchedules() {
+        this._scheduler.clearAll();
+    }
+}
+
+interface ScheduleBuilder {
+    ticks(cb: () => void): number;
+    seconds(cb: () => void): number;
+    milliseconds(cb: () => void): number;
 }
 
 interface GameLoopOptions<T extends GameLoopType> {
     tickRate: number;
     type: T;
+    /**
+     * Maximum number of simultaneously live schedules registered via `every`.
+     * Defaults to 32.
+     */
+    maxSchedules?: number;
     onTick?: (
         deltaTime: number,
         tick: number,
