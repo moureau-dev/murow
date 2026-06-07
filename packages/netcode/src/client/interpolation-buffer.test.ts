@@ -208,4 +208,38 @@ describe('InterpolationBuffer', () => {
         // warps one capped step to tick 3.35 and still lags.
         expect(playOut(2000)).toBeCloseTo(23.5);
     });
+
+    test('a starved entity holds and ramps in instead of creeping across the gap', () => {
+        // Entity 100 is present every tick (keeps snapshots dense). Entity 200
+        // is present at tick 1, idle (absent) ticks 2-4, then reappears moved
+        // at tick 5. Snapshots 100ms apart, so tickRateMs = 100.
+        const world = new World({ maxEntities: 16, components: [Position] });
+        const serverToLocal = new Map<number, number>();
+        const mover = world.spawn();
+        world.add(mover, Position, { x: 0, y: 0 });
+        serverToLocal.set(100, mover);
+        const peer = world.spawn();
+        world.add(peer, Position, { x: 5, y: 0 });
+        serverToLocal.set(200, peer);
+
+        const buf = new InterpolationBuffer(serverToLocal, 16, 100, 5000);
+        buf.record(snap(1000, 1, [
+            { serverEid: 100, comp: Position, value: { x: 0, y: 0 } },
+            { serverEid: 200, comp: Position, value: { x: 5, y: 0 } },
+        ]));
+        buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 10, y: 0 } }]));
+        buf.record(snap(1200, 3, [{ serverEid: 100, comp: Position, value: { x: 20, y: 0 } }]));
+        buf.record(snap(1300, 4, [{ serverEid: 100, comp: Position, value: { x: 30, y: 0 } }]));
+        buf.record(snap(1400, 5, [
+            { serverEid: 100, comp: Position, value: { x: 40, y: 0 } },
+            { serverEid: 200, comp: Position, value: { x: 8, y: 0 } },
+        ]));
+
+        // renderTick = 5 + (1450 - 1400 - 100) / 100 = 4.5, one tick into the
+        // ramp. With the default 250ms (2.5 tick) bridge limit, 200's samples
+        // straddle a 4-tick gap, so it holds at 5 and ramps to 8 over the last
+        // tick: at 4.5 it is 6.5. Creeping across the whole gap would give 7.625.
+        buf.apply(world, 1450, [Position], () => false);
+        expect(world.get(peer, Position).x).toBeCloseTo(6.5);
+    });
 });

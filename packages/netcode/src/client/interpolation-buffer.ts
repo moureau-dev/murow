@@ -17,6 +17,12 @@ function modeFor(c: Component<any>): InterpolationMode {
 /** Desync past which the play-out clock hard-snaps instead of warping. */
 const DEFAULT_MAX_DESYNC = 500;
 
+/** Drift under this (ticks) advances at nominal rate, so a synced clock holds steady. */
+const WARP_DEAD_ZONE = 0.25;
+
+/** Largest data gap (ms) the buffer interpolates across; bigger gaps hold the last value. */
+const DEFAULT_MAX_BRIDGE_GAP = 250;
+
 /**
  * Holds the last few snapshots and writes a fixed-cadence value into World
  * each tick. With `delayMs > 0`, renders `delayMs` behind the newest snapshot,
@@ -41,6 +47,10 @@ export class InterpolationBuffer {
     staleWindow: number;
     /** Desync past which the play-out clock snaps instead of warping, ms. */
     maxDesync: number;
+    /** Known wall-ms per server tick, used to seed the rate estimate. 0 to infer. */
+    private nominalTickMs: number;
+    /** Largest data gap the buffer interpolates across, ms. Bigger gaps hold. */
+    maxBridgeGap: number;
 
     constructor(
         serverToLocal: Map<number, Entity>,
@@ -48,12 +58,17 @@ export class InterpolationBuffer {
         delayMs: number,
         staleWindowMs: number,
         maxDesyncMs: number = DEFAULT_MAX_DESYNC,
+        nominalTickMs: number = 0,
+        maxBridgeGapMs: number = DEFAULT_MAX_BRIDGE_GAP,
     ) {
         this.serverToLocal = serverToLocal;
         this.capacity = capacity;
         this.delay = delayMs;
         this.staleWindow = staleWindowMs;
         this.maxDesync = maxDesyncMs;
+        this.nominalTickMs = nominalTickMs;
+        this.smoothedTickRateMs = nominalTickMs;
+        this.maxBridgeGap = maxBridgeGapMs;
     }
 
     setDelay(delayMs: number): void {
@@ -68,13 +83,17 @@ export class InterpolationBuffer {
         this.maxDesync = maxDesyncMs;
     }
 
+    setMaxBridgeGap(maxBridgeGapMs: number): void {
+        this.maxBridgeGap = maxBridgeGapMs;
+    }
+
     record(snapshot: BufferedSnapshot): void {
         const gap = snapshot.receivedAt - this.latestReceivedAt;
         if (this.buffer.length > 0 && gap > this.staleWindow) {
             this.buffer.length = 0;
             this.renderTick = -Infinity;
             this.latestReceivedAt = -Infinity;
-            this.smoothedTickRateMs = 0;
+            this.smoothedTickRateMs = this.nominalTickMs;
         }
         if (snapshot.receivedAt > this.latestReceivedAt) {
             this.latestReceivedAt = snapshot.receivedAt;
@@ -94,7 +113,7 @@ export class InterpolationBuffer {
         this.buffer.length = 0;
         this.renderTick = -Infinity;
         this.latestReceivedAt = -Infinity;
-        this.smoothedTickRateMs = 0;
+        this.smoothedTickRateMs = this.nominalTickMs;
     }
 
     apply(
@@ -136,6 +155,8 @@ export class InterpolationBuffer {
             const drift = targetTick - this.renderTick;
             if (drift > this.maxDesync / tickRateMs) {
                 this.renderTick = targetTick;
+            } else if (Math.abs(drift) < WARP_DEAD_ZONE) {
+                this.renderTick += 1;
             } else {
                 const warp = Math.max(0.6, Math.min(1.4, 1 + drift * 0.1));
                 this.renderTick += warp;
@@ -168,6 +189,10 @@ export class InterpolationBuffer {
 
         const aIndex = this.buffer.indexOf(a);
         const bIndex = this.buffer.indexOf(b);
+
+        // Beyond this many ticks ahead, a missing value is a starved entity
+        // (idle), not a transient hole, so hold rather than reach across it.
+        const maxBridgeTicks = this.maxBridgeGap / tickRateMs;
 
         for (const serverEid of seen) {
             const localEid = this.serverToLocal.get(serverEid);
@@ -202,8 +227,12 @@ export class InterpolationBuffer {
                     if (mode === 'none') {
                         toWrite = vb;
                     } else {
-                        const aTick = this.buffer[aIdx].serverTick;
                         const bTick = this.buffer[bIdx].serverTick;
+                        let aTick = this.buffer[aIdx].serverTick;
+                        // Samples straddling a gap bigger than the bridge limit mean
+                        // the entity was starved (idle). Hold the last value until one
+                        // tick before it reappears, then ramp in over that single tick.
+                        if (bTick - aTick > maxBridgeTicks) aTick = bTick - 1;
                         const wideSpan = bTick - aTick;
                         const wideT = wideSpan > 0
                             ? Math.min(1, Math.max(0, (renderTick - aTick) / wideSpan))

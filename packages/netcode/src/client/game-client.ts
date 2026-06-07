@@ -53,6 +53,11 @@ export interface SnapshotInterpolationStrategy {
      * Scaled by tick rate internally. Default 500.
      */
     maxDesync?: number;
+    /**
+     * Largest data gap a peer may have before its value is held instead of
+     * interpolated across, ms. Smaller gaps are bridged. Default 250.
+     */
+    maxBridgeGap?: number;
 }
 
 /**
@@ -177,6 +182,8 @@ export class GameClient<
             interpolationDelay,
             staleWindowMs,
             strategy.maxDesync,
+            opts.loop.ticker.intervalMs,
+            strategy.maxBridgeGap,
         );
 
         this.discoverSyncedComponents();
@@ -537,5 +544,9 @@ export class GameClient<
 
     setMaxDesync(ms: number): void {
         this.interpBuffer.setMaxDesync(ms);
+    }
+
+    setMaxBridgeGap(ms: number): void {
+        this.interpBuffer.setMaxBridgeGap(ms);
     }
 }
