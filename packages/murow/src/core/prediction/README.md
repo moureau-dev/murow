@@ -1,64 +1,52 @@
-# Prediction & Reconciliation (IntentTracker + Reconciliator)
+# Prediction (PredictionLog + Reconciler)
 
-Client-side utility for **server-authoritative multiplayer games**.  
-Tracks unconfirmed player intents and reconciles them with authoritative snapshots from the server.
+Client-side rollback-replay for optimistic, authority-corrected simulation. Record commands you applied locally; when an authority confirms up to a sequence, restore its state, drop the confirmed commands, and replay the rest on top.
 
----
+Domain-agnostic: the command type, how to restore authoritative state, and how to replay a command are all supplied by the caller. The classic use is server-authoritative multiplayer (local input prediction), but the pattern fits any optimistic-then-corrected flow.
 
-## Installation
+## Features
 
-```ts
-import { IntentTracker, Reconciliator } from './prediction';
-````
+- `PredictionLog`: a bounded, sequence-ordered log of unconfirmed commands.
+- `Reconciler`: restore -> drop confirmed -> replay the rest, via callbacks.
+- Bounded history: the oldest commands are dropped past the buffer size.
+- Generic over the command and a per-reconcile context; zero dependencies.
 
----
+## Usage
 
-## Usage Example
+```typescript
+import { Reconciler } from './prediction';
 
-```ts
-const positionRecon = new Reconciliator<MoveIntent, PositionSnapshot>({
-  onLoadState: (state) => gameClient.setPositions(state), // rewind to server-authoritative state
-  onReplay: (remainingIntents) => remainingIntents.forEach((i) => gameClient.applyMove(i)), // replay remaining unconfirmed intents
+const reconciler = new Reconciler<MoveCmd, ServerSnapshot>({
+    bufferSize: 64,
+    restore: (snapshot) => world.loadAuthoritative(snapshot),  // rewind to server state
+    replay: (cmds) => cmds.forEach((c) => applyMove(c)),       // re-apply unconfirmed input
 });
 
-const ticker = new FixedTicker({
-  rate: 12, // ticks per second
-  onTick: (deltaTime, tick) => {
-    // Track input
-    if (inputs.has('position')) {
-      const intent = inputs.getAndRemove('position');
-      positionRecon.trackIntent(tick, intent);
-    }
+// As you send input, record what you applied locally.
+reconciler.record(sequence, moveCmd);
 
-    // Update game client simulation
-    gameClient.update(deltaTime);
-  }
-});
-
-function onServerSnapshot(snapshot: { tick: number; state: PositionSnapshot }) {
-  positionRecon.onSnapshot(snapshot);
-}
-
-let lastTime = 0;
-function rafStep(now: number) {
-  const delta = (now - lastTime) / 1000; // seconds
-  lastTime = now;
-
-  ticker.update(delta); // manually drive the ticker
-
-  requestAnimationFrame(rafStep);
-}
-
-function start() {
-  lastTime = performance.now();
-  requestAnimationFrame(rafStep);
+// When an authoritative snapshot arrives, reconcile against the confirmed sequence.
+function onSnapshot(snapshot: ServerSnapshot) {
+    reconciler.reconcile(snapshot.ackSequence, snapshot);
 }
 ```
 
----
+## API
 
-### Key Concepts
+### PredictionLog
 
-* **IntentTracker**: Tracks client-side intents that are sent but not yet confirmed by the server.
-* **Reconciliator**: Resets client state to authoritative snapshots and replays unconfirmed intents to maintain smooth prediction.
-* Works for **any type of server-authoritative game**, not just movement.
+- `record(sequence, cmd)`: append a command (pushed in ascending sequence).
+- `dropThrough(sequence)`: drop every entry with sequence <= the confirmed one.
+- `pending()`: the still-unconfirmed commands, in order.
+- `size`, `clear()`.
+
+### Reconciler
+
+- `record(sequence, cmd)`: track a locally-applied command.
+- `reconcile(ackSequence, ctx)`: run `restore(ctx)`, drop commands <= `ackSequence`, then `replay(pending, ctx)`.
+- `pending`: count of unconfirmed commands.
+- `clear()`.
+
+## Notes
+
+`reconcile` always calls `restore` then `replay` (even when nothing is pending), so consumers can rely on the callbacks firing once per snapshot. The context passed to `reconcile` is handed to both callbacks unchanged, which is the place to carry per-snapshot data (the authoritative state, which entities were reset, the confirmed tick).

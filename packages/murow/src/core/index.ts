@@ -7,6 +7,8 @@ export * from './driver';
 export * from './navmesh';
 export * from './pooled-codec';
 export * from './prediction';
+export * from './clock';
+export * from './timeline';
 export * from './input';
 export * from './free-list';
 export * from './sparse-batcher';

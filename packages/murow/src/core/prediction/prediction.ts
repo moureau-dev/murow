@@ -1,112 +1,83 @@
 /**
- * @template T
- * @description
- * Tracks client-side intents that have been sent to the server but not yet confirmed.
- * Used for prediction and reconciliation in a server-authoritative architecture.
+ * Bounded, sequence-ordered log of locally-applied commands awaiting
+ * confirmation. Records are pushed in ascending sequence; `dropThrough`
+ * removes everything the authority has confirmed.
  */
-export class IntentTracker<T> {
-  tracker = new Map<number, T[]>();
+export class PredictionLog<Cmd> {
+    private entries: { sequence: number; cmd: Cmd }[] = [];
 
-  get size() {
-    return this.tracker.size;
-  }
+    constructor(private capacity: number = 64) {}
 
-  /**
-   * Adds a new intent for a specific tick.
-   * @param {number} tick - The tick number associated with the intent.
-   * @param {T} intent - The intent data.
-   */
-  track(tick: number, intent: T): T {
-    if (!this.tracker.has(tick)) {
-      this.tracker.set(tick, []);
+    get size(): number {
+        return this.entries.length;
     }
 
-    this.tracker.get(tick).push(intent);
-    return intent;
-  }
-
-  /**
-   * Removes all intents up to and including a given tick.
-   * Returns the remaining intents in ascending tick order.
-   * @param {number} tick - The tick up to which intents should be dropped.
-   * @returns {T[]} Array of remaining intents.
-   */
-  dropUpTo(tick: number): T[] {
-    const remaining: [number, T[]][] = [];
-
-    for (const [t, intents] of this.tracker) {
-      if (t <= tick) this.tracker.delete(t);
-      else remaining.push([t, intents]);
+    /** Record a command with its sequence. Commands must be recorded in ascending sequence. */
+    record(sequence: number, cmd: Cmd): void {
+        this.entries.push({ sequence, cmd });
+        while (this.entries.length > this.capacity) this.entries.shift();
     }
 
-    // sort by tick ascending
-    remaining.sort(([a], [b]) => a - b);
-    return remaining.map(([_, intents]) => intents).flat();
-  }
+    /** Drop every entry with sequence <= the confirmed sequence. */
+    dropThrough(sequence: number): void {
+        let cut = 0;
+        while (cut < this.entries.length && this.entries[cut].sequence <= sequence) cut++;
+        if (cut > 0) this.entries.splice(0, cut);
+    }
 
-  /**
-   * Returns all currently tracked intents in ascending tick order.
-   * @returns {T[]}
-   */
-  values(): T[] {
-    return Array.from(this.tracker.entries())
-      .sort(([a], [b]) => a - b)
-      .map(([_, intents]) => intents)
-      .flat();
-  }
+    /** The commands still awaiting confirmation, in order. */
+    pending(): Cmd[] {
+        const out = new Array<Cmd>(this.entries.length);
+        for (let i = 0; i < this.entries.length; i++) out[i] = this.entries[i].cmd;
+        return out;
+    }
+
+    clear(): void {
+        this.entries.length = 0;
+    }
+}
+
+export interface ReconcilerOptions<Cmd, Ctx> {
+    /** Max unconfirmed commands kept; older ones are dropped. Default 64. */
+    bufferSize?: number;
+    /** Load authoritative state. Runs before confirmed commands are dropped. */
+    restore: (ctx: Ctx) => void;
+    /** Re-apply the still-unconfirmed commands on top of the restored state. */
+    replay: (cmds: Cmd[], ctx: Ctx) => void;
 }
 
 /**
- * @template T,U
- * @description
- * Handles client-side reconciliation of authoritative snapshots with unconfirmed intents.
- * Used for prediction correction in server-authoritative multiplayer games.
+ * Client-side rollback-replay: record locally-applied commands, and when the
+ * authority confirms up to a sequence, restore its state, drop the confirmed
+ * commands, and replay the rest. Domain-agnostic; the caller supplies what a
+ * command is, how to restore, and how to replay via callbacks.
  */
-export class Reconciliator<T, U> {
-  tracker: IntentTracker<T> = new IntentTracker<T>();
+export class Reconciler<Cmd, Ctx = void> {
+    private log: PredictionLog<Cmd>;
+    private restore: (ctx: Ctx) => void;
+    private replay: (cmds: Cmd[], ctx: Ctx) => void;
 
-  /**
-   * @param {Object} options - Callbacks for applying snapshot state and replaying intents.
-   * @param {(snapshotState: U) => void} options.onLoadState - Called to load authoritative snapshot state.
-   * @param {(remainingIntents: T[]) => void} options.onReplay - Called to reapply remaining intents for prediction.
-   */
-  constructor(
-    private options: {
-      onLoadState: (snapshotState: U) => void;
-      onReplay: (remainingIntents: T[]) => void;
+    constructor(opts: ReconcilerOptions<Cmd, Ctx>) {
+        this.log = new PredictionLog<Cmd>(opts.bufferSize ?? 64);
+        this.restore = opts.restore;
+        this.replay = opts.replay;
     }
-  ) { }
 
-  /**
-   * Adds a new intent to the tracker.
-   * @param {number} tick - Tick number associated with the intent.
-   * @param {T} intent - The intent data.
-   */
-  trackIntent(tick: number, intent: T) {
-    this.tracker.track(tick, intent);
-  }
-
-  /**
-   * Called when an authoritative snapshot is received from the server.
-   * Resets client state and replays unconfirmed intents.
-   * @param {Object} snapshot - The snapshot from the server.
-   * @param {number} snapshot.tick - Tick number of the snapshot.
-   * @param {U} snapshot.state - The authoritative state.
-   */
-  onSnapshot(snapshot: { tick: number; state: U }) {
-    // 1. Load authoritative state
-    this.options.onLoadState(snapshot.state);
-
-    // 2. Remove confirmed intents and get remaining
-    const remainingIntents = this.tracker.dropUpTo(snapshot.tick);
-
-    // 3. Only replay if there are actually remaining intents
-    if (remainingIntents.length > 0) {
-      this.options.onReplay(remainingIntents);
+    record(sequence: number, cmd: Cmd): void {
+        this.log.record(sequence, cmd);
     }
-  }
 
-  replay(intents: T[]) {
-    this.options.onReplay(intents);
-  }
+    get pending(): number {
+        return this.log.size;
+    }
+
+    clear(): void {
+        this.log.clear();
+    }
+
+    reconcile(ackSequence: number, ctx: Ctx): void {
+        this.restore(ctx);
+        this.log.dropThrough(ackSequence);
+        this.replay(this.log.pending(), ctx);
+    }
 }
