@@ -1,46 +1,51 @@
 {
-  "name": "@murow/monorepository",
-  "version": "0.0.1",
-  "description": "Repository for all murow's packages.",
-  "scripts": {
-    "build:js": "cd packages/murow && npm run build:js && cd ../webgpu && npm run build:js && cd ../netcode && npm run build:js",
-    "test:murow": "cd packages/murow && npm run test",
-    "test:webgpu": "cd packages/webgpu && npm run test",
-    "test:multiplayer": "cd packages/netcode && npm run test",
-    "pretest": "bun run build:js",
-    "test": "concurrently --kill-others-on-fail \"npm run test:murow\" \"npm run test:webgpu\" \"npm run test:multiplayer\"",
-    "build:murow": "cd packages/murow && npm run build:types",
-    "build:webgpu": "cd packages/webgpu && npm run build:types",
-    "build:multiplayer": "cd packages/netcode && npm run build:types",
-    "copy-webgpu": "rm -rf packages/murow/dist/webgpu && cp -r packages/webgpu/dist packages/murow/dist/webgpu",
-    "copy-multiplayer": "rm -rf packages/murow/dist/netcode && cp -r packages/netcode/dist packages/murow/dist/netcode",
-    "prebuild": "bun run build:js",
-    "build": "npm run build:murow && npm run build:webgpu && npm run build:multiplayer",
-    "postbuild": "npm run copy-webgpu && npm run copy-multiplayer",
-    "pub": "npm run test && npm run build && cd packages/murow && npm publish"
-  },
-  "workspaces": [
-    "packages/*",
-    "examples/*",
-    "benchmarks",
-    "benchmarks/*"
-  ],
-  "author": "Luiz Felipe Moureau",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/moureau-dev/murow.git"
-  },
-  "bugs": {
-    "url": "https://github.com/moureau-dev/murow/issues"
-  },
-  "type": "module",
-  "private": true,
-  "devDependencies": {
-    "@types/bun": "latest",
-    "concurrently": "^9.2.1"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  }
+    "name": "@murow/monorepository",
+    "version": "0.0.1",
+    "description": "Repository for all murow's packages.",
+    "scripts": {
+        "build:murow:js": "cd packages/murow && npm run build:js",
+        "build:webgpu:js": "cd packages/webgpu && npm run build:js",
+        "build:netcode:js": "cd packages/netcode && npm run build:js",
+        "build:js": "concurrently --kill-others-on-fail \"npm run build:murow:js\" \"npm run build:webgpu:js\" \"npm run build:netcode:js\"",
+        "test:murow": "cd packages/murow && npm run test",
+        "test:webgpu": "cd packages/webgpu && npm run test",
+        "test:netcode": "cd packages/netcode && npm run test",
+        "pretest": "npm run build:js",
+        "test": "concurrently --kill-others-on-fail \"npm run test:murow\" \"npm run test:webgpu\" \"npm run test:netcode\"",
+        "build:murow": "cd packages/murow && npm run build:types",
+        "build:webgpu": "cd packages/webgpu && npm run build:types",
+        "build:netcode": "cd packages/netcode && npm run build:types",
+        "build:additional": "concurrently --kill-others-on-fail \"npm run build:webgpu\" \"npm run build:netcode\"",
+        "copy-webgpu": "rm -rf packages/murow/dist/webgpu && cp -r packages/webgpu/dist packages/murow/dist/webgpu",
+        "copy-netcode": "rm -rf packages/murow/dist/netcode && cp -r packages/netcode/dist packages/murow/dist/netcode",
+        "copy": "concurrently --kill-others-on-fail \"npm run copy-webgpu\" \"npm run copy-netcode\"",
+        "prebuild": "npm run build:js",
+        "build": "npm run build:murow && npm run build:additional",
+        "postbuild": "npm run copy",
+        "pub": "npm run test && npm run build && cd packages/murow && npm publish"
+    },
+    "workspaces": [
+        "packages/*",
+        "examples/*",
+        "benchmarks",
+        "benchmarks/*"
+    ],
+    "author": "Luiz Felipe Moureau",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/moureau-dev/murow.git"
+    },
+    "bugs": {
+        "url": "https://github.com/moureau-dev/murow/issues"
+    },
+    "type": "module",
+    "private": true,
+    "devDependencies": {
+        "@types/bun": "latest",
+        "concurrently": "^9.2.1"
+    },
+    "peerDependencies": {
+        "typescript": "^5"
+    }
 }
