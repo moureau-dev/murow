@@ -7,7 +7,7 @@ import type { TransportAdapter } from 'murow/net';
 import { defineRPC } from 'murow/protocol';
 import { Network } from '../network/base';
 import { decodeDelta, type DecodedDelta } from '../codec/delta-codec';
-import { InterpolationBuffer } from './interpolation-buffer';
+import { SnapshotInterpolation } from './strategies/snapshot-interpolation';
 import type { DefinedIntents, IntentPayload, IntentSchemaMap } from '../intents/define-intents';
 import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs';
 import type { DefinedPredictions } from '../predictions/define-predictions';
@@ -125,7 +125,7 @@ export class GameClient<
     private deferredSpawns: { entity: Entity; components: Record<string, unknown>; assigned: boolean }[] = [];
     /** Resolved local entity for the server's assignment. Default for sendIntent. */
     private _assignedEntity: Entity | null = null;
-    interpBuffer: InterpolationBuffer;
+    interpBuffer: SnapshotInterpolation;
     private _rttMs: number | null = null;
     private now: () => number;
 
@@ -177,7 +177,7 @@ export class GameClient<
         this.now = opts.now ?? (() => performance.now());
 
         // 16 slots covers ~800ms at 20Hz.
-        this.interpBuffer = new InterpolationBuffer(
+        this.interpBuffer = new SnapshotInterpolation(
             this.serverToLocal,
             16,
             interpolationDelay,

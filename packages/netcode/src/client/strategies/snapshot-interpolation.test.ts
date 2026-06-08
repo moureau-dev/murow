@@ -1,10 +1,10 @@
 import { describe, test, expect } from 'bun:test';
 import { f32 } from 'murow/core/binary-codec';
 import { defineComponent, World, type Component } from 'murow/ecs';
-import { networked } from '../components/sync-spec';
-import { InterpolationBuffer, type BufferedSnapshot } from './interpolation-buffer';
+import { networked } from '../../components/sync-spec';
+import { SnapshotInterpolation, type BufferedSnapshot } from './snapshot-interpolation';
 
-describe('InterpolationBuffer', () => {
+describe('SnapshotInterpolation', () => {
     const Position = defineComponent('Position', {
         schema: { x: f32, y: f32 },
         sync: networked({ rate: 'every-tick', interest: 'global', interp: 'lerp' }),
@@ -41,7 +41,7 @@ describe('InterpolationBuffer', () => {
     test('interpolates linearly between two straddling snapshots', () => {
         {
             const { world, serverToLocal, localEid } = setup();
-            const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+            const buf = new SnapshotInterpolation(serverToLocal, 8, 100, 300);
             buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
             buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 100, y: 0 } }]));
             buf.apply(world, 1110, [Position], () => false);
@@ -50,7 +50,7 @@ describe('InterpolationBuffer', () => {
 
         {
             const { world, serverToLocal, localEid } = setup();
-            const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+            const buf = new SnapshotInterpolation(serverToLocal, 8, 100, 300);
             buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
             buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 100, y: 0 } }]));
             buf.apply(world, 1150, [Position], () => false);
@@ -59,7 +59,7 @@ describe('InterpolationBuffer', () => {
 
         {
             const { world, serverToLocal, localEid } = setup();
-            const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+            const buf = new SnapshotInterpolation(serverToLocal, 8, 100, 300);
             buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
             buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 100, y: 0 } }]));
             buf.apply(world, 1200, [Position], () => false);
@@ -69,7 +69,7 @@ describe('InterpolationBuffer', () => {
 
     test('underrun (renderTime before oldest) holds the previous World value', () => {
         const { world, serverToLocal, localEid } = setup();
-        const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+        const buf = new SnapshotInterpolation(serverToLocal, 8, 100, 300);
         buf.record(snap(2000, 1, [{ serverEid: 100, comp: Position, value: { x: 50, y: 50 } }]));
         buf.record(snap(2100, 2, [{ serverEid: 100, comp: Position, value: { x: 100, y: 100 } }]));
 
@@ -84,7 +84,7 @@ describe('InterpolationBuffer', () => {
 
     test('overrun (renderTime past newest) clamps to newest', () => {
         const { world, serverToLocal, localEid } = setup();
-        const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+        const buf = new SnapshotInterpolation(serverToLocal, 8, 100, 300);
         buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
         buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 100, y: 0 } }]));
 
@@ -95,7 +95,7 @@ describe('InterpolationBuffer', () => {
 
     test('skipped (predicted) entities are not overwritten', () => {
         const { world, serverToLocal, localEid } = setup();
-        const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+        const buf = new SnapshotInterpolation(serverToLocal, 8, 100, 300);
 
         world.update(localEid, Position, { x: 999, y: 999 });
         buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
@@ -116,7 +116,7 @@ describe('InterpolationBuffer', () => {
         world.add(localEid, StepComp, { v: 0 });
         serverToLocal.set(100, localEid);
 
-        const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+        const buf = new SnapshotInterpolation(serverToLocal, 8, 100, 300);
         buf.record(snap(1000, 1, [{ serverEid: 100, comp: StepComp, value: { v: 0 } }]));
         buf.record(snap(1100, 2, [{ serverEid: 100, comp: StepComp, value: { v: 1 } }]));
 
@@ -131,7 +131,7 @@ describe('InterpolationBuffer', () => {
 
     test('capacity prunes oldest snapshots', () => {
         const { world, serverToLocal, localEid } = setup();
-        const buf = new InterpolationBuffer(serverToLocal, 2, 100, 300);
+        const buf = new SnapshotInterpolation(serverToLocal, 2, 100, 300);
         buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
         buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 50, y: 0 } }]));
         buf.record(snap(1200, 3, [{ serverEid: 100, comp: Position, value: { x: 100, y: 0 } }]));
@@ -144,7 +144,7 @@ describe('InterpolationBuffer', () => {
 
     test('a long idle gap prunes the stale tail; new snapshot waits out the delay', () => {
         const { world, serverToLocal, localEid } = setup();
-        const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+        const buf = new SnapshotInterpolation(serverToLocal, 8, 100, 300);
 
         // Apply once with an initial snapshot so World holds (0, 0).
         buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
@@ -169,7 +169,7 @@ describe('InterpolationBuffer', () => {
 
     test('reordered packet does not trigger false stale-window prune', () => {
         const { world, serverToLocal, localEid } = setup();
-        const buf = new InterpolationBuffer(serverToLocal, 8, 100, 300);
+        const buf = new SnapshotInterpolation(serverToLocal, 8, 100, 300);
 
         buf.record(snap(1000, 1, [{ serverEid: 100, comp: Position, value: { x: 0, y: 0 } }]));
         buf.record(snap(1100, 2, [{ serverEid: 100, comp: Position, value: { x: 33, y: 0 } }]));
@@ -193,7 +193,7 @@ describe('InterpolationBuffer', () => {
         // the clock ~3.5 ticks behind where it should be.
         function playOut(maxDesync: number): number {
             const { world, serverToLocal, localEid } = setup();
-            const buf = new InterpolationBuffer(serverToLocal, 16, 500, 2000, maxDesync);
+            const buf = new SnapshotInterpolation(serverToLocal, 16, 500, 2000, maxDesync);
             for (const s of snapshots) buf.record(s);
             buf.apply(world, 1600, [Position], () => false);
             buf.apply(world, 1950, [Position], () => false);
@@ -222,7 +222,7 @@ describe('InterpolationBuffer', () => {
         world.add(peer, Position, { x: 5, y: 0 });
         serverToLocal.set(200, peer);
 
-        const buf = new InterpolationBuffer(serverToLocal, 16, 100, 5000);
+        const buf = new SnapshotInterpolation(serverToLocal, 16, 100, 5000);
         buf.record(snap(1000, 1, [
             { serverEid: 100, comp: Position, value: { x: 0, y: 0 } },
             { serverEid: 200, comp: Position, value: { x: 5, y: 0 } },

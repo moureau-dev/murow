@@ -2,7 +2,7 @@ import { lerp } from 'murow/core/lerp';
 import { Timeline } from 'murow/core/timeline';
 import { SlewClock } from 'murow/core/clock';
 import type { Component, Entity, World } from 'murow/ecs';
-import type { SyncSpec, InterpolationMode } from '../components/sync-spec';
+import type { SyncSpec, InterpolationMode } from '../../components/sync-spec';
 
 export interface BufferedSnapshot {
     receivedAt: number;
@@ -28,7 +28,7 @@ const DEFAULT_MAX_BRIDGE_GAP = 250;
  * Composes a core `Timeline` (snapshot history) and a core `SlewClock`
  * (play-out clock). Predicted entities are skipped; reconciliation drives them.
  */
-export class InterpolationBuffer {
+export class SnapshotInterpolation {
     private serverToLocal: Map<number, Entity>;
     private timeline: Timeline<BufferedSnapshot>;
     private clock = new SlewClock();
