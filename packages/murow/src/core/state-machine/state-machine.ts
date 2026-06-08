@@ -1,7 +1,7 @@
 import { SlotStore } from "../slot-map";
 import { EventSystem } from "../events";
 import { SimpleRNG } from "../simple-rng";
-import { BinaryCodec, type Field } from "../binary-codec";
+import type { Field } from "../binary-codec";
 
 const DEFAULT_SEED = 0x6d7572;
 const MAX_STATES = 256;
