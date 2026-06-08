@@ -12,6 +12,7 @@ import {
     intents,
     predictions,
     rpcs,
+    clamp,
 } from '../shared';
 
 // ──────────────────────────────────────────────────────────────────────
@@ -86,11 +87,12 @@ const client = new GameClient({
     loop: arena.loop,
     transport,
     protocol: { intents, rpcs },
-    strategy: {
-        kind: 'snapshot-interpolation',
-        delay: MIN_DELAY_MS,
-        staleWindow: 1200,
-        maxDesync: 700,
+    strategy: { // optional. defaults to { kind: 'snapshot-interpolation' }
+        kind: 'snapshot-interpolation', // currently the only implemented strategy. more to come later!
+        delay: MIN_DELAY_MS, // optional. Snapshot interpolation delay, ms. Default 100.
+        staleWindow: MAX_DELAY_MS * 2 + 100, //  optional. Max ms between snapshots before history is dropped as stale. Defaults to delay * 2 + 100.
+        maxDesync: 700, // optional. Desync past which the play-out clock snaps instead of warping, ms. Scaled by tick rate internally. Default 500.
+        maxBridgeGap: 250, // optional. Largest data gap a peer may have before its value is held instead of interpolated across, ms. Smaller gaps are bridged. Default 250.
     },
 });
 client.use(predictions);
@@ -104,10 +106,11 @@ let localEntity: Entity | null = null;
 
 client.on('spawn', ({ entity }) => {
     const c = arena.world.has(entity, Components.Color) ? arena.world.get(entity, Components.Color) : { r: 200, g: 200, b: 200 };
+    const p = arena.world.has(entity, Components.Position) ? arena.world.get(entity, Components.Position) : { x: 0, z: 0 };
     const handle = renderer.addInstance({
         model: prefabs.get('player'),
         color: [c.r / 255, c.g / 255, c.b / 255],
-        position: [0, 0.45, 0],
+        position: [p.x, 0.45, p.z],
     });
     handles.set(entity, handle);
     playerCountEl.textContent = String(handles.size);
@@ -186,18 +189,16 @@ arena.loop.events.on('render', ({ alpha }) => {
 
 const pingEl = document.getElementById('ping')!;
 
-// Ping twice a second so the delay estimate tracks RTT swings.
-arena.loop.events.on('tick', ({ tick }) => {
-    if (tick % Math.round(arena.loop.ticker.rate / 2) !== 0) return;
+// Ping twice every second so the delay estimate tracks RTT swings.
+arena.loop.every(500).milliseconds(() => {
     client.ping();
 });
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 client.on('pong', ({ rtt }) => {
     const ping = rtt / 2 + arena.loop.ticker.intervalMs;
     const target = clamp(ping, MIN_DELAY_MS, MAX_DELAY_MS);
     client.setInterpolationDelay(target);
+    client.setMaxBridgeGap(target * 2); // optional, but good to scale together with delay
     pingEl.textContent = `${Math.round(rtt)} ms (buffer ${Math.round(target)} ms)`;
 });
 
