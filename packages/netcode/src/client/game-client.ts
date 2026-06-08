@@ -1,5 +1,6 @@
 import { u16 } from 'murow/core/binary-codec';
 import { SimpleRNG } from 'murow/core/simple-rng';
+import { Reconciler } from 'murow/core/prediction';
 import type { Component, Entity, World } from 'murow/ecs';
 import type { GameLoop } from 'murow/game';
 import type { TransportAdapter } from 'murow/net';
@@ -105,7 +106,7 @@ export class GameClient<
 
     private predictionMap: DefinedPredictions<I>['map'] | null = null;
     private predictionBufferSize: number;
-    private predictionHistory: PredictedIntent[] = [];
+    private reconciler: Reconciler<PredictedIntent, { decoded: DecodedDelta; resetEntities: Set<Entity> }>;
 
     private localTick = 0;
     private intentSequence = 0;
@@ -185,6 +186,47 @@ export class GameClient<
             opts.loop.ticker.intervalMs,
             strategy.maxBridgeGap,
         );
+
+        this.reconciler = new Reconciler({
+            bufferSize: this.predictionBufferSize,
+            restore: ({ decoded, resetEntities }) => {
+                for (const serverEid of decoded.serverEntityIds) {
+                    const localEid = this.serverToLocal.get(serverEid);
+                    if (localEid === undefined) continue;
+                    if (!this.predictedEntities.has(localEid)) continue;
+                    const comps = decoded.valuesByServerEntity.get(serverEid);
+                    if (comps === undefined) continue;
+                    for (const [c, value] of comps) {
+                        if (this.world.has(localEid, c)) {
+                            this.world.update(localEid, c, value as any);
+                        } else {
+                            this.world.add(localEid, c, value as any);
+                        }
+                    }
+                    resetEntities.add(localEid);
+                }
+            },
+            replay: (preds, { decoded, resetEntities }) => {
+                let replayedCount = 0;
+                for (const pred of preds) {
+                    if (!resetEntities.has(pred.entity)) continue;
+                    const predFn = this.predictionMap?.[pred.name as keyof typeof this.predictionMap];
+                    if (predFn === undefined) continue;
+                    const ctx: PredictionContext = {
+                        world: this.world,
+                        entity: pred.entity,
+                        tick: pred.tick,
+                        deltaTime: pred.deltaTime,
+                        rng: this.rng,
+                        fields: makeFieldsAccessor(this.world, pred.entity),
+                        markDirty: makeMarkDirty(this.world, pred.entity),
+                    };
+                    (predFn as any)(pred.payload, ctx);
+                    replayedCount++;
+                }
+                this.emit('reconciled', { rewindTick: decoded.clientAckTick, replayed: replayedCount });
+            },
+        });
 
         this.discoverSyncedComponents();
         this.wireTransport();
@@ -346,60 +388,9 @@ export class GameClient<
      * the server has acked, replay the rest on top.
      */
     private reconcile(decoded: DecodedDelta): void {
-        const resetEntities = new Set<Entity>();
-        for (const serverEid of decoded.serverEntityIds) {
-            const localEid = this.serverToLocal.get(serverEid);
-            if (localEid === undefined) continue;
-            if (!this.predictedEntities.has(localEid)) continue;
-            const comps = decoded.valuesByServerEntity.get(serverEid);
-            if (comps === undefined) continue;
-            for (const [c, value] of comps) {
-                if (this.world.has(localEid, c)) {
-                    this.world.update(localEid, c, value as any);
-                } else {
-                    this.world.add(localEid, c, value as any);
-                }
-            }
-            resetEntities.add(localEid);
-        }
-
-        const ackSequence = decoded.clientAckTick;
-        let cut = 0;
-        while (
-            cut < this.predictionHistory.length &&
-            this.predictionHistory[cut].sequence <= ackSequence
-        ) {
-            cut++;
-        }
-        if (cut > 0) this.predictionHistory.splice(0, cut);
-
-        const remaining = this.predictionHistory.length;
-        if (remaining === 0) {
-            this.emit('reconciled', { rewindTick: ackSequence, replayed: 0 });
-            return;
-        }
-
-        let replayedCount = 0;
-        for (let i = 0; i < remaining; i++) {
-            const pred = this.predictionHistory[i];
-            if (!resetEntities.has(pred.entity)) continue;
-            const predFn = this.predictionMap?.[pred.name as keyof typeof this.predictionMap];
-            if (predFn === undefined) continue;
-            const ctx: PredictionContext = {
-                world: this.world,
-                entity: pred.entity,
-                tick: pred.tick,
-                deltaTime: pred.deltaTime,
-                rng: this.rng,
-                fields: makeFieldsAccessor(this.world, pred.entity),
-                markDirty: makeMarkDirty(this.world, pred.entity),
-            };
-            (predFn as any)(pred.payload, ctx);
-            replayedCount++;
-        }
-        this.emit('reconciled', {
-            rewindTick: ackSequence,
-            replayed: replayedCount,
+        this.reconciler.reconcile(decoded.clientAckTick, {
+            decoded,
+            resetEntities: new Set<Entity>(),
         });
     }
 
@@ -484,7 +475,7 @@ export class GameClient<
                 markDirty: makeMarkDirty(this.world, entity),
             };
             (predFn as any)(payload, ctx);
-            this.predictionHistory.push({
+            this.reconciler.record(sequence, {
                 tick: this.localTick,
                 sequence,
                 name,
@@ -493,9 +484,6 @@ export class GameClient<
                 deltaTime,
             });
             this.predictedEntities.add(entity);
-            while (this.predictionHistory.length > this.predictionBufferSize) {
-                this.predictionHistory.shift();
-            }
         }
 
         return true;
@@ -531,7 +519,7 @@ export class GameClient<
     }
 
     getPredictionDepth(): number {
-        return this.predictionHistory.length;
+        return this.reconciler.pending;
     }
 
     get interpolationDelay(): number {

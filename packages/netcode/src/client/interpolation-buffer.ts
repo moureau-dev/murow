@@ -1,4 +1,6 @@
 import { lerp } from 'murow/core/lerp';
+import { Timeline } from 'murow/core/timeline';
+import { SlewClock } from 'murow/core/clock';
 import type { Component, Entity, World } from 'murow/ecs';
 import type { SyncSpec, InterpolationMode } from '../components/sync-spec';
 
@@ -17,39 +19,23 @@ function modeFor(c: Component<any>): InterpolationMode {
 /** Desync past which the play-out clock hard-snaps instead of warping. */
 const DEFAULT_MAX_DESYNC = 500;
 
-/** Drift under this (ticks) advances at nominal rate, so a synced clock holds steady. */
-const WARP_DEAD_ZONE = 0.25;
-
 /** Largest data gap (ms) the buffer interpolates across; bigger gaps hold the last value. */
 const DEFAULT_MAX_BRIDGE_GAP = 250;
 
 /**
- * Holds the last few snapshots and writes a fixed-cadence value into World
- * each tick. With `delayMs > 0`, renders `delayMs` behind the newest snapshot,
- * lerping between the two snapshots straddling that past time. With
- * `delayMs == 0`, emits the newest snapshot.
- *
- * Predicted entities are skipped: reconciliation drives them.
+ * Snapshot-interpolation strategy: renders peer entities `delay` ms behind the
+ * newest snapshot, lerping between the two snapshots straddling that past time.
+ * Composes a core `Timeline` (snapshot history) and a core `SlewClock`
+ * (play-out clock). Predicted entities are skipped; reconciliation drives them.
  */
 export class InterpolationBuffer {
     private serverToLocal: Map<number, Entity>;
-    private buffer: BufferedSnapshot[] = [];
-    private capacity: number;
-    private renderTick = -Infinity;
-    private latestReceivedAt = -Infinity;
-    private smoothedTickRateMs = 0;
-    delay: number;
-    /**
-     * Max gap (ms) between consecutive snapshots before existing history
-     * is dropped. Past this gap, lerping across the gap would walk the
-     * peer slowly through stale territory.
-     */
-    staleWindow: number;
-    /** Desync past which the play-out clock snaps instead of warping, ms. */
-    maxDesync: number;
-    /** Known wall-ms per server tick, used to seed the rate estimate. 0 to infer. */
+    private timeline: Timeline<BufferedSnapshot>;
+    private clock = new SlewClock();
+    private smoothedTickRateMs: number;
     private nominalTickMs: number;
-    /** Largest data gap the buffer interpolates across, ms. Bigger gaps hold. */
+    delay: number;
+    maxDesync: number;
     maxBridgeGap: number;
 
     constructor(
@@ -62,13 +48,16 @@ export class InterpolationBuffer {
         maxBridgeGapMs: number = DEFAULT_MAX_BRIDGE_GAP,
     ) {
         this.serverToLocal = serverToLocal;
-        this.capacity = capacity;
+        this.timeline = new Timeline<BufferedSnapshot>(capacity, staleWindowMs);
         this.delay = delayMs;
-        this.staleWindow = staleWindowMs;
         this.maxDesync = maxDesyncMs;
         this.nominalTickMs = nominalTickMs;
         this.smoothedTickRateMs = nominalTickMs;
         this.maxBridgeGap = maxBridgeGapMs;
+    }
+
+    get staleWindow(): number {
+        return this.timeline.staleWindow;
     }
 
     setDelay(delayMs: number): void {
@@ -76,7 +65,7 @@ export class InterpolationBuffer {
     }
 
     setStaleWindow(staleWindowMs: number): void {
-        this.staleWindow = staleWindowMs;
+        this.timeline.setStaleWindow(staleWindowMs);
     }
 
     setMaxDesync(maxDesyncMs: number): void {
@@ -88,31 +77,16 @@ export class InterpolationBuffer {
     }
 
     record(snapshot: BufferedSnapshot): void {
-        const gap = snapshot.receivedAt - this.latestReceivedAt;
-        if (this.buffer.length > 0 && gap > this.staleWindow) {
-            this.buffer.length = 0;
-            this.renderTick = -Infinity;
-            this.latestReceivedAt = -Infinity;
+        const reset = this.timeline.record(snapshot.serverTick, snapshot.receivedAt, snapshot);
+        if (reset) {
             this.smoothedTickRateMs = this.nominalTickMs;
+            this.clock.reset();
         }
-        if (snapshot.receivedAt > this.latestReceivedAt) {
-            this.latestReceivedAt = snapshot.receivedAt;
-        }
-
-        let insertAt = this.buffer.length;
-        while (insertAt > 0 && this.buffer[insertAt - 1].serverTick >= snapshot.serverTick) {
-            if (this.buffer[insertAt - 1].serverTick === snapshot.serverTick) return;
-            insertAt--;
-        }
-        this.buffer.splice(insertAt, 0, snapshot);
-
-        while (this.buffer.length > this.capacity) this.buffer.shift();
     }
 
     clear(): void {
-        this.buffer.length = 0;
-        this.renderTick = -Infinity;
-        this.latestReceivedAt = -Infinity;
+        this.timeline.clear();
+        this.clock.reset();
         this.smoothedTickRateMs = this.nominalTickMs;
     }
 
@@ -122,21 +96,21 @@ export class InterpolationBuffer {
         components: Component<any>[],
         shouldSkip: (entity: Entity) => boolean,
     ): void {
-        if (this.buffer.length === 0) return;
+        const tl = this.timeline;
+        if (tl.length === 0) return;
 
-        const newest = this.buffer[this.buffer.length - 1];
-        const oldest = this.buffer[0];
+        const newest = tl.newest()!.sample;
+        const oldest = tl.oldest()!.sample;
 
-        let tickRateMs: number = 0;
-        if (this.buffer.length >= 2) {
+        let tickRateMs = 0;
+        if (tl.length >= 2) {
             const tickSpan = newest.serverTick - oldest.serverTick;
-            const wallSpan = this.latestReceivedAt - oldest.receivedAt;
+            const wallSpan = tl.latestReceivedAt - oldest.receivedAt;
             const rawTickRateMs = tickSpan > 0 && wallSpan > 0 ? wallSpan / tickSpan : 0;
             if (rawTickRateMs > 0) {
                 if (this.smoothedTickRateMs === 0) this.smoothedTickRateMs = rawTickRateMs;
                 else this.smoothedTickRateMs = this.smoothedTickRateMs * 0.9 + rawTickRateMs * 0.1;
             }
-
             tickRateMs = this.smoothedTickRateMs;
         }
 
@@ -148,47 +122,21 @@ export class InterpolationBuffer {
 
         const ageBeyondDelay = now - newest.receivedAt - this.delay;
         const targetTick = newest.serverTick + ageBeyondDelay / tickRateMs;
+        const renderTick = this.clock.advance(targetTick, this.maxDesync / tickRateMs);
 
-        if (this.renderTick === -Infinity) {
-            this.renderTick = targetTick;
-        } else {
-            const drift = targetTick - this.renderTick;
-            if (drift > this.maxDesync / tickRateMs) {
-                this.renderTick = targetTick;
-            } else if (Math.abs(drift) < WARP_DEAD_ZONE) {
-                this.renderTick += 1;
-            } else {
-                const warp = Math.max(0.6, Math.min(1.4, 1 + drift * 0.1));
-                this.renderTick += warp;
-            }
-        }
-
-        const renderTick = this.renderTick;
-
-        let a: BufferedSnapshot | null = null;
-        let b: BufferedSnapshot | null = null;
-        for (let i = 0; i < this.buffer.length - 1; i++) {
-            const s0 = this.buffer[i];
-            const s1 = this.buffer[i + 1];
-            if (s0.serverTick <= renderTick && renderTick <= s1.serverTick) {
-                a = s0;
-                b = s1;
-                break;
-            }
-        }
-
-        if (a === null || b === null) {
+        const straddle = tl.straddle(renderTick);
+        if (straddle === null) {
             if (renderTick < oldest.serverTick) return;
             this.writeSnapshot(world, newest, components, shouldSkip);
             return;
         }
+        const [aIndex, bIndex] = straddle;
+        const a = tl.at(aIndex).sample;
+        const b = tl.at(bIndex).sample;
 
         const seen = new Set<number>();
         for (const eid of a.entityIds) seen.add(eid);
         for (const eid of b.entityIds) seen.add(eid);
-
-        const aIndex = this.buffer.indexOf(a);
-        const bIndex = this.buffer.indexOf(b);
 
         // Beyond this many ticks ahead, a missing value is a starved entity
         // (idle), not a transient hole, so hold rather than reach across it.
@@ -204,14 +152,14 @@ export class InterpolationBuffer {
                 let va = a.componentValuesByEntity.get(serverEid)?.get(c);
                 while (va === undefined && aIdx > 0) {
                     aIdx--;
-                    va = this.buffer[aIdx].componentValuesByEntity.get(serverEid)?.get(c);
+                    va = tl.at(aIdx).sample.componentValuesByEntity.get(serverEid)?.get(c);
                 }
 
                 let bIdx = bIndex;
                 let vb = b.componentValuesByEntity.get(serverEid)?.get(c);
-                while (vb === undefined && bIdx < this.buffer.length - 1) {
+                while (vb === undefined && bIdx < tl.length - 1) {
                     bIdx++;
-                    vb = this.buffer[bIdx].componentValuesByEntity.get(serverEid)?.get(c);
+                    vb = tl.at(bIdx).sample.componentValuesByEntity.get(serverEid)?.get(c);
                 }
 
                 if (va === undefined && vb === undefined) continue;
@@ -227,8 +175,8 @@ export class InterpolationBuffer {
                     if (mode === 'none') {
                         toWrite = vb;
                     } else {
-                        const bTick = this.buffer[bIdx].serverTick;
-                        let aTick = this.buffer[aIdx].serverTick;
+                        const bTick = tl.at(bIdx).sample.serverTick;
+                        let aTick = tl.at(aIdx).sample.serverTick;
                         // Samples straddling a gap bigger than the bridge limit mean
                         // the entity was starved (idle). Hold the last value until one
                         // tick before it reappears, then ramp in over that single tick.
