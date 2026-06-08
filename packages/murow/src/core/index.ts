@@ -13,6 +13,7 @@ export * from './input';
 export * from './free-list';
 export * from './sparse-batcher';
 export * from './slot-map';
+export * from './state-machine';
 export * from './simple-rng';
 export * from './ray';
 export * from './raycast';
