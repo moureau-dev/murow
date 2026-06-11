@@ -7,7 +7,7 @@ import { defineRpcs } from './rpcs/define-rpcs';
 import { definePredictions } from './predictions/define-predictions';
 import { GameServer } from './server/game-server';
 import { GameClient } from './client/game-client';
-import { MemoryServerTransport } from './transports/memory-transport';
+import { MemoryServerTransport } from 'murow/net';
 import { networked } from './components/sync-spec';
 
 async function flush(): Promise<void> {

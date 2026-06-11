@@ -6,6 +6,5 @@ export * from './network';
 export * from './server';
 export * from './client';
 export * from './codec';
-export * from './transports';
 export * from './components';
 export * from './ctx';

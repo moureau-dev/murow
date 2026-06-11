@@ -13,7 +13,7 @@ import {
     JitterConfig,
     VirtualNetwork,
     VirtualServerTransport,
-} from './virtual-network';
+} from 'murow/net';
 
 export const MOVE_SPEED = 4;
 export const TICK_RATE = 24;
@@ -96,7 +96,7 @@ export function makeHarness(opts: HarnessOptions): Harness {
 
     const serverWorld = new World({ maxEntities: 128, components: [Position] });
     const serverLoop = new GameLoop({ tickRate: TICK_RATE, type: 'manual-server' });
-    const transport = new VirtualServerTransport(vnet, rng, opts.jitter);
+    const transport = new VirtualServerTransport({ vnet, rng, cfg: opts.jitter });
     const server = new GameServer({
         world: serverWorld,
         loop: serverLoop,

@@ -6,7 +6,7 @@ import { defineIntents } from './intents/define-intents';
 import { defineRpcs } from './rpcs/define-rpcs';
 import { GameServer } from './server/game-server';
 import { GameClient } from './client/game-client';
-import { MemoryServerTransport } from './transports/memory-transport';
+import { MemoryServerTransport } from 'murow/net';
 
 /**
  * Compile-time tests for the typed `sendIntent` / `sendRpc` / `broadcastRpc`

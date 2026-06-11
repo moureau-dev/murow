@@ -16,7 +16,7 @@ import { GameServer, GameClient } from 'murow/netcode';
 - **Game logic** - [`definePredictions`](#predictions), [`defineHandlers`](#handlers)
 - **Component sync** - [`networked()`](#networked-components)
 - **Server plugins** - [`AoiGrid`](#aoigrid), [`LagCompensation`](#lagcompensation)
-- **Test transport** - `MemoryServerTransport`
+- **Test transports** - `MemoryServerTransport` / `VirtualServerTransport` (from `murow/net`)
 
 ## Minimal example
 
@@ -585,9 +585,10 @@ in use. Predictions assume both sides advance at the same `deltaTime`.
 
 ## Transport
 
-Implement `TransportAdapter` from `murow`. Bundled:
+Implement `TransportAdapter` from `murow`. Test transports live in `murow/net`:
 
-- `MemoryServerTransport`: in-process pair for tests.
+- `MemoryServerTransport`: in-process microtask pair, no clock.
+- `VirtualServerTransport`: simulated latency / jitter / loss / reorder, seedable; you drive a `VirtualNetwork` clock via `advance(ms)`.
 
 Murow's WebSocket transports (`BunWebSocketServerTransport`, browser
 `BrowserWebSocketClientTransport`) work directly with `GameServer` and
@@ -632,7 +633,6 @@ src/
 │   ├── game-client.ts
 │   └── interpolation-buffer.ts
 ├── codec/delta-codec.ts
-├── transports/memory-transport.ts
 └── ctx.ts
 ```
 

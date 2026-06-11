@@ -8,7 +8,7 @@ import { definePredictions } from './predictions/define-predictions';
 import { defineHandlers } from './handlers/define-handlers';
 import { GameServer } from './server/game-server';
 import { GameClient } from './client/game-client';
-import { MemoryServerTransport } from './transports/memory-transport';
+import { MemoryServerTransport } from 'murow/net';
 import type { Peer } from './ctx';
 
 async function flushTransport(times = 4): Promise<void> {

@@ -53,6 +53,8 @@ export * from "./types";
 export * from "./server";
 export * from "./client";
 export * from "./adapters/bun-websocket";
+export * from "./adapters/virtual-network";
+export * from "./adapters/memory-transport";
 export * from "./buffer-pool";
 export * from "./validators";
 
