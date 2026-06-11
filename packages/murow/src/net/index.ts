@@ -55,6 +55,7 @@ export * from "./client";
 export * from "./adapters/bun-websocket";
 export * from "./adapters/virtual-network";
 export * from "./adapters/memory-transport";
+export * as Transports from "./adapters";
 export * from "./buffer-pool";
 export * from "./validators";
 

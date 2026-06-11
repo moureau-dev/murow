@@ -301,6 +301,38 @@ server.onConnection((peerId) => {
 
 **Note**: The factory runs once per peer automatically. For truly dynamic per-peer codecs, use `broadcastSnapshotWithCustomization` to filter/transform data at send time.
 
+## Bundled Transports
+
+Transport implementations live in `net/adapters` and are exported both flat and under the `Transports` namespace (for discoverability/autocomplete):
+
+| Class | `Transports.` alias | Use |
+| --- | --- | --- |
+| `BunWebSocketServerTransport` / `BunWebSocketClientTransport` | `BunWsServer` / `BunWsClient` | Production WebSocket over Bun |
+| `BrowserWebSocketClientTransport` | `BrowserWs` | Browser client (namespace / subpath only — kept off the flat root so browser globals stay out of server bundles) |
+| `MemoryServerTransport` | `Memory` | In-process microtask pair for tests — instant, no clock |
+| `VirtualServerTransport` + `VirtualNetwork` | `Simulated` + `SimulatedNetwork` | Deterministic, seedable simulation of latency / jitter / loss / reorder |
+
+```ts
+import { Transports } from 'murow/net';
+
+// instant in-process pair (no clock):
+const server = new Transports.Memory();
+
+// or a simulated bad network — drive delivery by advancing the clock:
+const sim = new Transports.Simulated({
+  cfg: { 
+    baseLatencyMs: 80, 
+    jitterMs: 20, 
+    lossChance: 0.05, 
+    reorderChance: 0.1, 
+    reorderSkewMs: 40,
+  },
+});
+// ...wire `sim` to a server, connect clients, then `net.advance(ms)` to deliver.
+```
+
+`Memory` and `Simulated` are for tests/dev; pair them with the `GameServer` / `GameClient` path in `murow/netcode`. The flat names (`MemoryServerTransport`, etc.) are also exported directly from `murow/net` and `murow`.
+
 ## Creating Custom Transports
 
 Implement the `TransportAdapter` interface:
