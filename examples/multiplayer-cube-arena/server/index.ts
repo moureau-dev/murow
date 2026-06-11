@@ -1,4 +1,4 @@
-import { BunWebSocketServerTransport, SimpleRNG } from 'murow';
+import { Transports, SimpleRNG } from 'murow';
 import { GameServer } from 'murow/netcode';
 import {
     TICK_RATE,
@@ -25,7 +25,7 @@ const arena = new Arena('server-timeout');
 // through to the static-file fetch handler below so the built client
 // bundle and the WebSocket share one port.
 const distRoot = './client/dist';
-const transport = BunWebSocketServerTransport.create(PORT, {
+const transport = Transports.BunWsServer.create(PORT, {
     path: WS_PATH,
     async fetch(req) {
         const url = new URL(req.url);
@@ -71,8 +71,8 @@ const PALETTE: [number, number, number][] = [
 
 server.on('connection', ({ peer }) => {
     const e = arena.world.spawn();
-    const spawnX = (rng.rand() - 0.5) * 12;
-    const spawnZ = (rng.rand() - 0.5) * 12;
+    const spawnX = rng.range(-6, 6);
+    const spawnZ = rng.range(-6, 6);
     const palette = rng.pick(PALETTE);
 
     arena.world.add(e, Components.Position, { x: spawnX, z: spawnZ });

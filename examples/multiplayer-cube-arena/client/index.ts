@@ -1,6 +1,5 @@
-import { PrefabBucket, type Entity } from 'murow';
+import { PrefabBucket, Transports, type Entity } from 'murow';
 import { MouseLook, ScrollZoom } from 'murow/core/input';
-import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-websocket';
 import { GameClient } from 'murow/netcode';
 import { WebGPU3DRenderer, type InstanceHandle } from 'murow/webgpu';
 import {
@@ -75,9 +74,10 @@ const arena = new Arena('client');
 // In `vite dev`, the Vite server proxies WS_PATH through to the Bun
 // server, so this URL works in both dev and prod without changes.
 const wsScheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-const transport = new BrowserWebSocketClientTransport(
-    `${wsScheme}//${location.host}${WS_PATH}`,
-);
+const uri = new URL(WS_PATH, location.origin);
+uri.protocol = wsScheme;
+
+const transport = new Transports.BrowserWs(uri.toString());
 
 const MIN_DELAY_MS = 3 * arena.loop.ticker.intervalMs;
 const MAX_DELAY_MS = 600;
