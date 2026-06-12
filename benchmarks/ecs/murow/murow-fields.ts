@@ -60,8 +60,8 @@ const Target = defineComponent("Target", {
 });
 
 const Status = defineComponent("Status", {
-  stunned: BinaryCodec.u8,
-  slowed: BinaryCodec.u8,
+  stunned: BinaryCodec.bool,
+  slowed: BinaryCodec.bool,
 });
 
 const Lifetime = defineComponent("Lifetime", {
@@ -148,8 +148,8 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
 
     if (rng.nextF32() > 0.8) {
       entity.add(Status, {
-        stunned: rng.nextF32() > 0.5 ? 1 : 0,
-        slowed: rng.nextF32() > 0.5 ? 1 : 0,
+        stunned: Boolean(rng.nextF32() > 0.5 ? 1 : 0),
+        slowed: Boolean(rng.nextF32() > 0.5 ? 1 : 0),
       });
     }
 
@@ -280,10 +280,10 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
       const stunned = status.stunned[eid];
       const slowed = status.slowed[eid];
 
-      if (stunned === 1) {
+      if (stunned) {
         velocity.vx[eid] = 0;
         velocity.vy[eid] = 0;
-      } else if (slowed === 1) {
+      } else if (slowed) {
         velocity.vx[eid]! *= 0.5;
         velocity.vy[eid]! *= 0.5;
       }
