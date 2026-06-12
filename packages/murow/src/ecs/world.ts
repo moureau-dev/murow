@@ -313,16 +313,6 @@ export class World extends WorldSystems {
      * Caches masks to avoid recomputation for frequently used component combinations
      */
     private getQueryMask(components: Component<any>[]): number[] | null {
-        // Create cache key from component names (sorted for consistency)
-        const cacheKey = components
-            .map((c) => c.name)
-            .sort()
-            .join(",");
-
-        // Check cache first
-        const cached = this.queryMaskCache[cacheKey];
-        if (cached) return cached;
-
         // Find max component index to determine how many words we need
         let maxIndex = -1;
         const indices: number[] = [];
@@ -333,6 +323,13 @@ export class World extends WorldSystems {
             indices.push(index);
             if (index > maxIndex) maxIndex = index;
         }
+
+        // Cache key from the unique world indices (sorted for order independence)
+        const cacheKey = indices.sort((a, b) => a - b).join(",");
+
+        // Check cache first
+        const cached = this.queryMaskCache[cacheKey];
+        if (cached) return cached;
 
         // Calculate number of words needed
         const numWords = Math.floor(maxIndex / 32) + 1;
