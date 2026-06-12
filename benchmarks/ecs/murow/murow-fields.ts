@@ -158,113 +158,128 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     }
   }
 
-  const frameCount = 60;
-  const deltaTime = 0.016;
-  const frameTimes: number[] = [];
+  function movementSystem(world: World, deltaTime: number) {
+    const entities = world.query(Transform2D, Velocity);
 
-  for (let frame = 0; frame < frameCount; frame++) {
-    const frameStart = performance.now();
+    for (let i = 0; i < entities.length; i++) {
+      const eid = entities[i]!;
 
-    // Movement system (fields-style RAW)
-    const movementEntities = world.query(Transform2D, Velocity);
-    for (let i = 0; i < movementEntities.length; i++) {
-      const eid = movementEntities[i]!;
       transform.x[eid]! += velocity.vx[eid]! * deltaTime;
       transform.y[eid]! += velocity.vy[eid]! * deltaTime;
     }
+  }
 
-    // Rotation system
-    for (let i = 0; i < movementEntities.length; i++) {
-      const eid = movementEntities[i]!;
+  function rotationSystem(world: World) {
+    const entities = world.query(Transform2D, Velocity);
+
+    for (let i = 0; i < entities.length; i++) {
+      const eid = entities[i]!;
       const vx = velocity.vx[eid]!;
       const vy = velocity.vy[eid]!;
+
       if (vx !== 0 || vy !== 0) {
         transform.rotation[eid] = Math.atan2(vy, vx);
       }
     }
+  }
 
-    // Boundary system
-    const boundaryEntities = world.query(Transform2D);
-    for (let i = 0; i < boundaryEntities.length; i++) {
-      const eid = boundaryEntities[i]!;
+  function boundarySystem(world: World) {
+    const entities = world.query(Transform2D);
+
+    for (let i = 0; i < entities.length; i++) {
+      const eid = entities[i]!;
+
       if (transform.x[eid]! < 0) transform.x[eid]! = 1000;
       if (transform.x[eid]! > 1000) transform.x[eid]! = 0;
       if (transform.y[eid]! < 0) transform.y[eid]! = 1000;
       if (transform.y[eid]! > 1000) transform.y[eid]! = 0;
     }
+  }
 
-    // Health regen system
-    if (frame % 30 === 0) {
-      const healthEntities = world.query(Health);
-      for (let i = 0; i < healthEntities.length; i++) {
-        const eid = healthEntities[i]!;
-        const current = health.current[eid]!;
-        const max = health.max[eid]!;
-        if (current > 0 && current < max) {
-          const newHealth = current + 5;
-          health.current[eid] = newHealth > max ? max : newHealth;
-        }
+  function healthRegenSystem(world: World) {
+    const entities = world.query(Health);
+
+    for (let i = 0; i < entities.length; i++) {
+      const eid = entities[i]!;
+      const current = health.current[eid]!;
+      const max = health.max[eid]!;
+
+      if (current > 0 && current < max) {
+        const newHealth = current + 5;
+        health.current[eid] = newHealth > max ? max : newHealth;
       }
     }
+  }
 
-    // Cooldown system
-    const cooldownEntities = world.query(Cooldown);
-    for (let i = 0; i < cooldownEntities.length; i++) {
-      const eid = cooldownEntities[i]!;
+  function cooldownSystem(world: World, deltaTime: number) {
+    const entities = world.query(Cooldown);
+
+    for (let i = 0; i < entities.length; i++) {
+      const eid = entities[i]!;
+
       if (cooldown.current[eid]! > 0) {
         const newCooldown = cooldown.current[eid]! - deltaTime;
         cooldown.current[eid] = newCooldown < 0 ? 0 : newCooldown;
       }
     }
+  }
 
-    // Combat system
-    if (frame % 5 === 0) {
-      const combatEntities = world.query(Cooldown, Damage, Target);
-      const updates: Array<{ targetId: number; newHealth: number; attackerId: number }> = [];
-      for (let i = 0; i < combatEntities.length; i++) {
-        const eid = combatEntities[i]!;
-        const cd = cooldown.current[eid]!;
-        const dmg = damage.amount[eid]!;
-        const targetId = target.entityId[eid]!;
+  function combatSystem(world: World) {
+    const entities = world.query(Cooldown, Damage, Target);
+    const updates: Array<{ targetId: number; newHealth: number; attackerId: number }> = [];
 
-        if (cd === 0 && world.isAlive(targetId) && world.has(targetId, Health)) {
-          const targetHealth = health.current[targetId]!;
-          let damageDealt = dmg;
+    for (let i = 0; i < entities.length; i++) {
+      const eid = entities[i]!;
+      const cd = cooldown.current[eid]!;
+      const dmg = damage.amount[eid]!;
+      const targetId = target.entityId[eid]!;
 
-          if (world.has(targetId, Armor)) {
-            const armorVal = armor.value[targetId]!;
-            const reduced = dmg - armorVal * 0.1;
-            damageDealt = reduced < 1 ? 1 : Math.floor(reduced);
-          }
+      if (cd === 0 && world.isAlive(targetId) && world.has(targetId, Health)) {
+        const targetHealth = health.current[targetId]!;
+        let damageDealt = dmg;
 
-          const newHealth = targetHealth > damageDealt ? targetHealth - damageDealt : 0;
-          updates.push({ targetId, newHealth, attackerId: eid });
+        if (world.has(targetId, Armor)) {
+          const armorVal = armor.value[targetId]!;
+          const reduced = dmg - armorVal * 0.1;
+
+          damageDealt = reduced < 1 ? 1 : Math.floor(reduced);
         }
-      }
 
-      for (const { targetId, newHealth, attackerId } of updates) {
-        if (world.isAlive(targetId)) {
-          health.current[targetId] = newHealth;
-        }
-        cooldown.current[attackerId] = cooldown.max[attackerId]!;
+        const newHealth = targetHealth > damageDealt ? targetHealth - damageDealt : 0;
+        updates.push({ targetId, newHealth, attackerId: eid });
       }
     }
 
-    // Death system
-    const deathEntities = world.query(Health);
+    for (const { targetId, newHealth, attackerId } of updates) {
+      if (world.isAlive(targetId)) {
+        health.current[targetId] = newHealth;
+      }
+
+      cooldown.current[attackerId] = cooldown.max[attackerId]!;
+    }
+  }
+
+  function deathSystem(world: World) {
+    const entities = world.query(Health);
     const toRemove: number[] = [];
-    for (let i = 0; i < deathEntities.length; i++) {
-      const eid = deathEntities[i]!;
+
+    for (let i = 0; i < entities.length; i++) {
+      const eid = entities[i]!;
+
       if (health.current[eid] === 0) toRemove.push(eid);
     }
-    for (const eid of toRemove) world.despawn(eid);
 
-    // Status effect system
-    const statusEntities = world.query(Status, Velocity);
-    for (let i = 0; i < statusEntities.length; i++) {
-      const eid = statusEntities[i]!;
+    for (const eid of toRemove) world.despawn(eid);
+  }
+
+  function statusEffectSystem(world: World) {
+    const entities = world.query(Status, Velocity);
+
+    for (let i = 0; i < entities.length; i++) {
+      const eid = entities[i]!;
       const stunned = status.stunned[eid];
       const slowed = status.slowed[eid];
+
       if (stunned === 1) {
         velocity.vx[eid] = 0;
         velocity.vy[eid] = 0;
@@ -273,40 +288,70 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
         velocity.vy[eid]! *= 0.5;
       }
     }
+  }
 
-    // Lifetime system
-    const lifetimeEntities = world.query(Lifetime);
+  function lifetimeSystem(world: World, deltaTime: number) {
+    const entities = world.query(Lifetime);
     const expiredEntities: number[] = [];
-    for (let i = 0; i < lifetimeEntities.length; i++) {
-      const eid = lifetimeEntities[i]!;
+
+    for (let i = 0; i < entities.length; i++) {
+      const eid = entities[i]!;
       const remaining = lifetime.remaining[eid]! - deltaTime;
+
       if (remaining <= 0) {
         expiredEntities.push(eid);
       } else {
         lifetime.remaining[eid] = remaining;
       }
     }
+
     for (const eid of expiredEntities) world.despawn(eid);
+  }
 
-    // Velocity damping system
-    const velocityEntities = world.query(Velocity);
-    for (let i = 0; i < velocityEntities.length; i++) {
-      const eid = velocityEntities[i]!;
-      velocity.vx[eid]! *= 0.99;
-      velocity.vy[eid]! *= 0.99;
-    }
-
-    // AI behavior system
+  function aiBehaviorSystem(world: World, frame: number) {
     if (frame % 20 === 0) {
-      const aiRng = new SimpleRng(frame);
-      for (let i = 0; i < velocityEntities.length; i++) {
-        const eid = velocityEntities[i]!;
-        if (aiRng.nextF32() > 0.9) {
-          velocity.vx[eid]! += (aiRng.nextF32() - 0.5) * 2;
-          velocity.vy[eid]! += (aiRng.nextF32() - 0.5) * 2;
+      const rng = new SimpleRng(frame);
+      const entities = world.query(Velocity);
+
+      for (let i = 0; i < entities.length; i++) {
+        const eid = entities[i]!;
+
+        if (rng.nextF32() > 0.9) {
+          velocity.vx[eid]! += (rng.nextF32() - 0.5) * 2;
+          velocity.vy[eid]! += (rng.nextF32() - 0.5) * 2;
         }
       }
     }
+  }
+
+  function velocityDampingSystem(world: World) {
+    const entities = world.query(Velocity);
+
+    for (let i = 0; i < entities.length; i++) {
+      const eid = entities[i]!;
+
+      velocity.vx[eid]! *= 0.99;
+      velocity.vy[eid]! *= 0.99;
+    }
+  }
+
+  const frameCount = 60;
+  const deltaTime = 0.016;
+  const frameTimes: number[] = [];
+
+  for (let frame = 0; frame < frameCount; frame++) {
+    const frameStart = performance.now();
+    movementSystem(world, deltaTime);
+    rotationSystem(world);
+    boundarySystem(world);
+    healthRegenSystem(world);
+    cooldownSystem(world, deltaTime);
+    // combatSystem(world);
+    deathSystem(world);
+    statusEffectSystem(world);
+    lifetimeSystem(world, deltaTime);
+    aiBehaviorSystem(world, frame);
+    velocityDampingSystem(world);
 
     const frameTime = performance.now() - frameStart;
     frameTimes.push(frameTime);
