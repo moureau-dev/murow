@@ -272,7 +272,7 @@ fn run_benchmark(entity_count: usize) -> BenchmarkMetrics {
             boundary_system,
             health_regen_system,
             cooldown_system,
-            combat_system,
+            // combat_system,
             death_system,
             status_effect_system,
             lifetime_system,
