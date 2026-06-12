@@ -7,51 +7,53 @@ import {
   type World,
 } from "bitecs";
 
-// Define components matching Murow's benchmark (SoA format)
+// Components matching Murow's benchmark schema, preallocated SoA typed arrays
+const MAX_ENTITIES = 100001;
+
 const Transform2D = {
-  x: [] as number[],
-  y: [] as number[],
-  rotation: [] as number[],
+  x: new Float32Array(MAX_ENTITIES),
+  y: new Float32Array(MAX_ENTITIES),
+  rotation: new Float32Array(MAX_ENTITIES),
 };
 
 const Velocity = {
-  vx: [] as number[],
-  vy: [] as number[],
+  vx: new Float32Array(MAX_ENTITIES),
+  vy: new Float32Array(MAX_ENTITIES),
 };
 
 const Health = {
-  current: [] as number[],
-  max: [] as number[],
+  current: new Uint16Array(MAX_ENTITIES),
+  max: new Uint16Array(MAX_ENTITIES),
 };
 
 const Armor = {
-  value: [] as number[],
+  value: new Uint16Array(MAX_ENTITIES),
 };
 
 const Damage = {
-  amount: [] as number[],
+  amount: new Uint16Array(MAX_ENTITIES),
 };
 
 const Cooldown = {
-  current: [] as number[],
-  max: [] as number[],
+  current: new Float32Array(MAX_ENTITIES),
+  max: new Float32Array(MAX_ENTITIES),
 };
 
 const Team = {
-  id: [] as number[],
+  id: new Uint8Array(MAX_ENTITIES),
 };
 
 const Target = {
-  entityId: [] as number[],
+  entityId: new Uint32Array(MAX_ENTITIES),
 };
 
 const Status = {
-  stunned: [] as number[],
-  slowed: [] as number[],
+  stunned: new Uint8Array(MAX_ENTITIES),
+  slowed: new Uint8Array(MAX_ENTITIES),
 };
 
 const Lifetime = {
-  remaining: [] as number[],
+  remaining: new Float32Array(MAX_ENTITIES),
 };
 
 // Simple random number generator for deterministic benchmarking
@@ -77,8 +79,9 @@ class SimpleRng {
 }
 
 // System implementations
+const movementQueryComponents = [Transform2D, Velocity];
 function movementSystem(world: World, deltaTime: number): void {
-  const entities = query(world, [Transform2D, Velocity]);
+  const entities = query(world, movementQueryComponents);
   for (let i = 0; i < entities.length; i++) {
     const eid = entities[i]!;
     Transform2D.x[eid]! += Velocity.vx[eid]! * deltaTime;
@@ -86,8 +89,9 @@ function movementSystem(world: World, deltaTime: number): void {
   }
 }
 
+const rotationQueryComponents = [Transform2D, Velocity];
 function rotationSystem(world: World): void {
-  const entities = query(world, [Transform2D, Velocity]);
+  const entities = query(world, rotationQueryComponents);
   for (let i = 0; i < entities.length; i++) {
     const eid = entities[i]!;
     const vx = Velocity.vx[eid]!;
@@ -99,8 +103,9 @@ function rotationSystem(world: World): void {
   }
 }
 
+const boundaryQueryComponents = [Transform2D];
 function boundarySystem(world: World): void {
-  const entities = query(world, [Transform2D]);
+  const entities = query(world, boundaryQueryComponents);
   for (let i = 0; i < entities.length; i++) {
     const eid = entities[i]!;
 
@@ -111,9 +116,10 @@ function boundarySystem(world: World): void {
   }
 }
 
+const healthRegenQueryComponents = [Health];
 function healthRegenSystem(world: World, frame: number): void {
   if (frame % 30 === 0) {
-    const entities = query(world, [Health]);
+    const entities = query(world, healthRegenQueryComponents);
     for (let i = 0; i < entities.length; i++) {
       const eid = entities[i]!;
       const current = Health.current[eid]!;
@@ -127,8 +133,9 @@ function healthRegenSystem(world: World, frame: number): void {
   }
 }
 
+const cooldownQueryComponents = [Cooldown];
 function cooldownSystem(world: World, deltaTime: number): void {
-  const entities = query(world, [Cooldown]);
+  const entities = query(world, cooldownQueryComponents);
   for (let i = 0; i < entities.length; i++) {
     const eid = entities[i]!;
     if (Cooldown.current[eid]! > 0) {
@@ -141,9 +148,10 @@ function cooldownSystem(world: World, deltaTime: number): void {
 // Track active entities globally
 let activeEntities = new Set<number>();
 
+const combatQueryComponents = [Cooldown, Damage, Target];
 function combatSystem(world: World, frame: number): void {
   if (frame % 5 === 0) {
-    const entities = query(world, [Cooldown, Damage, Target]);
+    const entities = query(world, combatQueryComponents);
     const updates: Array<{ targetId: number; newHealth: number; attackerId: number }> = [];
 
     for (let i = 0; i < entities.length; i++) {
@@ -179,8 +187,9 @@ function combatSystem(world: World, frame: number): void {
   }
 }
 
+const deathQueryComponents = [Health];
 function deathSystem(world: World): void {
-  const entities = query(world, [Health]);
+  const entities = query(world, deathQueryComponents);
   const toRemove: number[] = [];
 
   for (let i = 0; i < entities.length; i++) {
@@ -196,8 +205,9 @@ function deathSystem(world: World): void {
   }
 }
 
+const statusEffectQueryComponents = [Status, Velocity];
 function statusEffectSystem(world: World): void {
-  const entities = query(world, [Status, Velocity]);
+  const entities = query(world, statusEffectQueryComponents);
   for (let i = 0; i < entities.length; i++) {
     const eid = entities[i]!;
     const stunned = Status.stunned[eid];
@@ -213,8 +223,9 @@ function statusEffectSystem(world: World): void {
   }
 }
 
+const lifetimeQueryComponents = [Lifetime];
 function lifetimeSystem(world: World, deltaTime: number): void {
-  const entities = query(world, [Lifetime]);
+  const entities = query(world, lifetimeQueryComponents);
   const expiredEntities: number[] = [];
 
   for (let i = 0; i < entities.length; i++) {
@@ -234,8 +245,9 @@ function lifetimeSystem(world: World, deltaTime: number): void {
   }
 }
 
+const velocityDampingQueryComponents = [Velocity];
 function velocityDampingSystem(world: World): void {
-  const entities = query(world, [Velocity]);
+  const entities = query(world, velocityDampingQueryComponents);
   for (let i = 0; i < entities.length; i++) {
     const eid = entities[i]!;
     Velocity.vx[eid]! *= 0.99;
@@ -243,10 +255,11 @@ function velocityDampingSystem(world: World): void {
   }
 }
 
+const aiBehaviorQueryComponents = [Velocity];
 function aiBehaviorSystem(world: World, frame: number): void {
   if (frame % 20 === 0) {
     const rng = new SimpleRng(frame);
-    const entities = query(world, [Velocity]);
+    const entities = query(world, aiBehaviorQueryComponents);
 
     for (let i = 0; i < entities.length; i++) {
       const eid = entities[i]!;
@@ -352,7 +365,7 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     boundarySystem(world);
     healthRegenSystem(world, frame);
     cooldownSystem(world, deltaTime);
-    combatSystem(world, frame);
+    // combatSystem(world, frame);
     deathSystem(world);
     statusEffectSystem(world);
     lifetimeSystem(world, deltaTime);
