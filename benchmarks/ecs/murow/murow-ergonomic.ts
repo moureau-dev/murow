@@ -265,37 +265,37 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
       }
     });
 
-  // Combat system - uses ergonomic API + closure over cached arrays for cross-entity reads
-  const combatSystem = world
-    .addSystem()
-    .query(Cooldown, Damage, Target)
-    .fields([
-      { cooldown: ['current', 'max'] },
-      { damage: ['amount'] },
-      { target: ['entityId'] }
-    ])
-    .when((entity) => {
-      if (currentFrame % 5 !== 0) return false;
-      return entity.cooldown_current === 0 && world.isAlive(entity.target_entityId) && world.has(entity.target_entityId, Health);
-    })
-    .run((entity, _deltaTime, world) => {
-      const targetId = entity.target_entityId;
-      const targetHealth = healthCurrent[targetId]!;
-      let damageDealt = entity.damage_amount;
+  // // Combat system - uses ergonomic API + closure over cached arrays for cross-entity reads
+  // const combatSystem = world
+  //   .addSystem()
+  //   .query(Cooldown, Damage, Target)
+  //   .fields([
+  //     { cooldown: ['current', 'max'] },
+  //     { damage: ['amount'] },
+  //     { target: ['entityId'] }
+  //   ])
+  //   .when((entity) => {
+  //     if (currentFrame % 5 !== 0) return false;
+  //     return entity.cooldown_current === 0 && world.isAlive(entity.target_entityId) && world.has(entity.target_entityId, Health);
+  //   })
+  //   .run((entity, _deltaTime, world) => {
+  //     const targetId = entity.target_entityId;
+  //     const targetHealth = healthCurrent[targetId]!;
+  //     let damageDealt = entity.damage_amount;
 
-      // Apply armor reduction
-      if (world.has(targetId, Armor)) {
-        const armor = armorValue[targetId]!;
-        const reduced = entity.damage_amount - armor * 0.1;
-        damageDealt = reduced < 1 ? 1 : Math.floor(reduced);
-      }
+  //     // Apply armor reduction
+  //     if (world.has(targetId, Armor)) {
+  //       const armor = armorValue[targetId]!;
+  //       const reduced = entity.damage_amount - armor * 0.1;
+  //       damageDealt = reduced < 1 ? 1 : Math.floor(reduced);
+  //     }
 
-      const newHealth = targetHealth > damageDealt ? targetHealth - damageDealt : 0;
-      healthCurrent[targetId] = newHealth;
+  //     const newHealth = targetHealth > damageDealt ? targetHealth - damageDealt : 0;
+  //     healthCurrent[targetId] = newHealth;
 
-      // Reset cooldown
-      entity.cooldown_current = entity.cooldown_max;
-    });
+  //     // Reset cooldown
+  //     entity.cooldown_current = entity.cooldown_max;
+  //   });
 
   // Setup entities
   const rng = new SimpleRng(12345);

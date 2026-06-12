@@ -246,42 +246,42 @@ function runBenchmark(entityCount: number): BenchmarkMetrics {
     }
 
     // Combat system
-    if (frame % 5 === 0) {
-      const combatEntities = world.query(Cooldown, Damage, Target);
-      const updates: Array<{ targetId: number; newHealth: number; attackerId: number }> = [];
+    // if (frame % 5 === 0) {
+    //   const combatEntities = world.query(Cooldown, Damage, Target);
+    //   const updates: Array<{ targetId: number; newHealth: number; attackerId: number }> = [];
 
-      for (let i = 0; i < combatEntities.length; i++) {
-        const eid = combatEntities[i]!;
-        const cooldown = cooldownCurrent[eid]!;
-        const damage = damageAmount[eid]!;
-        const targetId = targetEntityId[eid]!;
+    //   for (let i = 0; i < combatEntities.length; i++) {
+    //     const eid = combatEntities[i]!;
+    //     const cooldown = cooldownCurrent[eid]!;
+    //     const damage = damageAmount[eid]!;
+    //     const targetId = targetEntityId[eid]!;
 
-        if (cooldown === 0 && world.isAlive(targetId) && world.has(targetId, Health)) {
-          const targetHealth = healthCurrent[targetId]!;
-          let damageDealt = damage;
+    //     if (cooldown === 0 && world.isAlive(targetId) && world.has(targetId, Health)) {
+    //       const targetHealth = healthCurrent[targetId]!;
+    //       let damageDealt = damage;
 
-          // Apply armor reduction
-          if (world.has(targetId, Armor)) {
-            const armor = armorValue[targetId]!;
-            const reduced = damage - armor * 0.1;
-            damageDealt = reduced < 1 ? 1 : Math.floor(reduced);
-          }
+    //       // Apply armor reduction
+    //       if (world.has(targetId, Armor)) {
+    //         const armor = armorValue[targetId]!;
+    //         const reduced = damage - armor * 0.1;
+    //         damageDealt = reduced < 1 ? 1 : Math.floor(reduced);
+    //       }
 
-          const newHealth = targetHealth > damageDealt ? targetHealth - damageDealt : 0;
-          updates.push({ targetId, newHealth, attackerId: eid });
-        }
-      }
+    //       const newHealth = targetHealth > damageDealt ? targetHealth - damageDealt : 0;
+    //       updates.push({ targetId, newHealth, attackerId: eid });
+    //     }
+    //   }
 
-      // Apply all updates
-      for (const { targetId, newHealth, attackerId } of updates) {
-        if (world.isAlive(targetId)) {
-          healthCurrent[targetId] = newHealth;
-        }
+    //   // Apply all updates
+    //   for (const { targetId, newHealth, attackerId } of updates) {
+    //     if (world.isAlive(targetId)) {
+    //       healthCurrent[targetId] = newHealth;
+    //     }
 
-        // Reset cooldown
-        cooldownCurrent[attackerId] = cooldownMax[attackerId]!;
-      }
-    }
+    //     // Reset cooldown
+    //     cooldownCurrent[attackerId] = cooldownMax[attackerId]!;
+    //   }
+    // }
 
     // Death system
     const deathEntities = world.query(Health);
