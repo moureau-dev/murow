@@ -58,4 +58,23 @@ describe('defineComponent', () => {
       expect(Weird.__sync).toBeUndefined();
     });
   });
+
+  describe('scalar field guard', () => {
+    test('accepts number and boolean fields', () => {
+      expect(() => defineComponent('Ok', { hp: u16, dead: BinaryCodec.bool })).not.toThrow();
+    });
+
+    test('throws on a composite field', () => {
+      expect(() => defineComponent('Bad', { v: BinaryCodec.vec2 } as any)).toThrow(/must be a scalar/);
+    });
+
+    test('rejects a composite field at the type level', () => {
+      // Never invoked: this asserts the compile-time guard (validated by tsc),
+      // not runtime behavior.
+      const _check = () =>
+        // @ts-expect-error composite fields are not assignable to a scalar component schema
+        defineComponent('CompileBad', { v: BinaryCodec.vec2 });
+      expect(typeof _check).toBe('function');
+    });
+  });
 });

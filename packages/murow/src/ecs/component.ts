@@ -92,6 +92,15 @@ type InferSchemaShape<S> = {
 };
 
 /**
+ * Resolves a component field to an error-branded type unless its value is a
+ * scalar (number or boolean), so composite fields fail at the call site.
+ */
+type ScalarFieldGuard<F> =
+  F extends import("../core/binary-codec").Field<infer V, any>
+    ? ([V] extends [number | boolean] ? unknown : { readonly __error: "component fields must be scalar (number or boolean); model vectors as separate fields" })
+    : unknown;
+
+/**
  * Define a component type with its binary schema.
  *
  * Two call shapes are supported:
@@ -127,11 +136,11 @@ type InferSchemaShape<S> = {
  */
 export function defineComponent<S extends Record<string, import("../core/binary-codec").Field<any, any>>>(
   name: string,
-  schema: S
+  schema: S & { [K in keyof S]: ScalarFieldGuard<S[K]> }
 ): Component<InferSchemaShape<S> & object, S extends Schema<InferSchemaShape<S> & object> ? S : never>;
 export function defineComponent<S extends Record<string, import("../core/binary-codec").Field<any, any>>>(
   name: string,
-  def: { schema: S; sync: unknown }
+  def: { schema: S & { [K in keyof S]: ScalarFieldGuard<S[K]> }; sync: unknown }
 ): Component<InferSchemaShape<S> & object, S extends Schema<InferSchemaShape<S> & object> ? S : never>;
 export function defineComponent<T extends object>(
   name: string,
@@ -149,6 +158,16 @@ export function defineComponent<T extends object>(
   const size = calculateSchemaSize(schema);
   const fieldNames = Object.keys(schema) as (keyof T)[];
   const fieldCount = fieldNames.length;
+
+  for (const key of fieldNames) {
+    const nil = schema[key].toNil();
+    if (typeof nil !== "number" && typeof nil !== "boolean") {
+      throw new Error(
+        `defineComponent("${name}"): field "${String(key)}" must be a scalar (number or boolean). ` +
+        `Composite fields are not supported by the store; model vectors as separate fields (e.g. x, y, z).`,
+      );
+    }
+  }
 
   // Create PooledCodec for array serialization
   const arrayCodec = PooledCodec.array(schema);

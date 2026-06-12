@@ -278,6 +278,27 @@ const transformX = world.getFieldArray(Transform, 'x');
 </details>
 
 <details>
+<summary><strong>Serialization</strong></summary>
+
+```typescript
+// Serialize one entity's components to binary (defaults to all components).
+const bytes = world.serialize(eid);
+const subset = world.serialize(eid, [Transform]);
+
+// Restore into an entity (adds components it does not have).
+world.restore(eid, bytes);
+
+// Hot path: write/read against a caller-owned DataView, advancing the offset.
+let off = 0;
+off = world.writeEntity(eid, components, dv, off);
+off = world.readEntity(eid, components, dv, off);
+```
+
+The layout is a presence bitmask over the component list followed by the present components' packed fields. Restore uses the same list (the default is every registered component, in registration order). Handles scalar component fields.
+
+</details>
+
+<details>
 <summary><strong>System Builder</strong></summary>
 
 ```typescript

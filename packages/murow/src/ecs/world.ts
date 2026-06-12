@@ -4,6 +4,7 @@ import { Component } from "./component";
 import { ComponentStore } from "./component-store";
 import { EntityHandle } from "./entity-handle";
 import { WorldSystems } from "./world-systems";
+import { serializeEntity, restoreEntity, entityByteSize } from "./world-codec";
 
 /**
  * Configuration for creating a World
@@ -963,71 +964,40 @@ export class World extends WorldSystems {
     }
 
     /**
-     * Serialize entities with specific components to binary.
-     * Uses PooledCodec internally for efficient encoding.
-     *
-     * @param components Components to include in the snapshot
-     * @param entities Optional list of entities to serialize (defaults to all)
-     * @returns Binary buffer with serialized data
+     * Serialize an entity's components to a new buffer. Defaults to every
+     * registered component; pass a subset to limit it. Restore with the same
+     * component list.
      */
-    serialize(components: Component<any>[], entities?: Entity[]): Uint8Array {
-        const entityList = entities ?? Array.from(this.aliveEntitiesArray);
-
-        // Build data structure for each component
-        const componentArrays: any[] = [];
-
-        for (const component of components) {
-            const index = component.__worldIndex;
-            if (index === undefined) continue;
-
-            const store = this.componentStoresArray[index];
-            if (!store) continue;
-
-            const items: any[] = [];
-
-            for (const entity of entityList) {
-                if (this.has(entity, component)) {
-                    items.push({
-                        entity,
-                        ...store.getMutable(entity),
-                    });
-                }
-            }
-
-            if (items.length > 0) {
-                // Use the component's arrayCodec (PooledCodec.array) to encode
-                const encoded = component.arrayCodec.encode(items);
-                componentArrays.push(encoded);
-            }
-        }
-
-        // Combine all buffers
-        // TODO: Could optimize this with a proper multi-buffer format
-        const totalSize = componentArrays.reduce(
-            (sum, buf) => sum + buf.length,
-            0,
-        );
-        const result = new Uint8Array(totalSize);
-        let offset = 0;
-        for (const buf of componentArrays) {
-            result.set(buf, offset);
-            offset += buf.length;
-        }
-
-        return result;
+    serialize(entityId: Entity, components: Component<any>[] = this.components): Uint8Array {
+        const buffer = new Uint8Array(entityByteSize(this, entityId, components));
+        serializeEntity(this, entityId, components, new DataView(buffer.buffer), 0);
+        return buffer;
     }
 
     /**
-     * Deserialize binary data into entities.
-     * Uses PooledCodec internally for efficient decoding.
-     *
-     * Note: This is a basic implementation. For production use,
-     * you'd want a more sophisticated format with component IDs, etc.
+     * Restore an entity's components from a buffer produced by `serialize`.
+     * Defaults to every registered component; pass the same subset used to
+     * serialize. Adds components the entity does not have.
      */
-    deserialize(components: Component<any>[], buffer: Uint8Array): void {
-        // TODO: Implement proper deserialization with component IDs
-        // For now, this is a placeholder
-        throw new Error("Deserialization not yet implemented");
+    restore(entityId: Entity, data: Uint8Array, components: Component<any>[] = this.components): void {
+        restoreEntity(this, entityId, components, new DataView(data.buffer, data.byteOffset, data.byteLength), 0);
+    }
+
+    /**
+     * Write an entity's components into `dv` at `offset`. Returns the offset
+     * past the written bytes. For the hot path: the caller owns and reuses
+     * the DataView across entities.
+     */
+    writeEntity(entityId: Entity, components: Component<any>[], dv: DataView, offset: number): number {
+        return serializeEntity(this, entityId, components, dv, offset);
+    }
+
+    /**
+     * Read an entity's components from `dv` at `offset`. Returns the offset
+     * past the read bytes.
+     */
+    readEntity(entityId: Entity, components: Component<any>[], dv: DataView, offset: number): number {
+        return restoreEntity(this, entityId, components, dv, offset);
     }
 
     /**
