@@ -191,6 +191,57 @@ export class World extends WorldSystems {
     }
 
     /**
+     * Register a component type with the world after construction.
+     *
+     * Allocates the component's store, field bundle, and (for synced
+     * components) dirty bitmap, and widens the per-entity mask words when the
+     * new component crosses a 32-bit boundary. Existing entities keep their
+     * data and existing query results stay valid: no entity has the new
+     * component yet.
+     *
+     * Idempotent for a component already registered in this world. Returns the
+     * component so calls can chain, e.g. `world.fields(world.addComponent(C))`.
+     */
+    addComponent<T extends object, S extends Schema<T>>(
+        component: Component<T, S>,
+    ): Component<T, S> {
+        const existing = component.__worldIndex;
+        if (existing !== undefined && this.components[existing] === component) {
+            return component;
+        }
+
+        const index = this.components.length;
+        this.components.push(component);
+        component.__worldIndex = index;
+
+        // Widen the mask words if this index lands in a new 32-bit word.
+        const requiredWords = (index >>> 5) + 1;
+        while (this.componentMasks.length < requiredWords) {
+            this.componentMasks.push(new Uint32Array(this.maxEntities));
+        }
+        this.numMaskWords = this.componentMasks.length;
+        this.componentMasks0 = this.componentMasks[0];
+
+        const store = new ComponentStore(component, this.maxEntities);
+        this.componentStoresArray[index] = store;
+
+        this.dirtyBitsByComponent[index] =
+            component.__sync !== undefined
+                ? new Uint32Array(Math.ceil(this.maxEntities / 32))
+                : null;
+
+        const bundle: Record<string, Float32Array | Int32Array | Uint32Array | Uint16Array | Uint8Array> = {};
+        for (let i = 0; i < component.fieldNames.length; i++) {
+            const fieldName = component.fieldNames[i];
+            bundle[fieldName as string] = store.getFieldArray(fieldName);
+        }
+        Object.freeze(bundle);
+        this.fieldsByComponent[index] = bundle;
+
+        return component;
+    }
+
+    /**
      * Get component index (O(1) - stored directly on component)
      */
     private getComponentIndex(component: Component<any>): number {

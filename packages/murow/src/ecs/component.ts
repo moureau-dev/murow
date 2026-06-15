@@ -1,4 +1,4 @@
-import { Schema } from "../core/binary-codec";
+import { Schema, type ArrayFromField } from "../core/binary-codec";
 import { PooledCodec, ArrayField } from "../core/pooled-codec";
 
 /**
@@ -183,3 +183,8 @@ export function defineComponent<T extends object>(
   if (sync !== undefined) component.__sync = sync;
   return component;
 }
+
+export type FieldsOf<C extends Component<any, any>> =
+  C extends Component<any, infer S>
+    ? Readonly<{ [K in keyof S]: ArrayFromField<S[K]> }>
+    : never;
