@@ -23,6 +23,17 @@ export interface WorldConfig {
 export type Entity = number;
 
 /**
+ * A maintained query result. `buffer` is the dense list of matching entities;
+ * `positions` maps entity -> its index in `buffer` (membership is valid only
+ * when `buffer[positions[e]] === e`, so stale entries are harmless).
+ */
+interface QueryCache {
+    mask: number[];
+    buffer: Entity[];
+    positions: Int32Array;
+}
+
+/**
  * World manages entities and their components.
  * Provides efficient ECS storage using typed arrays.
  *
@@ -80,12 +91,12 @@ export class World extends WorldSystems {
     // Component registry (direct index stored on component - zero lookup cost!)
     private components: Component<any>[] = [];
 
-    // Query result cache (reusable buffers for zero allocations)
-    private queryResultBuffers: Record<string, Entity[]> = {}; // Now keyed by string hash
-
-    // Persistent query cache (invalidated only on archetype changes)
-    private archetypeVersion: number = 0; // Increments on spawn/despawn/add/remove
-    private queryCacheVersions: Record<string, number> = {}; // Keyed by mask hash
+    // Per-query result caches, maintained incrementally on every structural
+    // change (spawn/despawn/add/remove) instead of invalidated and rescanned.
+    // `positions` is a sparse map entity -> index in `buffer`; membership is
+    // validated by `buffer[positions[e]] === e`, so it never needs resetting.
+    private queryCaches: Record<string, QueryCache> = {};
+    private queryCacheList: QueryCache[] = [];
 
     // Query mask cache (avoid recomputing masks for same component combinations)
     private queryMaskCache: Record<string, number[]> = {};
@@ -431,113 +442,117 @@ export class World extends WorldSystems {
         maskKey: string,
         requiredMask: number[],
     ): readonly Entity[] {
-        // Get or create reusable buffer for this query mask
-        let buffer = this.queryResultBuffers[maskKey];
-        if (!buffer) {
-            buffer = [];
-            this.queryResultBuffers[maskKey] = buffer;
-        }
+        return this.getQueryCache(maskKey, requiredMask).buffer;
+    }
 
-        // Check if cache is valid (persistent query caching)
-        if (this.queryCacheVersions[maskKey] === this.archetypeVersion) {
-            // Cache is valid! Return cached result (FAST PATH - no iteration!)
-            return buffer;
-        }
+    /**
+     * Return the maintained cache for a query mask, registering it (one full
+     * scan over alive entities) the first time it is seen. After registration
+     * the buffer is kept current by the structural-change maintenance below, so
+     * subsequent reads are O(1) with no rescan.
+     */
+    private getQueryCache(maskKey: string, mask: number[]): QueryCache {
+        let qc = this.queryCaches[maskKey];
+        if (qc !== undefined) return qc;
 
-        // Cache is stale - rebuild by iterating alive entities
+        qc = { mask, buffer: [], positions: new Int32Array(this.maxEntities) };
+        this.queryCaches[maskKey] = qc;
+        this.queryCacheList.push(qc);
+
+        // One-time seed scan. Uses the inlined per-word fast paths (the same
+        // micro-optimization the old per-frame rescan used) so registration is
+        // cheap; after this the buffer is kept current incrementally.
+        const buffer = qc.buffer;
+        const positions = qc.positions;
         const aliveEntities = this.aliveEntitiesArray;
         const length = aliveEntities.length;
-        const numWords = requiredMask.length;
+        const numWords = mask.length;
         let writeIdx = 0;
 
-        // Fast path for single-word masks (most common case, <32 components)
         if (numWords === 1) {
-            const mask0 = requiredMask[0];
-            const componentMasks0 = this.componentMasks0;
+            const mask0 = mask[0];
+            const masks0 = this.componentMasks0;
             for (let i = 0; i < length; i++) {
                 const entity = aliveEntities[i]!;
-                if ((componentMasks0[entity] & mask0) === mask0) {
+                if ((masks0[entity] & mask0) === mask0) {
+                    positions[entity] = writeIdx;
                     buffer[writeIdx++] = entity;
                 }
             }
         } else if (numWords === 2) {
-            // Unrolled for 2 words (32-63 components)
-            const mask0 = requiredMask[0];
-            const mask1 = requiredMask[1];
+            const mask0 = mask[0];
+            const mask1 = mask[1];
             const masks0 = this.componentMasks0;
             const masks1 = this.componentMasks[1];
             for (let i = 0; i < length; i++) {
                 const entity = aliveEntities[i]!;
-                if (
-                    (masks0[entity] & mask0) === mask0 &&
-                    (masks1[entity] & mask1) === mask1
-                ) {
-                    buffer[writeIdx++] = entity;
-                }
-            }
-        } else if (numWords === 3) {
-            // Unrolled for 3 words (64-95 components)
-            const mask0 = requiredMask[0];
-            const mask1 = requiredMask[1];
-            const mask2 = requiredMask[2];
-            const masks0 = this.componentMasks0;
-            const masks1 = this.componentMasks[1];
-            const masks2 = this.componentMasks[2];
-            for (let i = 0; i < length; i++) {
-                const entity = aliveEntities[i]!;
-                if (
-                    (masks0[entity] & mask0) === mask0 &&
-                    (masks1[entity] & mask1) === mask1 &&
-                    (masks2[entity] & mask2) === mask2
-                ) {
-                    buffer[writeIdx++] = entity;
-                }
-            }
-        } else if (numWords === 4) {
-            // Unrolled for 4 words (96-127 components)
-            const mask0 = requiredMask[0];
-            const mask1 = requiredMask[1];
-            const mask2 = requiredMask[2];
-            const mask3 = requiredMask[3];
-            const masks0 = this.componentMasks0;
-            const masks1 = this.componentMasks[1];
-            const masks2 = this.componentMasks[2];
-            const masks3 = this.componentMasks[3];
-            for (let i = 0; i < length; i++) {
-                const entity = aliveEntities[i]!;
-                if (
-                    (masks0[entity] & mask0) === mask0 &&
-                    (masks1[entity] & mask1) === mask1 &&
-                    (masks2[entity] & mask2) === mask2 &&
-                    (masks3[entity] & mask3) === mask3
-                ) {
+                if ((masks0[entity] & mask0) === mask0 && (masks1[entity] & mask1) === mask1) {
+                    positions[entity] = writeIdx;
                     buffer[writeIdx++] = entity;
                 }
             }
         } else {
-            // General case for 5+ words (rare)
-            const componentMasks = this.componentMasks;
-            outer: for (let i = 0; i < length; i++) {
+            for (let i = 0; i < length; i++) {
                 const entity = aliveEntities[i]!;
-                for (let w = 0; w < numWords; w++) {
-                    if (
-                        (componentMasks[w][entity] & requiredMask[w]) !==
-                        requiredMask[w]
-                    ) {
-                        continue outer;
-                    }
+                if (this.matchesComponentMask(entity, mask)) {
+                    positions[entity] = writeIdx;
+                    buffer[writeIdx++] = entity;
                 }
-                buffer[writeIdx++] = entity;
             }
         }
-
-        // Truncate buffer to actual size (zero allocations)
         buffer.length = writeIdx;
+        return qc;
+    }
 
-        // Mark cache as valid for this archetype version
-        this.queryCacheVersions[maskKey] = this.archetypeVersion;
+    private queryCacheHas(qc: QueryCache, entity: Entity): boolean {
+        const idx = qc.positions[entity];
+        return idx < qc.buffer.length && qc.buffer[idx] === entity;
+    }
 
-        return buffer;
+    private queryCacheInsert(qc: QueryCache, entity: Entity): void {
+        qc.positions[entity] = qc.buffer.length;
+        qc.buffer.push(entity);
+    }
+
+    private queryCacheRemove(qc: QueryCache, entity: Entity): void {
+        const buffer = qc.buffer;
+        const idx = qc.positions[entity];
+        const last = buffer.length - 1;
+        const lastEntity = buffer[last]!;
+        buffer[idx] = lastEntity;
+        qc.positions[lastEntity] = idx;
+        buffer.length = last;
+    }
+
+    /** Gaining a component can only newly satisfy a query, never break one. */
+    private onComponentAdded(entity: Entity): void {
+        const list = this.queryCacheList;
+        for (let i = 0; i < list.length; i++) {
+            const qc = list[i]!;
+            if (!this.queryCacheHas(qc, entity) && this.matchesComponentMask(entity, qc.mask)) {
+                this.queryCacheInsert(qc, entity);
+            }
+        }
+    }
+
+    /** Losing a component can only break a query match, never create one. */
+    private onComponentRemoved(entity: Entity): void {
+        const list = this.queryCacheList;
+        for (let i = 0; i < list.length; i++) {
+            const qc = list[i]!;
+            if (this.queryCacheHas(qc, entity) && !this.matchesComponentMask(entity, qc.mask)) {
+                this.queryCacheRemove(qc, entity);
+            }
+        }
+    }
+
+    /** A despawned entity leaves every query buffer it was in. */
+    private onEntityDespawned(entity: Entity): void {
+        const list = this.queryCacheList;
+        for (let i = 0; i < list.length; i++) {
+            const qc = list[i]!;
+            if (this.queryCacheHas(qc, entity)) this.queryCacheRemove(qc, entity);
+        }
     }
 
     /**
@@ -573,8 +588,8 @@ export class World extends WorldSystems {
         this.aliveEntitiesArray.push(id);
         this.clearAllComponentBits(id);
 
-        // Invalidate query cache since entity count changed
-        this.invalidateQueryCache();
+        // A fresh entity has no components yet, so it matches no query: query
+        // caches only change once components are added (see onComponentAdded).
 
         return id;
     }
@@ -622,8 +637,8 @@ export class World extends WorldSystems {
         this.freeEntityHead = (this.freeEntityHead + 1) & this.freeEntityMask; // Bitwise AND instead of modulo
         this.freeEntityCount++;
 
-        // Invalidate query cache since entity count changed
-        this.invalidateQueryCache();
+        // Maintain query caches: the entity leaves every query buffer it was in.
+        this.onEntityDespawned(entity);
     }
 
     /**
@@ -646,13 +661,6 @@ export class World extends WorldSystems {
      */
     flushDespawned(): void {
         this.despawnedCount = 0;
-    }
-
-    /**
-     * Invalidate all query caches (called on archetype changes).
-     */
-    private invalidateQueryCache(): void {
-        this.archetypeVersion++;
     }
 
     /**
@@ -748,8 +756,8 @@ export class World extends WorldSystems {
         store.set(entity, data);
         this.markDirty(entity, index);
 
-        // Invalidate query cache since archetype changed
-        this.invalidateQueryCache();
+        // Maintain query caches: entity may now satisfy queries it didn't before.
+        this.onComponentAdded(entity);
     }
 
     /**
@@ -766,8 +774,8 @@ export class World extends WorldSystems {
             store.clear(entity);
         }
 
-        // Invalidate query cache since archetype changed
-        this.invalidateQueryCache();
+        // Maintain query caches: entity may no longer satisfy queries requiring this component.
+        this.onComponentRemoved(entity);
     }
 
     /**
@@ -914,55 +922,7 @@ export class World extends WorldSystems {
         if (requiredMask === null) return []; // Component not registered
 
         const maskKey = this.maskToKey(requiredMask);
-
-        // Get or create reusable buffer for this query mask
-        let buffer = this.queryResultBuffers[maskKey];
-        if (!buffer) {
-            buffer = [];
-            this.queryResultBuffers[maskKey] = buffer;
-        }
-
-        // Check if cache is valid (persistent query caching)
-        if (this.queryCacheVersions[maskKey] === this.archetypeVersion) {
-            // Cache is valid! Return cached result (FAST PATH - no iteration!)
-            return buffer;
-        }
-
-        // Cache miss or stale - recompute query results
-        const entities = this.aliveEntitiesArray;
-        const length = entities.length;
-        const numWords = requiredMask.length;
-
-        // Use write cursor pattern instead of buffer.length = 0 + push
-        let writeIdx = 0;
-
-        // Inline fast path for single-word masks (avoids function call overhead)
-        if (numWords === 1) {
-            const mask0 = requiredMask[0];
-            const masks0 = this.componentMasks0;
-            for (let i = 0; i < length; i++) {
-                const entity = entities[i];
-                if ((masks0[entity] & mask0) === mask0) {
-                    buffer[writeIdx++] = entity;
-                }
-            }
-        } else {
-            // Fall back to matchesComponentMask for multi-word
-            for (let i = 0; i < length; i++) {
-                const entity = entities[i];
-                if (this.matchesComponentMask(entity, requiredMask)) {
-                    buffer[writeIdx++] = entity;
-                }
-            }
-        }
-
-        // Truncate buffer to actual size
-        buffer.length = writeIdx;
-
-        // Mark cache as valid for this archetype version
-        this.queryCacheVersions[maskKey] = this.archetypeVersion;
-
-        return buffer;
+        return this.getQueryCache(maskKey, requiredMask).buffer;
     }
 
     /**
