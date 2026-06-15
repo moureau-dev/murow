@@ -138,4 +138,49 @@ describe('incremental query maintenance', () => {
             check();
         }
     });
+
+    test('single-component query reflects the maintained member list', () => {
+        const w = makeWorld();
+        const e1 = w.spawn();
+        const e2 = w.spawn();
+        w.add(e1, A, { x: 1 });
+        w.add(e2, A, { x: 2 });
+        expect(sortedQuery(w, A)).toEqual([e1, e2].sort((a, b) => a - b));
+
+        w.remove(e1, A);
+        expect(sortedQuery(w, A)).toEqual([e2]);
+
+        w.despawn(e2);
+        expect(sortedQuery(w, A)).toEqual([]);
+    });
+
+    test('multi-component query first registered on a populated, churned world matches a brute scan', () => {
+        const w = makeWorld();
+        const alive = new Set<Entity>();
+        let seed = 0xbeef;
+        const rand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+
+        // Build a churned world WITHOUT ever querying, so the first query() below
+        // registers against a populated world (exercises lead-with-smallest).
+        for (let i = 0; i < 200; i++) {
+            const e = w.spawn();
+            alive.add(e);
+            if (rand() < 0.9) w.add(e, A, { x: 1 });
+            if (rand() < 0.3) w.add(e, B, { y: 1 }); // B is the selective component
+            if (rand() < 0.6) w.add(e, C, { z: 1 });
+        }
+        for (const e of [...alive]) {
+            if (rand() < 0.2) { w.despawn(e); alive.delete(e); }
+            else if (rand() < 0.3 && w.has(e, A)) w.remove(e, A);
+        }
+
+        const brute = (...comps: any[]) =>
+            [...alive].filter((e) => comps.every((c) => w.has(e, c))).sort((a, b) => a - b);
+
+        // First-ever query of each mask -> registration scans the smallest member list.
+        expect(sortedQuery(w, A, B)).toEqual(brute(A, B));
+        expect(sortedQuery(w, B, C)).toEqual(brute(B, C));
+        expect(sortedQuery(w, A, B, C)).toEqual(brute(A, B, C));
+        expect(sortedQuery(w, A)).toEqual(brute(A));
+    });
 });

@@ -23,14 +23,18 @@ export interface WorldConfig {
 export type Entity = number;
 
 /**
- * A maintained query result. `buffer` is the dense list of matching entities;
- * `positions` maps entity -> its index in `buffer` (membership is valid only
- * when `buffer[positions[e]] === e`, so stale entries are harmless).
+ * A dense set of entities with O(1) membership. `buffer` is the dense list;
+ * `positions` maps entity -> its index in `buffer`, valid only when
+ * `buffer[positions[e]] === e` (so stale entries are harmless, no reset needed).
  */
-interface QueryCache {
-    mask: number[];
+interface EntitySet {
     buffer: Entity[];
     positions: Int32Array;
+}
+
+/** A maintained query result: an `EntitySet` plus the mask it matches. */
+interface QueryCache extends EntitySet {
+    mask: number[];
 }
 
 /**
@@ -97,6 +101,12 @@ export class World extends WorldSystems {
     // validated by `buffer[positions[e]] === e`, so it never needs resetting.
     private queryCaches: Record<string, QueryCache> = {};
     private queryCacheList: QueryCache[] = [];
+
+    // Per-component entity lists ("entities that have component i"), maintained
+    // on every add/remove/despawn. Single-component queries return these
+    // directly; multi-component query registration scans the smallest of them
+    // instead of all alive entities. Indexed by component world index.
+    private componentMembers: EntitySet[] = [];
 
     // Query mask cache (avoid recomputing masks for same component combinations)
     private queryMaskCache: Record<string, number[]> = {};
@@ -181,6 +191,9 @@ export class World extends WorldSystems {
             const store = new ComponentStore(component, this.maxEntities);
             this.componentStoresArray[index] = store;
 
+            // Per-component entity list, maintained as components are added/removed.
+            this.componentMembers[index] = { buffer: [], positions: new Int32Array(this.maxEntities) };
+
             // Synced components get a dirty bitmap; others stay null.
             this.dirtyBitsByComponent[index] =
                 component.__sync !== undefined
@@ -235,6 +248,8 @@ export class World extends WorldSystems {
 
         const store = new ComponentStore(component, this.maxEntities);
         this.componentStoresArray[index] = store;
+
+        this.componentMembers[index] = { buffer: [], positions: new Int32Array(this.maxEntities) };
 
         this.dirtyBitsByComponent[index] =
             component.__sync !== undefined
@@ -446,81 +461,96 @@ export class World extends WorldSystems {
     }
 
     /**
-     * Return the maintained cache for a query mask, registering it (one full
-     * scan over alive entities) the first time it is seen. After registration
-     * the buffer is kept current by the structural-change maintenance below, so
-     * subsequent reads are O(1) with no rescan.
+     * Return the maintained cache for a query mask, registering it the first
+     * time it is seen. A single-component query aliases that component's member
+     * list directly (no scan, no extra storage). A multi-component query seeds
+     * its one-time scan from the smallest member list among its components, not
+     * all alive entities. After registration the buffer is kept current
+     * incrementally, so subsequent reads are O(1) with no rescan.
      */
     private getQueryCache(maskKey: string, mask: number[]): QueryCache {
         let qc = this.queryCaches[maskKey];
         if (qc !== undefined) return qc;
 
+        const indices = this.maskIndices(mask);
+
+        // let the caching games begin
+
+        // Single component: the result IS that component's member list. Alias
+        // its buffer/positions; component-list maintenance keeps it current, so
+        // it must NOT also be tracked in queryCacheList.
+        if (indices.length === 1) {
+            const members = this.componentMembers[indices[0]!]!;
+            qc = { mask, buffer: members.buffer, positions: members.positions };
+            this.queryCaches[maskKey] = qc;
+            return qc;
+        }
+
         qc = { mask, buffer: [], positions: new Int32Array(this.maxEntities) };
         this.queryCaches[maskKey] = qc;
         this.queryCacheList.push(qc);
 
-        // One-time seed scan. Uses the inlined per-word fast paths (the same
-        // micro-optimization the old per-frame rescan used) so registration is
-        // cheap; after this the buffer is kept current incrementally.
+        // Lead with the smallest member list among the queried components
+        // and not of scanning all alive entities.
+        let lead: Entity[] = this.aliveEntitiesArray;
+        for (let k = 0; k < indices.length; k++) {
+            const candidate = this.componentMembers[indices[k]!]!.buffer;
+            if (candidate.length < lead.length) lead = candidate;
+        }
+
         const buffer = qc.buffer;
         const positions = qc.positions;
-        const aliveEntities = this.aliveEntitiesArray;
-        const length = aliveEntities.length;
-        const numWords = mask.length;
         let writeIdx = 0;
+        for (let i = 0; i < lead.length; i++) {
+            const entity = lead[i]!;
 
-        if (numWords === 1) {
-            const mask0 = mask[0];
-            const masks0 = this.componentMasks0;
-            for (let i = 0; i < length; i++) {
-                const entity = aliveEntities[i]!;
-                if ((masks0[entity] & mask0) === mask0) {
-                    positions[entity] = writeIdx;
-                    buffer[writeIdx++] = entity;
-                }
-            }
-        } else if (numWords === 2) {
-            const mask0 = mask[0];
-            const mask1 = mask[1];
-            const masks0 = this.componentMasks0;
-            const masks1 = this.componentMasks[1];
-            for (let i = 0; i < length; i++) {
-                const entity = aliveEntities[i]!;
-                if ((masks0[entity] & mask0) === mask0 && (masks1[entity] & mask1) === mask1) {
-                    positions[entity] = writeIdx;
-                    buffer[writeIdx++] = entity;
-                }
-            }
-        } else {
-            for (let i = 0; i < length; i++) {
-                const entity = aliveEntities[i]!;
-                if (this.matchesComponentMask(entity, mask)) {
-                    positions[entity] = writeIdx;
-                    buffer[writeIdx++] = entity;
-                }
+            if (this.matchesComponentMask(entity, mask)) {
+                positions[entity] = writeIdx;
+                buffer[writeIdx++] = entity;
             }
         }
+
         buffer.length = writeIdx;
+
         return qc;
     }
 
-    private queryCacheHas(qc: QueryCache, entity: Entity): boolean {
-        const idx = qc.positions[entity];
-        return idx < qc.buffer.length && qc.buffer[idx] === entity;
+    /** Decode the component world-indices set in a query mask. */
+    private maskIndices(mask: number[]): number[] {
+        const indices: number[] = [];
+
+        for (let w = 0; w < mask.length; w++) {
+            const word = mask[w];
+            if (word === 0) continue;
+
+            for (let b = 0; b < 32; b++) {
+                const bit = 1 << b;
+                const isSet = (word & bit) !== 0;
+                const entityIndex = w * 32 + b;
+                if (isSet) indices.push(entityIndex);
+            }
+        }
+
+        return indices;
     }
 
-    private queryCacheInsert(qc: QueryCache, entity: Entity): void {
-        qc.positions[entity] = qc.buffer.length;
-        qc.buffer.push(entity);
+    private setHas(set: EntitySet, entity: Entity): boolean {
+        const idx = set.positions[entity];
+        return idx < set.buffer.length && set.buffer[idx] === entity;
     }
 
-    private queryCacheRemove(qc: QueryCache, entity: Entity): void {
-        const buffer = qc.buffer;
-        const idx = qc.positions[entity];
+    private setInsert(set: EntitySet, entity: Entity): void {
+        set.positions[entity] = set.buffer.length;
+        set.buffer.push(entity);
+    }
+
+    private setRemove(set: EntitySet, entity: Entity): void {
+        const buffer = set.buffer;
+        const idx = set.positions[entity];
         const last = buffer.length - 1;
         const lastEntity = buffer[last]!;
         buffer[idx] = lastEntity;
-        qc.positions[lastEntity] = idx;
+        set.positions[lastEntity] = idx;
         buffer.length = last;
     }
 
@@ -529,8 +559,8 @@ export class World extends WorldSystems {
         const list = this.queryCacheList;
         for (let i = 0; i < list.length; i++) {
             const qc = list[i]!;
-            if (!this.queryCacheHas(qc, entity) && this.matchesComponentMask(entity, qc.mask)) {
-                this.queryCacheInsert(qc, entity);
+            if (!this.setHas(qc, entity) && this.matchesComponentMask(entity, qc.mask)) {
+                this.setInsert(qc, entity);
             }
         }
     }
@@ -540,18 +570,18 @@ export class World extends WorldSystems {
         const list = this.queryCacheList;
         for (let i = 0; i < list.length; i++) {
             const qc = list[i]!;
-            if (this.queryCacheHas(qc, entity) && !this.matchesComponentMask(entity, qc.mask)) {
-                this.queryCacheRemove(qc, entity);
+            if (this.setHas(qc, entity) && !this.matchesComponentMask(entity, qc.mask)) {
+                this.setRemove(qc, entity);
             }
         }
     }
 
-    /** A despawned entity leaves every query buffer it was in. */
+    /** A despawned entity leaves every multi-component query buffer it was in. */
     private onEntityDespawned(entity: Entity): void {
         const list = this.queryCacheList;
         for (let i = 0; i < list.length; i++) {
             const qc = list[i]!;
-            if (this.queryCacheHas(qc, entity)) this.queryCacheRemove(qc, entity);
+            if (this.setHas(qc, entity)) this.setRemove(qc, entity);
         }
     }
 
@@ -627,6 +657,7 @@ export class World extends WorldSystems {
         for (let i = 0; i < componentCount; i++) {
             if (this.hasComponentBit(entity, i)) {
                 stores[i]!.clear(entity);
+                this.setRemove(this.componentMembers[i]!, entity);
             }
         }
 
@@ -756,7 +787,9 @@ export class World extends WorldSystems {
         store.set(entity, data);
         this.markDirty(entity, index);
 
-        // Maintain query caches: entity may now satisfy queries it didn't before.
+        // Maintain the component's member list and any queries it now satisfies.
+        const members = this.componentMembers[index]!;
+        if (!this.setHas(members, entity)) this.setInsert(members, entity);
         this.onComponentAdded(entity);
     }
 
@@ -774,7 +807,9 @@ export class World extends WorldSystems {
             store.clear(entity);
         }
 
-        // Maintain query caches: entity may no longer satisfy queries requiring this component.
+        // Maintain the component's member list and any queries it no longer satisfies.
+        const members = this.componentMembers[index]!;
+        if (this.setHas(members, entity)) this.setRemove(members, entity);
         this.onComponentRemoved(entity);
     }
 
