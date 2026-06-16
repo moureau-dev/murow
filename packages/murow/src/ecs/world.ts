@@ -20,7 +20,7 @@ export interface WorldConfig {
 /**
  * Entity ID type (just a number, indexing into component arrays)
  */
-export type Entity = number;
+export type Entity = Uint32Array[number];
 
 /**
  * A dense set of entities with O(1) membership. `buffer` is the dense list;
@@ -81,8 +81,9 @@ export class World extends WorldSystems {
     private freeEntityCount: number = 0;
     private freeEntityMask: number = 0; // Bitwise AND mask for power-of-2 modulo
 
-    // Entity storage: Array for fast iteration, bitmask for O(1) alive checks
-    private aliveEntitiesArray: Entity[] = [];
+    // Entity storage: dense list for fast iteration, bitmask for O(1) alive checks
+    private aliveEntitiesArray: Uint32Array; // Dense, packed in [0, aliveCount)
+    private aliveCount: number = 0;
     private aliveEntitiesIndices: Uint32Array; // Index lookup for O(1) despawn
     private aliveEntityFlags: Uint8Array; // 1 byte per entity for alive check
 
@@ -101,6 +102,7 @@ export class World extends WorldSystems {
     // validated by `buffer[positions[e]] === e`, so it never needs resetting.
     private queryCaches: Record<string, QueryCache> = {};
     private queryCacheList: QueryCache[] = [];
+    private queryMaskCache: Record<string, number[]> = {};
 
     // Per-component entity lists ("entities that have component i"), maintained
     // on every add/remove/despawn. Single-component queries return these
@@ -108,8 +110,6 @@ export class World extends WorldSystems {
     // instead of all alive entities. Indexed by component world index.
     private componentMembers: EntitySet[] = [];
 
-    // Query mask cache (avoid recomputing masks for same component combinations)
-    private queryMaskCache: Record<string, number[]> = {};
 
     // Despawn tracker: collects entity IDs despawned this tick.
     // Call flushDespawned() after processing to reset.
@@ -162,7 +162,8 @@ export class World extends WorldSystems {
         this.freeEntityIds = new Uint32Array(ringBufferSize);
         this.freeEntityMask = ringBufferSize - 1; // For x % size → x & mask
 
-        // Pre-allocate index lookup for O(1) despawn
+        // Pre-allocate dense alive list and index lookup for O(1) despawn
+        this.aliveEntitiesArray = new Uint32Array(this.maxEntities);
         this.aliveEntitiesIndices = new Uint32Array(this.maxEntities);
 
         // Pre-allocate alive flags for O(1) alive checks
@@ -492,17 +493,21 @@ export class World extends WorldSystems {
 
         // Lead with the smallest member list among the queried components
         // and not of scanning all alive entities.
-        let lead: Entity[] = this.aliveEntitiesArray;
+        let leadBuf: Uint32Array | Entity[] = this.aliveEntitiesArray;
+        let leadLen = this.aliveCount;
         for (let k = 0; k < indices.length; k++) {
             const candidate = this.componentMembers[indices[k]!]!.buffer;
-            if (candidate.length < lead.length) lead = candidate;
+            if (candidate.length < leadLen) {
+                leadBuf = candidate;
+                leadLen = candidate.length;
+            }
         }
 
         const buffer = qc.buffer;
         const positions = qc.positions;
         let writeIdx = 0;
-        for (let i = 0; i < lead.length; i++) {
-            const entity = lead[i]!;
+        for (let i = 0; i < leadLen; i++) {
+            const entity = leadBuf[i]!;
 
             if (this.matchesComponentMask(entity, mask)) {
                 positions[entity] = writeIdx;
@@ -547,11 +552,10 @@ export class World extends WorldSystems {
     private setRemove(set: EntitySet, entity: Entity): void {
         const buffer = set.buffer;
         const idx = set.positions[entity];
-        const last = buffer.length - 1;
-        const lastEntity = buffer[last]!;
+        const lastEntity = buffer[buffer.length - 1]!;
         buffer[idx] = lastEntity;
         set.positions[lastEntity] = idx;
-        buffer.length = last;
+        buffer.pop(); // O(1)
     }
 
     /** Gaining a component can only newly satisfy a query, never break one. */
@@ -607,15 +611,15 @@ export class World extends WorldSystems {
         if (id >= this.maxEntities) {
             throw new Error(
                 `Maximum entities (${this.maxEntities}) reached. ` +
-                    `Current alive: ${this.aliveEntitiesArray.length}, ` +
+                    `Current alive: ${this.aliveCount}, ` +
                     `Free list: ${this.freeEntityCount}`,
             );
         }
 
         // Fast path: setup entity (no branches)
         this.aliveEntityFlags[id] = 1;
-        this.aliveEntitiesIndices[id] = this.aliveEntitiesArray.length;
-        this.aliveEntitiesArray.push(id);
+        this.aliveEntitiesIndices[id] = this.aliveCount;
+        this.aliveEntitiesArray[this.aliveCount++] = id;
         this.clearAllComponentBits(id);
 
         // A fresh entity has no components yet, so it matches no query: query
@@ -633,24 +637,21 @@ export class World extends WorldSystems {
             return; // Already despawned
         }
 
-        // Track this despawn
         this.despawnedBuffer[this.despawnedCount++] = entity;
-
         this.aliveEntityFlags[entity] = 0;
 
         // Remove from array (swap with last for O(1) removal)
         const idx = this.aliveEntitiesIndices[entity];
-        const last = this.aliveEntitiesArray.length - 1;
+        const last = this.aliveCount - 1;
 
         if (idx !== last) {
             // Swap with last element
-            const lastEntity = this.aliveEntitiesArray[last];
+            const lastEntity = this.aliveEntitiesArray[last]!;
             this.aliveEntitiesArray[idx] = lastEntity;
             this.aliveEntitiesIndices[lastEntity] = idx;
         }
 
-        this.aliveEntitiesArray.pop();
-
+        this.aliveCount--;
         // Clear all components for this entity
         const stores = this.componentStoresArray;
         const componentCount = this.components.length;
@@ -662,13 +663,11 @@ export class World extends WorldSystems {
         }
 
         this.clearAllComponentBits(entity);
-
         // Push to free list
         this.freeEntityIds[this.freeEntityHead] = entity;
         this.freeEntityHead = (this.freeEntityHead + 1) & this.freeEntityMask; // Bitwise AND instead of modulo
         this.freeEntityCount++;
 
-        // Maintain query caches: the entity leaves every query buffer it was in.
         this.onEntityDespawned(entity);
     }
 
@@ -776,7 +775,7 @@ export class World extends WorldSystems {
             throw new Error(
                 `Cannot add component ${component.name} to entity ${entity}: ` +
                     `entity is not alive (was it despawned?). ` +
-                    `Current alive entities: ${this.aliveEntitiesArray.length}`,
+                    `Current alive entities: ${this.aliveCount}`,
             );
         }
 
@@ -963,18 +962,18 @@ export class World extends WorldSystems {
     /**
      * Get all alive entity IDs.
      *
-     * ⚠️ WARNING: The returned array is a direct reference and should not be modified.
-     * For a safe copy, use [...world.getEntities()].
+     * WARNING: The returned view is backed by internal storage and must not be
+     * modified. For a safe copy, use [...world.getEntities()].
      */
-    getEntities(): readonly Entity[] {
-        return this.aliveEntitiesArray;
+    getEntities(): Uint32Array {
+        return this.aliveEntitiesArray.subarray(0, this.aliveCount);
     }
 
     /**
      * Get the number of alive entities.
      */
     getEntityCount(): number {
-        return this.aliveEntitiesArray.length;
+        return this.aliveCount;
     }
 
     /**
