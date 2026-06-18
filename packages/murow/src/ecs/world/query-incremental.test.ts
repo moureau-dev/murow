@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { World, type Entity } from './world';
-import { defineComponent } from './component';
-import { f32, u16 } from '../core/binary-codec';
+import { defineComponent } from '../components/component';
+import { f32, u16 } from '../../core/binary-codec';
 
 const A = defineComponent('A', { x: f32 });
 const B = defineComponent('B', { y: f32 });

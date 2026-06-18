@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
-import { World } from './world';
-import { defineComponent } from './component';
-import { f32 } from '../core/binary-codec';
+import { World } from '../world/world';
+import { defineComponent } from '../components/component';
+import { f32 } from '../../core/binary-codec';
 
 describe('World dirty tracking', () => {
   const Position = defineComponent('Position', {

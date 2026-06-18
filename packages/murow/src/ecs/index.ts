@@ -1,4 +1,10 @@
-export { defineComponent, type Component, type InferComponentType, type ComponentMeta, type FieldsOf } from "./component";
-export { ComponentStore } from "./component-store";
+export {
+    defineComponent,
+    type Component,
+    type InferComponentType,
+    type ComponentMeta,
+    type FieldsOf,
+    ComponentStore,
+} from "./components";
 export { World, type Entity, type WorldConfig } from "./world";
-export { EntityHandle } from "./entity-handle";
+export { EntityHandle } from "./entity";

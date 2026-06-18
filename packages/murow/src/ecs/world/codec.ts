@@ -1,4 +1,4 @@
-import type { Component } from "./component";
+import type { Component } from "../components/component";
 import type { World } from "./world";
 
 /**

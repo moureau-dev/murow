@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { defineComponent } from './component';
-import { BinaryCodec, f32, u16 } from '../core/binary-codec';
+import { BinaryCodec, f32, u16 } from '../../core/binary-codec';
 
 describe('defineComponent', () => {
   describe('bare schema form (backwards compatible)', () => {

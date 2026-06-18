@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { BinaryCodec } from "../core/binary-codec";
-import { defineComponent } from "./component";
+import { BinaryCodec } from "../../core/binary-codec";
+import { defineComponent } from "../components/component";
 import { World } from "./world";
 
 // Mixed-type schema to exercise every typed-array variant getFieldArray can return.
