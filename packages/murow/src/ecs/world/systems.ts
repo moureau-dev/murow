@@ -1,5 +1,5 @@
 import { Component } from "../components/component";
-import { Entity, World } from "./world";
+import { World } from "./world";
 
 /**
  * Extract component data type from Component<T>
@@ -534,4 +534,3 @@ export class WorldSystems {
     this.registeredSystems.push(system);
   }
 }
-

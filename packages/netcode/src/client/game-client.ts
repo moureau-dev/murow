@@ -234,7 +234,7 @@ export class GameClient<
     }
 
     private discoverSyncedComponents(): void {
-        const all = (this.world as any).components as Component<any>[];
+        const all = this.world.getComponents() as Component<any>[];
         for (const c of all) {
             if (c.__sync !== undefined) this.syncedComponents.push(c);
         }

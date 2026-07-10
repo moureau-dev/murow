@@ -11,7 +11,17 @@
  */
 import * as acorn from 'acorn';
 import { transpileFn } from 'tinyest-for-wgsl';
-import { FORMAT_VERSION } from 'tinyest';
+
+/**
+ * AST metadata format version.
+ *
+ * Each breaking change to the metadata structure requires a bump to this
+ * number. It's used at runtime by `typegpu` to determine how to interpret
+ * a function's AST. The build plugin (`unplugin-typegpu`) inlines this as
+ * a literal; here we define it locally so runtime transpilation doesn't
+ * depend on `tinyest` re-exporting this internal constant.
+ */
+const FORMAT_VERSION = 1;
 
 declare const globalThis: {
     __TYPEGPU_META__?: WeakMap<Function, unknown>;
