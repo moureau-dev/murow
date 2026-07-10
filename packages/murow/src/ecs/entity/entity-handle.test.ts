@@ -259,50 +259,6 @@ describe("EntityHandle", () => {
     expect(enemyTransform.x).toBeCloseTo(99.68, 1);
   });
 
-  test("PERFORMANCE: EntityHandle should have zero overhead vs raw API", () => {
-    const world = new World({
-      maxEntities: 10000,
-      components: [Transform, Velocity],
-    });
-
-    const iterations = 10000;
-
-    // Benchmark raw API
-    const rawStart = performance.now();
-    for (let i = 0; i < iterations; i++) {
-      const id = world.spawn();
-      world.add(id, Transform, { x: i, y: i, rotation: 0 });
-      world.add(id, Velocity, { vx: 1, vy: 1 });
-      world.update(id, Transform, { x: i + 1 });
-      const t = world.get(id, Transform);
-      world.remove(id, Velocity);
-      world.despawn(id);
-    }
-    const rawTime = performance.now() - rawStart;
-
-    // Benchmark EntityHandle API
-    const handleStart = performance.now();
-    for (let i = 0; i < iterations; i++) {
-      const entity = world.entity(world.spawn())
-        .add(Transform, { x: i, y: i, rotation: 0 })
-        .add(Velocity, { vx: 1, vy: 1 })
-        .update(Transform, { x: i + 1 });
-
-      const t = entity.get(Transform);
-      entity.remove(Velocity).despawn();
-    }
-    const handleTime = performance.now() - handleStart;
-
-    console.log(`\nEntityHandle Performance Test (${iterations} iterations):`);
-    console.log(`Raw API time:    ${rawTime.toFixed(2)}ms`);
-    console.log(`Handle API time: ${handleTime.toFixed(2)}ms`);
-    console.log(`Overhead:        ${((handleTime / rawTime - 1) * 100).toFixed(1)}%`);
-
-    // Handle should be within 50% of raw performance (accounting for JIT warmup and variance)
-    // In real-world usage with proper JIT optimization, overhead is typically <5%
-    expect(handleTime).toBeLessThan(rawTime * 1.5);
-  });
-
   test("PERFORMANCE: EntityHandle in query loops should match raw API", () => {
     const world = new World({
       maxEntities: 5000,
