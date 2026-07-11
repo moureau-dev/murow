@@ -26,14 +26,6 @@ attachShaderMetadata(
     () => ({ d, std }),
     false,
     { d, std },
-    `function rotate2d(point, angle) {
-    const c = std.cos(angle);
-    const s = std.sin(angle);
-    return d.vec2f(
-        point.x * c - point.y * s,
-        point.x * s + point.y * c,
-    );
-}`,
 );
 export const rotate2d = tgpu.fn([d.vec2f, d.f32], d.vec2f)(rotate2dFn as any);
 
@@ -52,10 +44,6 @@ attachShaderMetadata(
     () => ({ d, std }),
     false,
     { d, std },
-    `function worldToClip2d(worldPos, cameraMatrix) {
-    const clip = cameraMatrix * d.vec3f(worldPos.x, worldPos.y, 1.0);
-    return d.vec4f(clip.x, clip.y, 0.0, 1.0);
-}`,
 );
 export const worldToClip2d = tgpu.fn([d.vec2f, d.mat3x3f], d.vec4f)(worldToClip2dFn as any);
 
@@ -72,9 +60,6 @@ attachShaderMetadata(
     () => ({ d, std }),
     false,
     { d, std },
-    `function worldToClip3d(worldPos, vpMatrix) {
-    return vpMatrix * d.vec4f(worldPos.x, worldPos.y, worldPos.z, 1.0);
-}`,
 );
 export const worldToClip3d = tgpu.fn([d.vec3f, d.mat4x4f], d.vec4f)(worldToClip3dFn as any);
 
@@ -92,10 +77,6 @@ attachShaderMetadata(
     () => ({ d, std }),
     false,
     { d, std },
-    `function remap(value, inMin, inMax, outMin, outMax) {
-    const t = (value - inMin) / (inMax - inMin);
-    return outMin + t * (outMax - outMin);
-}`,
 );
 export const remap = tgpu.fn([d.f32, d.f32, d.f32, d.f32, d.f32], d.f32)(remapFn as any);
 
@@ -117,14 +98,6 @@ attachShaderMetadata(
     () => ({ d, std }),
     false,
     { d, std },
-    `function scaleRotate2d(scale, angle) {
-    const c = std.cos(angle);
-    const s = std.sin(angle);
-    return d.mat2x2f(
-        scale.x * c, scale.x * s,
-        -(scale.y * s), scale.y * c,
-    );
-}`,
 );
 export const scaleRotate2d = tgpu.fn([d.vec2f, d.f32], d.mat2x2f)(scaleRotate2dFn as any);
 
@@ -140,9 +113,6 @@ attachShaderMetadata(
     () => ({ d, std }),
     false,
     { d, std },
-    `function inverseLerp(min, max, value) {
-    return std.saturate((value - min) / (max - min));
-}`,
 );
 export const inverseLerp = tgpu.fn([d.f32, d.f32, d.f32], d.f32)(inverseLerpFn as any);
 
@@ -197,6 +167,7 @@ attachShaderMetadata(
     () => ({ d, std }),
     false,
     { d, std },
+    undefined,
     `function lightContribution(pos, axis, color, params, normal, worldPos) {
     const intensity = params.x;
     const range = params.y;
@@ -243,6 +214,7 @@ attachShaderMetadata(
     () => ({ d, std }),
     false,
     { d, std },
+    undefined,
     `function tonemap(c) {
     return d.vec3f(c.x / (1.0 + c.x), c.y / (1.0 + c.y), c.z / (1.0 + c.z));
 }`,

@@ -59,13 +59,6 @@ export function attachShaderMetadata(
     stripFirstParam = false,
     namespaceAliases: Record<string, object> = {},
     /**
-     * Original function source as a string.
-     * When provided, used instead of fn.toString() — this survives
-     * minification since string literals are preserved as-is.
-     * If omitted, falls back to fn.toString() (works for non-minified code).
-     */
-    sourceOverride?: string,
-    /**
      * Known external variable names that survive minification.
      * When the function is bundled+minified, fn.toString() returns minified
      * code and tinyest extracts minified external names that don't match
@@ -73,6 +66,13 @@ export function attachShaderMetadata(
      * TypeGPU needs to resolve against the externals map.
      */
     knownExternalNames?: string[],
+    /**
+     * Original function source as a string.
+     * When provided, used instead of fn.toString() — this survives
+     * minification since string literals are preserved as-is.
+     * If omitted, falls back to fn.toString() (works for non-minified code).
+     */
+    sourceOverride?: string,
 ): void {
     let source = sourceOverride ?? fn.toString();
 
