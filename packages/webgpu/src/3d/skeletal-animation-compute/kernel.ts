@@ -12,7 +12,6 @@
 // Use bundler-safe wraps so `d.X` / `std.X` accesses inside the shader
 // function body survive Rollup's namespace-member inlining (see
 // ../../shaders/typegpu.ts).
-import type * as _d from 'typegpu/data';
 import { d, std } from '../../shaders/typegpu';
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { AnimComputeUniforms, InstanceAnimStateGPU } from '../../core/types';
@@ -284,8 +283,8 @@ export function buildAnimationKernel(
 
                     // Blend: final = lerp(prevBone, currentBone, blendWeight)
                     // @ts-ignore
-                    const prevBoneMat: _d.Mat4x4f = boneMatrices[worldOff + pj] * matrices[ibmOff + pj];
-                    const curBoneMat: _d.Mat4x4f = boneMatrices[boneOff + pj];
+                    const prevBoneMat: d.Mat4x4f = boneMatrices[worldOff + pj] * matrices[ibmOff + pj];
+                    const curBoneMat: d.Mat4x4f = boneMatrices[boneOff + pj];
                     const w = inst.blendWeight;
                     const omw = 1.0 - w;
                     boneMatrices[boneOff + pj] = d.mat4x4f(

@@ -6,9 +6,8 @@
  * - GPU-side interpolation between ticks
  * - TypeGPU for shaders, layouts, pipelines; raw device for hot-path uploads
  */
-import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer } from 'typegpu';
-import * as d from 'typegpu/data'; // used for buffer type creation
+import { tgpu, d } from '../shaders/typegpu'; // used for buffer type creation
 import { FreeList } from 'murow/core/free-list';
 import { Base2DRenderer } from 'murow/renderer';
 import type {

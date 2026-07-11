@@ -7,10 +7,9 @@
  * - GPU index buffer for sparse instancing
  * - Depth testing + back-face culling
  */
-import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer } from 'typegpu';
 import { Base3DRenderer } from 'murow/renderer';
-import { d } from '../shaders/typegpu';
+import { tgpu, d } from '../shaders/typegpu';
 import type { Renderer3DOptions } from 'murow/renderer';
 import { FreeList } from 'murow/core/free-list';
 import { SparseBatcher } from 'murow/core/sparse-batcher';

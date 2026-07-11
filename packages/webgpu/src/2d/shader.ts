@@ -6,9 +6,7 @@
  *
  * NOTE: TGSL bodies must use `function` syntax, not arrow functions.
  */
-import tgpu from 'typegpu';
-import * as d from 'typegpu/data';
-import * as std from 'typegpu/std';
+import { tgpu, d, std } from '../shaders/typegpu';
 import { DynamicSprite, StaticSprite, SpriteUniforms } from '../core/types';
 
 // --- Bind group layouts ---

@@ -4,10 +4,9 @@
  * These are `tgpu.fn` functions usable inside vertex/fragment shaders.
  * For standard math (sin, cos, pow, mix, etc.) use `std` from 'typegpu/std'.
  */
-import tgpu from 'typegpu';
+import { tgpu, d, std } from './typegpu';
 import { attachShaderMetadata } from './runtime-transpile';
-import * as d from 'typegpu/data';
-import * as std from 'typegpu/std';
+
 
 /**
  * Rotate a 2D point around the origin by `angle` radians.

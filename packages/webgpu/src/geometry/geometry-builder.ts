@@ -22,10 +22,9 @@
  * geom.updateUniforms({ time: 1.5 });                           // ← typed uniform names
  * ```
  */
-import tgpu from 'typegpu';
 import type { TgpuRoot, TgpuBuffer, TgpuRenderPipeline, TgpuBindGroup, TgpuBindGroupLayout, TgpuVertexFn, TgpuFragmentFn } from 'typegpu';
 import type { AnyWgslData, AnyData } from 'typegpu/data';
-import { d, std } from '../shaders/typegpu';
+import { tgpu, d, std } from '../shaders/typegpu';
 import type { BuiltInGeometry, GeometryData } from './built-in';
 import { resolveBuiltInGeometry } from './built-in';
 import { SlotMap } from 'murow/core/slot-map';

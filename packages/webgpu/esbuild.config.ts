@@ -7,7 +7,7 @@ const exclude = [
     'example.ts'
 ];
 
-const files = ['./index.ts'];
+const files = ['index.ts'];
 
 const pattern = [files].flat();
 
@@ -38,6 +38,17 @@ async function main() {
             packages: 'external',
             // minify: true,
             bundle: true,
+        }),
+        // Single-file bundle for CDN use — all deps inlined so TypeGPU's
+        // $internal Symbol is shared across a single module boundary.
+        build({
+            entryPoints: ['./src/index.ts'],
+            outbase: 'src',
+            outfile: 'dist/esm/murow.webgpu.bundle.js',
+            format: 'esm',
+            platform: 'browser',
+            bundle: true,
+            // minify: true,
         }),
     ]);
 }

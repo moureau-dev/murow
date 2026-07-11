@@ -5,7 +5,7 @@
  * All fields are f32 to guarantee contiguous layout matching our flat Float32Arrays.
  * No vec2f/vec4f here — that would introduce alignment padding.
  */
-import * as d from 'typegpu/data';
+import { d } from '../shaders/typegpu';
 
 // --- 2D Sprite Instance Data ---
 

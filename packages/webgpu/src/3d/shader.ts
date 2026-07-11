@@ -5,8 +5,7 @@
  * Instance data from storage buffers (TRS + color) via index buffer indirection.
  * Basic diffuse lighting.
  */
-import tgpu from 'typegpu';
-import { d, std } from '../shaders/typegpu';
+import { tgpu, d, std } from '../shaders/typegpu';
 import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms, Light } from '../core/types';
 import { attachShaderMetadata } from '../shaders/runtime-transpile';
 import { lightContribution, tonemap } from '../shaders/utils';
