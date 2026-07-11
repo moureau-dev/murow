@@ -40,6 +40,11 @@ declare const globalThis: {
  *                     auto-detected namespace aliases (see `namespaceAliases`)
  *                     so bundler-renamed identifiers (e.g. `d10` instead of
  *                     `d`) still resolve.
+ *
+ * Note: In runtimes where Function.toString() returns optimized source
+ * (Bun, Node with --optimize-for-size), the acorn/tinyest parsing may
+ * fail. This is silently ignored — WebGPU isn't available in those
+ * environments anyway, and the function still works for direct calls.
  * @param stripFirstParam If true, removes the first parameter (ctx) and treats
  *                        its destructured names as externals instead
  * @param namespaceAliases Map of canonical namespace name → namespace object.
@@ -95,15 +100,22 @@ export function attachShaderMetadata(
     // removed so tinyest doesn't include it in the WGSL body.
     source = source.replace(/['"]use gpu['"]\s*;?\s*/g, '');
 
-    // Parse the function source into an AST
-    const wrappedSource = `const __f__ = ${source}`;
-    const ast = acorn.parse(wrappedSource, {
-        ecmaVersion: 2022,
-        sourceType: 'module',
-    }) as { body: Array<{ declarations: Array<{ init: acorn.Node }> }> };
-
-    const fnNode = ast.body[0].declarations[0].init;
-    const { params, body, externalNames } = transpileFn(fnNode);
+    // Parse the function source into an AST.
+    // If this fails (e.g. Bun's toString() returns optimized source), silently
+    // skip — WebGPU isn't available in those environments anyway.
+    let params: unknown, body: unknown, externalNames: string[];
+    let fnNode: acorn.Node;
+    try {
+        const wrappedSource = `const __f__ = ${source}`;
+        const ast = acorn.parse(wrappedSource, {
+            ecmaVersion: 2022,
+            sourceType: 'module',
+        }) as { body: Array<{ declarations: Array<{ init: acorn.Node }> }> };
+        fnNode = ast.body[0].declarations[0].init;
+        ({ params, body, externalNames } = transpileFn(fnNode));
+    } catch {
+        return; // Can't parse — skip metadata attachment
+    }
 
     // Walk the AST to collect member accesses per identifier: `id.member` → record `member` under `id`.
     // Used to disambiguate bundler-renamed namespace references (e.g. `d10.f32` is the data namespace).
