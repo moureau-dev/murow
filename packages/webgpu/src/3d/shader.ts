@@ -11,6 +11,12 @@ import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms, Light } from 
 import { attachShaderMetadata } from '../shaders/runtime-transpile';
 import { lightContribution, tonemap } from '../shaders/utils';
 
+
+const _WS = ['d','std','meshLayout','mix','mul','cos','sin','sub','add','vec3f','vec4f'];
+const _WSF = ['d','std','meshLayout','lightContribution','tonemap','mix','mul','cos','sin','sub','add','vec3f','vec4f','normalize','max','dot','u32','saturate','select','smoothstep','length'];
+const _WSFT = ['d','std','meshLayout','texLayout','lightContribution','tonemap','mix','mul','cos','sin','sub','add','vec3f','vec4f','vec2f','normalize','max','dot','u32','saturate','select','smoothstep','length','textureSample'];
+const _WSSK = ['d','std','layout','mix','mul','cos','sin','sub','add','vec3f','vec4f','mat4x4f'];
+
 /** Max point/spot lights the mesh shaders' storage buffer holds. */
 export const MAX_LIGHTS = 64;
 
@@ -119,7 +125,7 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
         };
     };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std });
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std, meshLayout }, undefined, _WS);
     return tgpu.vertexFn({
         in: {
             position: d.location(0, d.vec3f),
@@ -186,7 +192,7 @@ export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataL
         const mapped = tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, 1.0);
     };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout, lightContribution, tonemap }), false, { d, std });
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout, lightContribution, tonemap }), false, { d, std, meshLayout }, undefined, _WSF);
     return tgpu.fragmentFn({
         in: {
             vNormal: d.vec3f,
@@ -301,7 +307,7 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
         };
     };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std });
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std, meshLayout }, undefined, _WS);
     return tgpu.vertexFn({
         in: {
             position: d.location(0, d.vec3f),
@@ -379,7 +385,7 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
         const mapped = tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, texColor.w);
     };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout, texLayout, lightContribution, tonemap }), false, { d, std });
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout, texLayout, lightContribution, tonemap }), false, { d, std, meshLayout, texLayout }, undefined, _WSFT);
     return tgpu.fragmentFn({
         in: {
             vNormal: d.vec3f,
@@ -540,7 +546,7 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
         };
     };
-    attachShaderMetadata(fn, () => ({ d, std, layout }), false, { d, std });
+    attachShaderMetadata(fn, () => ({ d, std, layout }), false, { d, std, layout }, undefined, _WSSK);
     return tgpu.vertexFn({
         in: {
             position: d.location(0, d.vec3f),
@@ -615,16 +621,16 @@ export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
         const mapped = tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, 1.0);
     };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout, lightContribution, tonemap }), false, { d, std });
-        return tgpu.fragmentFn({
-            in: {
-                vNormal: d.vec3f,
-                vColor: d.vec3f,
-                vUV: d.vec2f,
-                vWorldPos: d.vec3f,
-            },
-            out: d.vec4f,
-        })(fn as any);
-    }
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout, lightContribution, tonemap }), false, { d, std, meshLayout }, undefined, _WSF);
+    return tgpu.fragmentFn({
+        in: {
+            vNormal: d.vec3f,
+            vColor: d.vec3f,
+            vUV: d.vec2f,
+            vWorldPos: d.vec3f,
+        },
+        out: d.vec4f,
+    })(fn as any);
+}
 
     export { createTexturedMeshFragment as createSkinnedTexturedMeshFragment };

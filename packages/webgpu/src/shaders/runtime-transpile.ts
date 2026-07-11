@@ -58,8 +58,23 @@ export function attachShaderMetadata(
     getExternals: () => Record<string, unknown>,
     stripFirstParam = false,
     namespaceAliases: Record<string, object> = {},
+    /**
+     * Original function source as a string.
+     * When provided, used instead of fn.toString() — this survives
+     * minification since string literals are preserved as-is.
+     * If omitted, falls back to fn.toString() (works for non-minified code).
+     */
+    sourceOverride?: string,
+    /**
+     * Known external variable names that survive minification.
+     * When the function is bundled+minified, fn.toString() returns minified
+     * code and tinyest extracts minified external names that don't match
+     * the externals map keys. This array provides the ORIGINAL names that
+     * TypeGPU needs to resolve against the externals map.
+     */
+    knownExternalNames?: string[],
 ): void {
-    let source = fn.toString();
+    let source = sourceOverride ?? fn.toString();
 
     // Handle method shorthand: `name(...) { }` → `function(...) { }`
     if (!source.startsWith('function') && !source.startsWith('(') && !source.startsWith('async')) {
@@ -94,11 +109,12 @@ export function attachShaderMetadata(
         }
     }
 
-    // Strip `'use gpu'` directives — they are a signal for the build plugin
-    // (`unplugin-typegpu`) and are not valid WGSL. Since the plugin can't parse
-    // .ts files, we handle transpilation at runtime, and the directive must be
-    // removed so tinyest doesn't include it in the WGSL body.
+    // Strip `'use gpu'` directives.
     source = source.replace(/['"]use gpu['"]\s*;?\s*/g, '');
+
+    // Rename single `_` identifiers — WGSL rejects them, but minifiers
+    // produce `_` as a short variable name.
+    source = source.replace(/(?<=^|[\s,;=([\]{}!+\-*/%&|^~<>?:.])_(?=[\s,;=\]\[{}!+\-*/%&|^~<>?:.,]|$)/g, 'v_');
 
     // Parse the function source into an AST.
     // If this fails (e.g. Bun's toString() returns optimized source), silently
@@ -112,9 +128,64 @@ export function attachShaderMetadata(
             sourceType: 'module',
         }) as { body: Array<{ declarations: Array<{ init: acorn.Node }> }> };
         fnNode = ast.body[0].declarations[0].init;
-        ({ params, body, externalNames } = transpileFn(fnNode));
-    } catch {
-        return; // Can't parse — skip metadata attachment
+
+        // Split combined declarations: minifiers produce `let a=1,b=2,c=3`
+        // but tinyest only supports one declaration per statement.
+        const splitDecls = (stmts: acorn.Node[]): void => {
+            for (let i = stmts.length - 1; i >= 0; i--) {
+                const s = stmts[i] as acorn.VariableDeclaration;
+                if (s.type === 'VariableDeclaration' &&
+                    Array.isArray(s.declarations)) {
+                    s.kind = 'const';
+
+                    if (s.declarations.length > 1) {
+                        const newStmts = s.declarations.map(d => ({
+                            type: 'VariableDeclaration',
+                            start: d.start,
+                            end: d.end,
+                            kind: 'const',
+                            declarations: [d],
+                        })) as acorn.VariableDeclaration[];
+
+                        stmts.splice(i, 1, ...newStmts);
+                    }
+                }
+                // Recurse into nested blocks
+                const blk = (s as unknown as acorn.Class).body;
+                if (blk && typeof blk === 'object') {
+                    const arr = blk.body as acorn.Node[];
+                    if (Array.isArray(arr)) splitDecls(arr as acorn.VariableDeclaration[]);
+                }
+
+                const cons = (s as unknown as acorn.ConditionalExpression).consequent;
+                if (cons && typeof cons === 'object' && 'body' in cons) {
+                    const arr = cons.body;
+                    if (Array.isArray(arr)) splitDecls(arr as acorn.VariableDeclaration[]);
+                }
+
+                const alt = (s as unknown as acorn.IfStatement).alternate;
+                if (alt && typeof alt === 'object' && 'body' in alt) {
+                    const arr = alt.body;
+                    if (Array.isArray(arr)) splitDecls(arr as acorn.VariableDeclaration[]);
+                }
+            }
+        };
+
+        splitDecls((fnNode as unknown as any).body.body);
+
+        // Use temporary variable instead of destructuring assignment.
+        // minifiers strip the required parentheses around ({...}=...)
+        // in comma expressions, producing invalid `{params:s}=value`.
+        const result = transpileFn(fnNode);
+        params = result.params;
+        body = result.body;
+        externalNames = result.externalNames;
+    } catch (e) {
+        // Parsing failed — skip metadata attachment.
+        if (typeof console !== 'undefined') {
+            console.warn('[murow] attachShaderMetadata: could not parse function, metadata skipped', e);
+        }
+        return;
     }
 
     // Walk the AST to collect member accesses per identifier: `id.member` → record `member` under `id`.
@@ -140,11 +211,15 @@ export function attachShaderMetadata(
     };
     visit(fnNode);
 
+    // Use known external names when provided (survives minification).
+    // Otherwise use tinyest's extracted names (works for non-minified code).
+    const effectiveExternalNames = knownExternalNames ?? externalNames;
+
     // For each discovered external name, pick the namespace alias whose
     // object contains *every* member accessed via that name.
     const resolvedAliases: Record<string, object> = {};
     const candidateEntries = Object.entries(namespaceAliases);
-    for (const name of externalNames) {
+    for (const name of effectiveExternalNames) {
         const members = memberAccesses.get(name);
         if (!members || members.size === 0) continue;
         for (const [, ns] of candidateEntries) {
@@ -166,7 +241,7 @@ export function attachShaderMetadata(
     // and provide them as individual externals.
     // Also handles bundler-renamed names like `mul2` by stripping trailing digits.
     const resolvedMembers: Record<string, unknown> = {};
-    for (const name of externalNames) {
+    for (const name of effectiveExternalNames) {
         if (resolvedAliases[name]) continue;
         let found = false;
         for (const [, ns] of candidateEntries) {
@@ -191,13 +266,42 @@ export function attachShaderMetadata(
         }
     }
 
-    // Also check against the caller's externals for bundler-renamed names.
+    // Call the externals getter eagerly to detect bundler-renamed names.
+    const baseExternals = getExternals();
+
+    // Check if unresolved external names correspond to minified variable
+    // names in the externals getter. Minifiers rename `lightContribution` to
+    // `zs` in the function body, but the externals map key is still
+    // `lightContribution`. We detect this by parsing the getter's source to
+    // find which variable names map to which keys.
+    if (externalNames.some(n => !resolvedAliases[n] && !resolvedMembers[n] && !(n in baseExternals))) {
+        try {
+            const getterSrc = getExternals.toString();
+            // Match key: value pairs in arrow functions: ({key1: val1, key2: val2})
+            const objMatch = getterSrc.match(/\(\s*\{[^}]+\}\s*\)/);
+            if (objMatch) {
+                // Extract key:value pairs
+                const pairRegex = /([\w$]+)\s*:\s*([\w$]+)/g;
+                let pair;
+                while ((pair = pairRegex.exec(objMatch[0])) !== null) {
+                    const canonicalKey = pair[1];
+                    const minifiedVar = pair[2];
+                    if (!(minifiedVar in baseExternals) && !resolvedAliases[minifiedVar] && !resolvedMembers[minifiedVar]) {
+                        if (canonicalKey in baseExternals) {
+                            resolvedMembers[minifiedVar] = baseExternals[canonicalKey];
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Ignore — getter source parsing is best-effort
+        }
+    }
     // When esbuild renames `lightContribution` to `lightContribution2` in the
     // bundled function body, tinyest's transpiled body references the renamed
     // identifier. We detect this by checking if stripping trailing digits
     // matches a key in the caller's externals.
-    const baseExternals = getExternals();
-    for (const name of externalNames) {
+    for (const name of effectiveExternalNames) {
         if (resolvedAliases[name]) continue;
         if (resolvedMembers[name]) continue;
         const stripped = name.replace(/\d+$/, '');
@@ -214,7 +318,20 @@ export function attachShaderMetadata(
     globalThis.__TYPEGPU_META__ ??= new WeakMap();
     globalThis.__TYPEGPU_META__.set(fn, {
         v: FORMAT_VERSION,
-        ast: { params, body, externalNames },
+        ast: { params, body, externalNames: effectiveExternalNames },
         externals: wrappedExternals,
     });
+}
+
+// Patch GPUDevice.createShaderModule to replace `$` in generated WGSL.
+// Tinyest generates `$` as temp variable names with const declarations,
+// but `$` is invalid in WGSL identifiers. This runs once at module init.
+if (typeof GPUDevice !== 'undefined' && GPUDevice.prototype && GPUDevice.prototype.createShaderModule) {
+    const origCreateShaderModule = GPUDevice.prototype.createShaderModule;
+    GPUDevice.prototype.createShaderModule = function (desc: GPUShaderModuleDescriptor) {
+        if (desc && typeof desc.code === 'string' && desc.code.indexOf('$') !== -1) {
+            desc.code = desc.code.replace(/\$/g, 'x');
+        }
+        return origCreateShaderModule.call(this, desc);
+    };
 }
