@@ -48,7 +48,7 @@ async function main() {
             format: 'esm',
             platform: 'browser',
             bundle: true,
-            // minify: true,
+            minify: true,
         }),
     ]);
 }

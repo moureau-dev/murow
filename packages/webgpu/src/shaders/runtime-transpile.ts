@@ -324,13 +324,16 @@ export function attachShaderMetadata(
 }
 
 // Patch GPUDevice.createShaderModule to replace `$` in generated WGSL.
-// Tinyest generates `$` as temp variable names with const declarations,
-// but `$` is invalid in WGSL identifiers. This runs once at module init.
+// Tinyest generates `$` as temp variable names, but `$` is invalid in WGSL
+// identifiers. All `$` become `zz` — a two-letter name that won't collide
+// with minified single-letter variable names from esbuild.
 if (typeof GPUDevice !== 'undefined' && GPUDevice.prototype && GPUDevice.prototype.createShaderModule) {
     const origCreateShaderModule = GPUDevice.prototype.createShaderModule;
     GPUDevice.prototype.createShaderModule = function (desc: GPUShaderModuleDescriptor) {
         if (desc && typeof desc.code === 'string' && desc.code.indexOf('$') !== -1) {
-            desc.code = desc.code.replace(/\$/g, 'x');
+            // Replace all `$` with `zz` — a two-letter name that won't collide
+            // with minified single-letter variable names from esbuild.
+            desc.code = desc.code.replace(/\$/g, 'zz');
         }
         return origCreateShaderModule.call(this, desc);
     };
