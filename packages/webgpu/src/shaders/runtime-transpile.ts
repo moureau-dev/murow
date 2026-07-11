@@ -1,10 +1,12 @@
 /**
- * Runtime shader transpilation — eliminates the need for `unplugin-typegpu`
- * and `'use gpu'` directives in geometry builder shaders.
+ * Runtime shader transpilation — provides `unplugin-typegpu`-equivalent metadata
+ * at runtime without a build step.
  *
- * Parses the user's function source at runtime using Acorn, transpiles it
+ * Parses the function source at runtime using Acorn, transpiles it
  * with tinyest-for-wgsl, and attaches metadata to the function so TypeGPU
- * can generate WGSL from it.
+ * can generate WGSL from it. Works alongside `'use gpu'` directives (which
+ * are stripped before transpilation) so the same functions also work when
+ * the build plugin IS present.
  *
  * This only works in browser environments where Function.toString() returns
  * the original source (not optimized by the runtime like Bun does).
@@ -32,10 +34,12 @@ declare const globalThis: {
  *
  * @param fn The shader function
  * @param getExternals Lazy function returning external variable bindings.
- *                     Called during pipeline resolution. The returned record
- *                     is augmented with auto-detected namespace aliases (see
- *                     `namespaceAliases`) so bundler-renamed identifiers
- *                     (e.g. `d10` instead of `d`) still resolve.
+ *                     Called during pipeline resolution (and once eagerly
+ *                     during metadata attachment to detect bundler-renamed
+ *                     identifiers). The returned record is augmented with
+ *                     auto-detected namespace aliases (see `namespaceAliases`)
+ *                     so bundler-renamed identifiers (e.g. `d10` instead of
+ *                     `d`) still resolve.
  * @param stripFirstParam If true, removes the first parameter (ctx) and treats
  *                        its destructured names as externals instead
  * @param namespaceAliases Map of canonical namespace name → namespace object.
@@ -85,6 +89,12 @@ export function attachShaderMetadata(
         }
     }
 
+    // Strip `'use gpu'` directives — they are a signal for the build plugin
+    // (`unplugin-typegpu`) and are not valid WGSL. Since the plugin can't parse
+    // .ts files, we handle transpilation at runtime, and the directive must be
+    // removed so tinyest doesn't include it in the WGSL body.
+    source = source.replace(/['"]use gpu['"]\s*;?\s*/g, '');
+
     // Parse the function source into an AST
     const wrappedSource = `const __f__ = ${source}`;
     const ast = acorn.parse(wrappedSource, {
@@ -118,10 +128,8 @@ export function attachShaderMetadata(
     };
     visit(fnNode);
 
-    // For each discovered external name, if it's not already handled by the
-    // caller's externals (we can't know that here without calling getExternals,
-    // so we always emit a mapping when one fits), pick the namespace alias
-    // whose object contains *every* member accessed via that name.
+    // For each discovered external name, pick the namespace alias whose
+    // object contains *every* member accessed via that name.
     const resolvedAliases: Record<string, object> = {};
     const candidateEntries = Object.entries(namespaceAliases);
     for (const name of externalNames) {
@@ -139,8 +147,56 @@ export function attachShaderMetadata(
         }
     }
 
-    // Wrap the caller's externals provider with the resolved aliases.
-    const wrappedExternals = () => ({ ...resolvedAliases, ...getExternals() });
+    // Resolve bare external names from namespace objects.
+    // After tinyest transpilation, `d.vec4f(x)` and `std.mix(a,b)` become
+    // `vec4f(x)` and `mix(a,b)` in the WGSL body, and `vec4f`/`mix` appear
+    // in `externalNames`. We need to look these up in the namespace objects
+    // and provide them as individual externals.
+    // Also handles bundler-renamed names like `mul2` by stripping trailing digits.
+    const resolvedMembers: Record<string, unknown> = {};
+    for (const name of externalNames) {
+        if (resolvedAliases[name]) continue;
+        let found = false;
+        for (const [, ns] of candidateEntries) {
+            const nsRecord = ns as Record<string, unknown>;
+            if (name in nsRecord) {
+                resolvedMembers[name] = nsRecord[name];
+                found = true;
+                break;
+            }
+        }
+        if (found) continue;
+        // Bundler-renamed: try stripping trailing digits (mul2 → mul)
+        const stripped = name.replace(/\d+$/, '');
+        if (stripped !== name) {
+            for (const [, ns] of candidateEntries) {
+                const nsRecord = ns as Record<string, unknown>;
+                if (stripped in nsRecord) {
+                    resolvedMembers[name] = nsRecord[stripped];
+                    break;
+                }
+            }
+        }
+    }
+
+    // Also check against the caller's externals for bundler-renamed names.
+    // When esbuild renames `lightContribution` to `lightContribution2` in the
+    // bundled function body, tinyest's transpiled body references the renamed
+    // identifier. We detect this by checking if stripping trailing digits
+    // matches a key in the caller's externals.
+    const baseExternals = getExternals();
+    for (const name of externalNames) {
+        if (resolvedAliases[name]) continue;
+        if (resolvedMembers[name]) continue;
+        const stripped = name.replace(/\d+$/, '');
+        if (stripped !== name && stripped in baseExternals) {
+            resolvedMembers[name] = baseExternals[stripped];
+        }
+    }
+
+    // Wrap the caller's externals provider with resolved members,
+    // resolved aliases, and the caller's own externals.
+    const wrappedExternals = () => ({ ...resolvedMembers, ...resolvedAliases, ...getExternals() });
 
     // Attach metadata via TypeGPU's global WeakMap
     globalThis.__TYPEGPU_META__ ??= new WeakMap();

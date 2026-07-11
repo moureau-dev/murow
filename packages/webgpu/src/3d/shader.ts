@@ -6,9 +6,9 @@
  * Basic diffuse lighting.
  */
 import tgpu from 'typegpu';
-import * as d from 'typegpu/data';
-import * as std from 'typegpu/std';
+import { d, std } from '../shaders/typegpu';
 import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms, Light } from '../core/types';
+import { attachShaderMetadata } from '../shaders/runtime-transpile';
 import { lightContribution, tonemap } from '../shaders/utils';
 
 /** Max point/spot lights the mesh shaders' storage buffer holds. */
@@ -27,19 +27,7 @@ export function createMeshLayout(maxInstances: number) {
 export type MeshDataLayout = ReturnType<typeof createMeshLayout>;
 
 export function createMeshVertex(meshLayout: MeshDataLayout) {
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            instanceIndex: d.builtin.instanceIndex,
-        },
-        out: {
-            pos: d.builtin.position,
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vWorldPos: d.vec3f,
-        },
-    })(function(input) {
+    const fn = function(input: { position: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; instanceIndex: number }) {
         const instanceIndex = input.instanceIndex;
         const slot = meshLayout.$.slotIndices[instanceIndex];
         const dyn = meshLayout.$.dynamicInstances[slot];
@@ -130,22 +118,29 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
         };
-    });
-}
-
-export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout) {
-    return tgpu.fragmentFn({
+    };
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std });
+    return tgpu.vertexFn({
         in: {
+            position: d.location(0, d.vec3f),
+            normal: d.location(1, d.vec3f),
+            instanceIndex: d.builtin.instanceIndex,
+        },
+        out: {
+            pos: d.builtin.position,
             vNormal: d.vec3f,
             vColor: d.vec3f,
             vWorldPos: d.vec3f,
         },
-        out: d.vec4f,
-    })(function(input) {
+    })(fn as any);
+}
+
+export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout) {
+    const fn = function(input: { vNormal: { x: number; y: number; z: number }; vColor: { x: number; y: number; z: number }; vWorldPos: { x: number; y: number; z: number } }) {
         const u = meshLayout.$.uniforms;
         const baseColor = input.vColor;
-        const worldPos = input.vWorldPos;
-        const normal = std.normalize(input.vNormal);
+        const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
+        const normal = std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z));
 
         // Fixed directional light (the engine's classic look) + ambient.
         const lightDir = std.normalize(d.vec3f(u.lightDirX, u.lightDirY, u.lightDirZ));
@@ -190,7 +185,16 @@ export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataL
 
         const mapped = tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, 1.0);
-    });
+    };
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout, lightContribution, tonemap }), false, { d, std });
+    return tgpu.fragmentFn({
+        in: {
+            vNormal: d.vec3f,
+            vColor: d.vec3f,
+            vWorldPos: d.vec3f,
+        },
+        out: d.vec4f,
+    })(fn as any);
 }
 
 // --- Textured pipeline: adds UV attribute + texture sampling ---
@@ -205,21 +209,7 @@ export function createTextureBindGroupLayout() {
 export type TextureBindGroupLayout = ReturnType<typeof createTextureBindGroupLayout>;
 
 export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            uv: d.location(2, d.vec2f),
-            instanceIndex: d.builtin.instanceIndex,
-        },
-        out: {
-            pos: d.builtin.position,
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vUV: d.vec2f,
-            vWorldPos: d.vec3f,
-        },
-    })(function(input) {
+    const fn = function(input: { position: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
         const instanceIndex = input.instanceIndex;
         const slot = meshLayout.$.slotIndices[instanceIndex];
         const dyn = meshLayout.$.dynamicInstances[slot];
@@ -310,25 +300,38 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
             vUV: input.uv,
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
         };
-    });
-}
-
-export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout, texLayout: TextureBindGroupLayout) {
-    return tgpu.fragmentFn({
+    };
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std });
+    return tgpu.vertexFn({
         in: {
+            position: d.location(0, d.vec3f),
+            normal: d.location(1, d.vec3f),
+            uv: d.location(2, d.vec2f),
+            instanceIndex: d.builtin.instanceIndex,
+        },
+        out: {
+            pos: d.builtin.position,
             vNormal: d.vec3f,
             vColor: d.vec3f,
             vUV: d.vec2f,
             vWorldPos: d.vec3f,
         },
-        out: d.vec4f,
-    })(function(input) {
+    })(fn as any);
+}
+
+export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout, texLayout: TextureBindGroupLayout) {
+    const fn = function(input: { vNormal: { x: number; y: number; z: number }; vColor: { x: number; y: number; z: number }; vUV: { x: number; y: number }; vWorldPos: { x: number; y: number; z: number } }) {
         const u = meshLayout.$.uniforms;
-        const worldPos = input.vWorldPos;
-        const normal = std.normalize(input.vNormal);
+        const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
+        const normal = std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z));
 
         // Sample texture, multiply by instance color (tint)
-        const texColor = std.textureSample(texLayout.$.modelTexture, texLayout.$.modelSampler, input.vUV);
+        const texColor = std.textureSample(
+            texLayout.$.modelTexture,
+            texLayout.$.modelSampler,
+            d.vec2f(input.vUV.x, input.vUV.y),
+        );
+
         const baseColor = d.vec3f(
             std.mul(texColor.x, input.vColor.x),
             std.mul(texColor.y, input.vColor.y),
@@ -375,7 +378,17 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
 
         const mapped = tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, texColor.w);
-    });
+    };
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout, texLayout, lightContribution, tonemap }), false, { d, std });
+    return tgpu.fragmentFn({
+        in: {
+            vNormal: d.vec3f,
+            vColor: d.vec3f,
+            vUV: d.vec2f,
+            vWorldPos: d.vec3f,
+        },
+        out: d.vec4f,
+    })(fn as any);
 }
 
 // =============================================================================
@@ -396,23 +409,7 @@ export function createSkinnedMeshLayout(maxInstances: number, maxBones: number) 
 export type SkinnedMeshDataLayout = ReturnType<typeof createSkinnedMeshLayout>;
 
 export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            uv: d.location(2, d.vec2f),
-            joints: d.location(3, d.vec4u),
-            weights: d.location(4, d.vec4f),
-            instanceIndex: d.builtin.instanceIndex,
-        },
-        out: {
-            pos: d.builtin.position,
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vUV: d.vec2f,
-            vWorldPos: d.vec3f,
-        },
-    })(function(input) {
+    const fn = function(input: { position: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; uv: { x: number; y: number }; joints: { x: number; y: number; z: number; w: number }; weights: { x: number; y: number; z: number; w: number }; instanceIndex: number }) {
         const slot = layout.$.slotIndices[input.instanceIndex];
         const dyn = layout.$.dynamicInstances[slot];
         const stat = layout.$.staticInstances[slot];
@@ -542,7 +539,25 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
             vUV: input.uv,
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
         };
-    });
+    };
+    attachShaderMetadata(fn, () => ({ d, std, layout }), false, { d, std });
+    return tgpu.vertexFn({
+        in: {
+            position: d.location(0, d.vec3f),
+            normal: d.location(1, d.vec3f),
+            uv: d.location(2, d.vec2f),
+            joints: d.location(3, d.vec4u),
+            weights: d.location(4, d.vec4f),
+            instanceIndex: d.builtin.instanceIndex,
+        },
+        out: {
+            pos: d.builtin.position,
+            vNormal: d.vec3f,
+            vColor: d.vec3f,
+            vUV: d.vec2f,
+            vWorldPos: d.vec3f,
+        },
+    })(fn as any);
 }
 
 /**
@@ -553,19 +568,11 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
  * UV is simply unused here. Lighting matches createMeshFragment.
  */
 export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
-    return tgpu.fragmentFn({
-        in: {
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vUV: d.vec2f,
-            vWorldPos: d.vec3f,
-        },
-        out: d.vec4f,
-    })(function(input) {
+    const fn = function(input: { vNormal: { x: number; y: number; z: number }; vColor: { x: number; y: number; z: number }; vUV: { x: number; y: number }; vWorldPos: { x: number; y: number; z: number } }) {
         const u = meshLayout.$.uniforms;
         const baseColor = input.vColor;
-        const worldPos = input.vWorldPos;
-        const normal = std.normalize(input.vNormal);
+        const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
+        const normal = std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z));
 
         const lightDir = std.normalize(d.vec3f(u.lightDirX, u.lightDirY, u.lightDirZ));
         const diff = std.max(std.dot(normal, lightDir), 0.0) * u.lightDirIntensity;
@@ -607,7 +614,17 @@ export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
 
         const mapped = tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, 1.0);
-    });
-}
+    };
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout, lightContribution, tonemap }), false, { d, std });
+        return tgpu.fragmentFn({
+            in: {
+                vNormal: d.vec3f,
+                vColor: d.vec3f,
+                vUV: d.vec2f,
+                vWorldPos: d.vec3f,
+            },
+            out: d.vec4f,
+        })(fn as any);
+    }
 
-export { createTexturedMeshFragment as createSkinnedTexturedMeshFragment };
+    export { createTexturedMeshFragment as createSkinnedTexturedMeshFragment };
