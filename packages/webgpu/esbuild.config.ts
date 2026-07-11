@@ -39,8 +39,9 @@ async function main() {
             // minify: true,
             bundle: true,
         }),
-        // Single-file bundle for CDN use — all deps inlined so TypeGPU's
-        // $internal Symbol is shared across a single module boundary.
+        // Single-file bundle for CDN use — all typegpu deps inlined so
+        // TypeGPU's $internal Symbol is shared across a single module boundary.
+        // murow is kept external (the user imports it separately).
         build({
             entryPoints: ['./src/index.ts'],
             outbase: 'src',
@@ -49,6 +50,7 @@ async function main() {
             platform: 'browser',
             bundle: true,
             minify: true,
+            external: ['murow', 'murow/*'],
         }),
     ]);
 }
