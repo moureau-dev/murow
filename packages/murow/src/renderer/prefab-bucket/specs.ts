@@ -93,7 +93,25 @@ export interface CompositeSpec {
     readonly hitbox?: string;
 }
 
-export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec | CompositeSpec;
+export interface TextureSpec {
+    readonly type: 'texture';
+    readonly id: string;
+    readonly src: string;
+    readonly metadata?: Record<string, unknown>;
+}
+
+export interface PlaneSpec {
+    readonly type: 'plane';
+    /** Unique identifier for the prefab. */
+    readonly id: string;
+    readonly width?: number;
+    readonly height?: number;
+    readonly texture?: string;
+    readonly metadata?: Record<string, unknown>;
+    readonly hitbox?: string;
+}
+
+export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec | CompositeSpec | PlaneSpec;
 
 /**
  * Map a spec's `animations` tuple to a record-keyed-by-name. Used to type
@@ -209,7 +227,26 @@ export interface CompositePrefab<S extends CompositeSpec = CompositeSpec> {
     readonly hitbox?: string;
 }
 
-export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab | CompositePrefab;
+export interface TexturePrefab<S extends TextureSpec = TextureSpec> {
+    readonly type: 'texture';
+    readonly id: S['id'];
+    readonly src: string;
+    readonly parsed: HTMLImageElement;
+    readonly metadata: MetadataOf<S>;
+    readonly hitbox?: string;
+}
+
+export interface PlanePrefab<S extends PlaneSpec = PlaneSpec> {
+    readonly type: 'plane';
+    readonly id: S['id'];
+    readonly width: number;
+    readonly height: number;
+    readonly texture?: TextureSpec['id'];
+    readonly metadata: MetadataOf<S>;
+    readonly hitbox?: string;
+}
+
+export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab;
 
 // ============================================================================
 // 2D
@@ -228,7 +265,7 @@ export interface SpritesheetSpec {
     readonly hitbox?: string;
 }
 
-export type Prefab2DSpec = SpritesheetSpec;
+export type Prefab2DSpec = SpritesheetSpec | TextureSpec;
 
 export interface SpritesheetPrefab<S extends SpritesheetSpec = SpritesheetSpec> {
     readonly type: 'spritesheet';
@@ -241,7 +278,7 @@ export interface SpritesheetPrefab<S extends SpritesheetSpec = SpritesheetSpec> 
     readonly hitbox?: string;
 }
 
-export type Prefab2D = SpritesheetPrefab;
+export type Prefab2D = SpritesheetPrefab | TexturePrefab;
 
 // ============================================================================
 // Spec → prefab mapping
@@ -257,5 +294,7 @@ export type PrefabFor<S> =
     S extends GridSpec ? GridPrefab<S> :
     S extends CubeSpec ? CubePrefab<S> :
     S extends CompositeSpec ? CompositePrefab<S> :
+    S extends PlaneSpec ? PlanePrefab<S> :
+    S extends TextureSpec ? TexturePrefab<S> :
     S extends SpritesheetSpec ? SpritesheetPrefab<S> :
     never;

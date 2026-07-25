@@ -1,0 +1,1 @@
+export { AssetBucket } from './asset';
