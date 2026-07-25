@@ -41,13 +41,13 @@ import { type StringOr } from '../bucket/bucket';
 type SpecForMode<M extends '2d' | '3d'> =
     M extends '3d' ? Prefab3DSpec : Prefab2DSpec;
 
-/** PlaneSpec variant whose `texture` narrows to known texture ids. */
-type TextureAwarePlaneSpec<TexId extends string> =
-    PlaneSpec & { readonly texture?: StringOr<TexId> };
+/** A spec from the union whose `texture` field is narrowed to known texture ids. */
+type TextureAwareSpec<TexId extends string> =
+    Omit<PlaneSpec, 'texture'> & { readonly texture?: StringOr<TexId> };
 
-/** The full prefab spec union with PlaneSpec.texture narrowed by `TexId`. */
+/** The full prefab spec union with relevant specs narrowed by `TexId`. */
 type PrefabSpecWithTexIds<M extends '2d' | '3d', TexId extends string> =
-    Exclude<SpecForMode<M>, PlaneSpec> | TextureAwarePlaneSpec<TexId>;
+    Exclude<SpecForMode<M>, PlaneSpec> | TextureAwareSpec<TexId>;
 
 /** Callable accessor signature for `asset.textures`. */
 type TexturesCallable<TexSpecs extends Record<string, TextureSpec>, M extends '2d' | '3d', PrefabSpecs extends Record<string, SpecForMode<M>>> = {
@@ -58,8 +58,8 @@ type TexturesCallable<TexSpecs extends Record<string, TextureSpec>, M extends '2
 
 /** Callable accessor signature for `asset.prefabs`. */
 type PrefabsCallable<TexSpecs extends Record<string, TextureSpec>, M extends '2d' | '3d', PrefabSpecs extends Record<string, SpecForMode<M>>> = {
-    <S extends Record<string, SpecForMode<M>> & Record<string, PrefabSpecWithTexIds<M, keyof TexSpecs & string>>>(
-        cb: (ctx: { bucket: PrefabBucket<M, PrefabSpecs> }) => PrefabBucket<M, S>,
+    <S extends Record<string, any>>(
+        cb: (ctx: { bucket: PrefabBucket<M, PrefabSpecs, PrefabSpecWithTexIds<M, keyof TexSpecs & string>> }) => PrefabBucket<M, S, PrefabSpecWithTexIds<M, keyof TexSpecs & string>>,
     ): AssetBucket<M, TexSpecs, S>;
 };
 
@@ -105,8 +105,7 @@ export class AssetBucket<
         this.#textures = texBucket;
         this.#prefabs = prefsBucket;
 
-        // Build a callable proxy for textures: calling it invokes the callback,
-        // property access delegates to texBucket.
+        // Build a callable proxy for textures
         const texFn = ((cb?: (ctx: { bucket: TextureBucket }) => TextureBucket<any>) => {
             if (cb) {
                 cb({ bucket: texBucket as unknown as TextureBucket });
@@ -123,10 +122,10 @@ export class AssetBucket<
             },
         }) as any;
 
-        // Same for prefabs
-        const prefsFn = ((cb?: (ctx: { bucket: PrefabBucket<M, PrefabSpecs> }) => PrefabBucket<M, any>) => {
+        // Same for prefabs, casting to the narrowed SpecUnion type
+        const prefsFn = ((cb?: (ctx: { bucket: PrefabBucket<M, PrefabSpecs, PrefabSpecWithTexIds<M, keyof TexSpecs & string>> }) => PrefabBucket<M, any, PrefabSpecWithTexIds<M, keyof TexSpecs & string>>) => {
             if (cb) {
-                this.#prefabs = cb({ bucket: this.#prefabs }) as unknown as PrefabBucket<M, PrefabSpecs>;
+                this.#prefabs = cb({ bucket: this.#prefabs as unknown as PrefabBucket<M, PrefabSpecs, PrefabSpecWithTexIds<M, keyof TexSpecs & string>> }) as unknown as PrefabBucket<M, PrefabSpecs>;
                 return this as unknown as AssetBucket<M, TexSpecs, PrefabSpecs>;
             }
             throw new TypeError('AssetBucket.prefabs: expected a callback function');

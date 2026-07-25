@@ -46,7 +46,7 @@ export type BucketParser<Spec, Prefab> = (spec: Spec, ctx: ParserContext) => Pro
 export class Bucket<
     Spec extends BucketSpecBase,
     Prefab extends BucketPrefabBase,
-    Specs extends Record<string, Spec> = {},
+    Specs extends Record<string, BucketSpecBase> = {},
     AdditionalEvents extends [string, unknown][] = never,
 > {
     protected pending: Spec[] = [];

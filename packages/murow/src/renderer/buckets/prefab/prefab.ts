@@ -14,7 +14,7 @@
  * ```
  */
 
-import { Bucket, type StringOr, type BucketBaseEvents } from '../bucket/bucket';
+import { Bucket, type StringOr, type BucketBaseEvents, type BucketSpecBase } from '../bucket/bucket';
 import { parsers2d, parsers3d } from '../../prefab-bucket/parsers';
 import { EventSystem } from '../../../core/events';
 import type { PrefabBucketEvents } from '../../prefab-bucket/index';
@@ -48,11 +48,16 @@ type PrefabEvents = [
  *
  * @typeParam M  `'3d'` (default) or `'2d'` — controls the spec/prefab union.
  * @typeParam Specs  Accumulated spec record, auto-inferred from `.add()` calls.
+ * @typeParam SpecUnion  The spec union `add()` accepts. Defaults to the full
+ *                       spec union for the mode. Can be narrowed (e.g. by
+ *                       AssetBucket) so that `PlaneSpec.texture` autocompletes
+ *                       to known texture ids.
  */
 export class PrefabBucket<
     M extends '2d' | '3d' = '3d',
-    Specs extends Record<string, SpecForMode<M>> = {},
-> extends Bucket<SpecForMode<M>, PrefabUnionForMode<M>, Specs, PrefabEvents> {
+    Specs extends Record<string, BucketSpecBase> = {},
+    SpecUnion extends BucketSpecBase = SpecForMode<M>,
+> extends Bucket<SpecUnion, PrefabUnionForMode<M>, Specs, PrefabEvents> {
 
     constructor(mode: M) {
         const parsers = mode === '3d' ? parsers3d : parsers2d;
@@ -66,13 +71,20 @@ export class PrefabBucket<
      * Add a single spec. Overridden to return the subclass type so chaining
      * through AssetBucket callbacks accumulates specs for narrowed `get()`.
      */
-    add<const S extends SpecForMode<M>>(
+    add<const S extends SpecUnion>(
         spec: S,
-    ): PrefabBucket<M, Specs & Record<S['id'], S>> {
-        return super.add(spec) as unknown as PrefabBucket<M, Specs & Record<S['id'], S>>;
+    ): PrefabBucket<M, Specs & Record<S['id'], S>, SpecUnion> {
+        return super.add(spec) as unknown as PrefabBucket<M, Specs & Record<S['id'], S>, SpecUnion>;
     }
 }
 
 /** Convenience aliases. */
-export type PrefabBucket2D<Specs extends Record<string, Prefab2DSpec> = {}> = PrefabBucket<'2d', Specs>;
-export type PrefabBucket3D<Specs extends Record<string, Prefab3DSpec> = {}> = PrefabBucket<'3d', Specs>;
+export type PrefabBucket2D<
+    Specs extends Record<string, BucketSpecBase> = {},
+    SpecUnion extends BucketSpecBase = Prefab2DSpec,
+> = PrefabBucket<'2d', Specs, SpecUnion>;
+
+export type PrefabBucket3D<
+    Specs extends Record<string, BucketSpecBase> = {},
+    SpecUnion extends BucketSpecBase = Prefab3DSpec,
+> = PrefabBucket<'3d', Specs, SpecUnion>;
