@@ -14,7 +14,7 @@
  * ```
  */
 
-import { Bucket, type StringOr, type BucketBaseEvents, type BucketSpecBase } from '../bucket/bucket';
+import { Bucket, type BucketBaseEvents, type BucketSpecBase } from '../bucket/bucket';
 import { parsers2d, parsers3d } from '../../prefab-bucket/parsers';
 import { EventSystem } from '../../../core/events';
 import type { PrefabBucketEvents } from '../../prefab-bucket/index';
@@ -23,7 +23,6 @@ import type {
     Prefab2DSpec,
     Prefab3D,
     Prefab3DSpec,
-    PrefabFor,
 } from '../../prefab-bucket/specs';
 
 // ——— Helpers ———
