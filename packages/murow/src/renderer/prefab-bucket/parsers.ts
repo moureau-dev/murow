@@ -145,6 +145,7 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             id: spec.id,
             size: spec.size ?? 1,
             texture: spec.texture,
+            uv: spec.uv ?? 'repeat',
             metadata: (spec.metadata ?? {}) as any,
             hitbox: spec.hitbox,
         };
@@ -170,7 +171,21 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             metadata: (spec.metadata ?? {}) as any,
             hitbox: spec.hitbox,
         };
-    }
+    },
+    mesh: (spec) => {
+        if (spec.type !== 'mesh') throw new Error('mesh parser given non-mesh spec');
+        return {
+            type: 'mesh',
+            id: spec.id,
+            positions: new Float32Array(spec.positions),
+            normals: spec.normals ? new Float32Array(spec.normals) : undefined,
+            uvs: spec.uvs ? new Float32Array(spec.uvs) : undefined,
+            indices: spec.indices ? new Uint16Array(spec.indices) : undefined,
+            texture: spec.texture,
+            metadata: (spec.metadata ?? {}) as any,
+            hitbox: spec.hitbox,
+        };
+    },
 };
 
 export const parsers2d: PrefabParserMap<Prefab2DSpec, Prefab2D> = {

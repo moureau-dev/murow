@@ -63,6 +63,19 @@ export interface GridSpec {
     readonly hitbox?: string;
 }
 
+/**
+ * Cube UV layout mode.
+ * - `'repeat'` (default): each face maps the full texture 0,0→1,1.
+ * - `'cross'`: standard cross-layout atlas where each face occupies a
+ *   fixed region in a 4×3 grid.
+ * - `{ atlas: Record<face, [uMin, vMin, uMax, vMax]> }`: per-face UV
+ *   rectangles. Face keys are `'front' | 'back' | 'top' | 'bottom' | 'right' | 'left'`.
+ */
+export type CubeUvMode =
+    | 'repeat'
+    | 'cross'
+    | { readonly atlas: Record<string, readonly [number, number, number, number]> };
+
 /** Unit cube prefab centered at origin. Use the instance's `scale` to size it. */
 export interface CubeSpec {
     readonly type: 'cube';
@@ -71,6 +84,8 @@ export interface CubeSpec {
     readonly size?: number;
     /** Texture id from the asset bucket's texture bucket. */
     readonly texture?: string;
+    /** UV layout mode. Defaults to 'repeat'. */
+    readonly uv?: CubeUvMode;
     readonly metadata?: Record<string, unknown>;
     readonly hitbox?: string;
 }
@@ -113,7 +128,24 @@ export interface PlaneSpec {
     readonly hitbox?: string;
 }
 
-export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec | CompositeSpec | PlaneSpec;
+/**
+ * Mesh prefab — inline geometry data. Useful for programmatically generated
+ * meshes or models too simple to warrant a full glTF file.
+ */
+export interface MeshSpec {
+    readonly type: 'mesh';
+    readonly id: string;
+    readonly positions: number[];
+    readonly normals?: number[];
+    readonly uvs?: number[];
+    /** Indices (triangles). When omitted, vertices are non-indexed. */
+    readonly indices?: number[];
+    readonly texture?: string;
+    readonly metadata?: Record<string, unknown>;
+    readonly hitbox?: string;
+}
+
+export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec | CompositeSpec | PlaneSpec | MeshSpec;
 
 /**
  * Map a spec's `animations` tuple to a record-keyed-by-name. Used to type
@@ -218,6 +250,20 @@ export interface CubePrefab<S extends CubeSpec = CubeSpec> {
     readonly id: S['id'];
     readonly size: number;
     readonly texture?: string;
+    /** Always populated at parse time — defaults to 'repeat'. */
+    readonly uv: CubeUvMode;
+    readonly metadata: MetadataOf<S>;
+    readonly hitbox?: string;
+}
+
+export interface MeshPrefab<S extends MeshSpec = MeshSpec> {
+    readonly type: 'mesh';
+    readonly id: S['id'];
+    readonly positions: Float32Array;
+    readonly normals?: Float32Array;
+    readonly uvs?: Float32Array;
+    readonly indices?: Uint16Array | Uint32Array;
+    readonly texture?: string;
     readonly metadata: MetadataOf<S>;
     readonly hitbox?: string;
 }
@@ -249,7 +295,7 @@ export interface PlanePrefab<S extends PlaneSpec = PlaneSpec> {
     readonly hitbox?: string;
 }
 
-export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab;
+export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab | MeshPrefab;
 
 // ============================================================================
 // 2D
@@ -298,6 +344,7 @@ export type PrefabFor<S> =
     S extends CubeSpec ? CubePrefab<S> :
     S extends CompositeSpec ? CompositePrefab<S> :
     S extends PlaneSpec ? PlanePrefab<S> :
+    S extends MeshSpec ? MeshPrefab<S> :
     S extends TextureSpec ? TexturePrefab<S> :
     S extends SpritesheetSpec ? SpritesheetPrefab<S> :
     never;

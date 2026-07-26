@@ -58,6 +58,7 @@ import {
     type Prefab3D,
     type CompositePrefab,
     type CubePrefab,
+    type MeshPrefab,
     type PlanePrefab,
     type TexturePrefab,
     type SkeletalAnimState,
@@ -78,7 +79,7 @@ import { GltfClipResyncCoordinator } from './clip-resync-coordinator';
 import { WebGPURaycast3D, type RaycastState } from './raycast';
 import { HitboxDebugRenderer } from './hitbox';
 import type { Ray3D } from 'murow/core/ray';
-import type { TextureSpec, Prefab3DSpec } from 'murow/renderer';
+import type { CubeUvMode, TextureSpec, Prefab3DSpec } from 'murow/renderer';
 import type { ComputeKernel } from '../compute/compute-builder';
 
 // --- Dynamic offset constants ---
@@ -301,6 +302,58 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<any, any, any> = 
      * Set to `Infinity` to disable. Default 50.
      */
     animationCullDistance?: number;
+}
+
+// Face order: front, back, top, bottom, right, left — matches createCube() order.
+const CROSS_FACE_RECTS: Record<string, [number, number, number, number]> = {
+    front:  [0.25, 0.333, 0.5,  0.667],
+    back:   [0.75, 0.333, 1.0,  0.667],
+    top:    [0.25, 0,     0.5,  0.333],
+    bottom: [0.25, 0.667, 0.5,  1.0  ],
+    right:  [0.5,  0.333, 0.75, 0.667],
+    left:   [0,    0.333, 0.25, 0.667],
+};
+
+const CUBE_FACE_NAMES = ['front', 'back', 'top', 'bottom', 'right', 'left'] as const;
+
+/**
+ * Generate cube UVs based on the UV mode.
+ * Returns 72 floats (6 faces × 6 verts × 2 UV coords).
+ */
+function generateCubeUvs(mode: CubeUvMode): Float32Array {
+    const uvs = new Float32Array(72);
+    let i = 0;
+
+    let rects: Record<string, readonly [number, number, number, number]>;
+    if (mode === 'repeat') {
+        rects = {
+            front:  [0, 0, 1, 1],
+            back:   [0, 0, 1, 1],
+            top:    [0, 0, 1, 1],
+            bottom: [0, 0, 1, 1],
+            right:  [0, 0, 1, 1],
+            left:   [0, 0, 1, 1],
+        };
+    } else if (mode === 'cross') {
+        rects = CROSS_FACE_RECTS;
+    } else {
+        // Atlas mode: user-provided per-face rects. Missing faces get [0,0,1,1].
+        rects = mode.atlas;
+    }
+
+    for (const face of CUBE_FACE_NAMES) {
+        const r = rects[face] ?? [0, 0, 1, 1];
+        const [uMin, vMin, uMax, vMax] = r;
+        // Each face: 6 verts in the pattern 0,1→1,1→1,0 then 0,1→1,0→0,0
+        uvs[i++] = uMin; uvs[i++] = vMax; // 0,1
+        uvs[i++] = uMax; uvs[i++] = vMax; // 1,1
+        uvs[i++] = uMax; uvs[i++] = vMin; // 1,0
+        uvs[i++] = uMin; uvs[i++] = vMax; // 0,1
+        uvs[i++] = uMax; uvs[i++] = vMin; // 1,0
+        uvs[i++] = uMin; uvs[i++] = vMin; // 0,0
+    }
+
+    return uvs;
 }
 
 export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket<any, any, any>> extends Base3DRenderer {
@@ -809,7 +862,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
                 prefabHandles.set(prefab, model);
             } else if (prefab.type === 'cube') {
                 const cube = prefab as unknown as CubePrefab;
-                const model = this.createCube({ size: cube.size, textureId: (cube as any).texture });
+                const model = this.createCube({ size: cube.size, textureId: (cube as any).texture, uv: cube.uv });
                 prefabHandles.set(prefab, model);
             } else if (prefab.type === 'plane') {
                 const plane = prefab as PlanePrefab;
@@ -817,6 +870,23 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
                     width: plane.width,
                     height: plane.height,
                     textureId: plane.texture,
+                });
+                prefabHandles.set(prefab, model);
+            } else if (prefab.type === 'composite') {
+                // Composites are resolved at addInstance time, not uploaded as GPU resources.
+                continue;
+            }
+
+            // MeshPrefab — bypass stale discriminant narrowing
+            // (LS cache may not have updated Prefab3D union yet).
+            if ((prefab as { type: string }).type === 'mesh') {
+                const meshPrefab = prefab as unknown as MeshPrefab;
+                const model = this.createMesh({
+                    positions: meshPrefab.positions,
+                    normals: meshPrefab.normals,
+                    uvs: meshPrefab.uvs,
+                    indices: meshPrefab.indices,
+                    textureId: (meshPrefab as any).texture,
                 });
                 prefabHandles.set(prefab, model);
             }
@@ -1019,35 +1089,50 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
     }
 
     /**
-     * Create a unit-cube mesh centered at the origin. Pass `size` to scale the
-     * edge length, or keep size = 1 and scale at the instance level.
-     *
-     * ```ts
-     * const cube = renderer.createCube();
-     * renderer.addInstance({ model: cube, color: [1, 0.5, 0.2], scale: 2 });
-     * ```
+     * Create a mesh from raw geometry data. The resulting model is registered
+     * with the renderer and can be used with `addInstance`.
      */
-    createCube(opts: { size?: number; textureId?: string } = {}): ModelHandle {
-        const h = (opts.size ?? 1) / 2;
+    private createMesh(data: {
+        positions: Float32Array;
+        normals?: Float32Array;
+        uvs?: Float32Array;
+        indices?: Uint16Array | Uint32Array;
+        textureId?: string;
+    }): ModelHandle {
+        const textureId = data.textureId;
+        const hasTexture = textureId ? this.gpuTextures.has(textureId) : false;
+        let textureBindGroup: GPUBindGroup | null = null;
+        if (hasTexture && textureId) {
+            textureBindGroup = this.gpuTextures.get(textureId)!.bindGroup;
+        }
+        const handle = this.loadModel({
+            positions: data.positions,
+            normals: data.normals,
+            uvs: data.uvs,
+            indices: data.indices,
+        });
+        const model = this.models[handle.id];
+        model.hasTexture = hasTexture;
+        model.textureBindGroup = textureBindGroup;
+        return handle;
+    }
 
-        // 36 vertices, 6 faces, 2 triangles per face, 3 vertices per triangle.
+    createCube(opts: { size?: number; textureId?: string; uv?: CubeUvMode } = {}): ModelHandle {
+        const h = (opts.size ?? 1) / 2;
+        const mode = opts.uv ?? 'repeat';
+
+        // 36 vertices, 6 faces, 2 triangles per face.
         const positions = new Float32Array([
-            // +Z
             -h, -h,  h,   h, -h,  h,   h,  h,  h,
             -h, -h,  h,   h,  h,  h,  -h,  h,  h,
-            // -Z
              h, -h, -h,  -h, -h, -h,  -h,  h, -h,
              h, -h, -h,  -h,  h, -h,   h,  h, -h,
-            // +Y
             -h,  h,  h,   h,  h,  h,   h,  h, -h,
             -h,  h,  h,   h,  h, -h,  -h,  h, -h,
-            // -Y
             -h, -h, -h,   h, -h, -h,   h, -h,  h,
             -h, -h, -h,   h, -h,  h,  -h, -h,  h,
-            // +X
              h, -h,  h,   h, -h, -h,   h,  h, -h,
              h, -h,  h,   h,  h, -h,   h,  h,  h,
-            // -X
             -h, -h, -h,  -h, -h,  h,  -h,  h,  h,
             -h, -h, -h,  -h,  h,  h,  -h,  h, -h,
         ]);
@@ -1059,40 +1144,17 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
              1, 0, 0,  1, 0, 0,  1, 0, 0,   1, 0, 0,  1, 0, 0,  1, 0, 0,
             -1, 0, 0, -1, 0, 0, -1, 0, 0,  -1, 0, 0, -1, 0, 0, -1, 0, 0,
         ]);
-        // UVs: per-face full tile (0,0)-(1,1), 6 verts per face
-        const uvs = new Float32Array([
-            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
-            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
-            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
-            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
-            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
-            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
-        ]);
-
-        const textureId = opts.textureId;
-        const hasTexture = textureId ? this.gpuTextures.has(textureId) : false;
-        let textureBindGroup: GPUBindGroup | null = null;
-        if (hasTexture && textureId) {
-            textureBindGroup = this.gpuTextures.get(textureId)!.bindGroup;
-        }
-
-        const handle = this.loadModel({ positions, normals, uvs });
-        const model = this.models[handle.id];
-        model.hasTexture = hasTexture;
-        model.textureBindGroup = textureBindGroup;
-        return handle;
+        const uvs = generateCubeUvs(mode);
+        return this.createMesh({ positions, normals, uvs, textureId: opts.textureId });
     }
     /**
      * Create a textured 3D quad (plane) mesh centered at the origin on the XY plane.
-     * Normals face +Z. Width and height default to 1. When `textureId` is provided
-     * and matches a previously uploaded TexturePrefab, the model is flagged as textured
-     * with the appropriate bind group.
+     * Normals face +Z. Width and height default to 1.
      */
     createPlane(opts: { width?: number; height?: number; textureId?: string } = {}): ModelHandle {
         const w = (opts.width ?? 1) / 2;
         const h = (opts.height ?? 1) / 2;
 
-        // 6 vertices (2 triangles), each: pos(3f) + normal(3f) + uv(2f)
         const positions = new Float32Array([
             -w, -h, 0,   w, -h, 0,   w,  h, 0,
             -w, -h, 0,   w,  h, 0,  -w,  h, 0,
@@ -1106,23 +1168,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             0, 1,  1, 0,  0, 0,
         ]);
 
-        const textureId = opts.textureId;
-        const hasTexture = textureId ? this.gpuTextures.has(textureId) : false;
-        let textureBindGroup: GPUBindGroup | null = null;
-
-        if (hasTexture && textureId) {
-            textureBindGroup = this.gpuTextures.get(textureId)!.bindGroup;
-        }
-
-        // Reuse loadModel for interleaved vertex buffer + index handling
-        const handle = this.loadModel({ positions, normals, uvs });
-
-        // Override hasTexture and bind group on the stored model
-        const model = this.models[handle.id];
-        model.hasTexture = hasTexture;
-        model.textureBindGroup = textureBindGroup;
-
-        return handle;
+        return this.createMesh({ positions, normals, uvs, textureId: opts.textureId });
     }
 
     /**
