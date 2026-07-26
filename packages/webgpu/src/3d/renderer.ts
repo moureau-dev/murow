@@ -857,6 +857,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             }
         }
     }
+
     private async uploadTexturePrefab(prefab: TexturePrefab): Promise<void> {
         const bitmap = await createImageBitmap(prefab.parsed);
         const { view } = createTextureFromBitmap(this.device, bitmap);
