@@ -57,6 +57,7 @@ import {
     type PrefabBucket3D,
     type Prefab3D,
     type CompositePrefab,
+    type CubePrefab,
     type PlanePrefab,
     type TexturePrefab,
     type SkeletalAnimState,
@@ -634,6 +635,32 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             depthStencil,
         });
 
+        // 1×1 white fallback texture — ensures bind group 1 is always valid
+        // when the textured pipeline is selected, even for instances without
+        // a texture override or model default.
+        const whiteTex = this.device.createTexture({
+            size: [1, 1, 1],
+            format: 'rgba8unorm',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        });
+        this.device.queue.writeTexture(
+            { texture: whiteTex },
+            new Uint8Array([255, 255, 255, 255]),
+            { bytesPerRow: 4 },
+            [1, 1],
+        );
+        const whiteView = whiteTex.createView();
+        const whiteSampler = this.device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+        const whiteBG = this.device.createBindGroup({
+            layout: this.rawTexturedPipeline.getBindGroupLayout(1),
+            entries: [
+                { binding: 0, resource: whiteView },
+                { binding: 1, resource: whiteSampler },
+            ],
+        });
+        // Store under a key that won't collide with user texture ids
+        this.gpuTextures.set('', { view: whiteView, sampler: whiteSampler, bindGroup: whiteBG });
+
         // Buffers
         this.dynamicBuffer = this.root.createBuffer(d.arrayOf(DynamicMesh, this.maxInstances)).$usage('storage');
         this.staticBuffer = this.root.createBuffer(d.arrayOf(StaticMesh, this.maxInstances)).$usage('storage');
@@ -781,7 +808,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
                 });
                 prefabHandles.set(prefab, model);
             } else if (prefab.type === 'cube') {
-                const model = this.createCube({ size: prefab.size });
+                const cube = prefab as unknown as CubePrefab;
+                const model = this.createCube({ size: cube.size, textureId: (cube as any).texture });
                 prefabHandles.set(prefab, model);
             } else if (prefab.type === 'plane') {
                 const plane = prefab as PlanePrefab;
@@ -999,10 +1027,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
      * renderer.addInstance({ model: cube, color: [1, 0.5, 0.2], scale: 2 });
      * ```
      */
-    createCube(opts: { size?: number } = {}): ModelHandle {
+    createCube(opts: { size?: number; textureId?: string } = {}): ModelHandle {
         const h = (opts.size ?? 1) / 2;
 
-        // 36 vertices, 6 faces, 2 triangles per face, 3 vertices per triangle. Per-face flat normals.
+        // 36 vertices, 6 faces, 2 triangles per face, 3 vertices per triangle.
         const positions = new Float32Array([
             // +Z
             -h, -h,  h,   h, -h,  h,   h,  h,  h,
@@ -1031,8 +1059,28 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
              1, 0, 0,  1, 0, 0,  1, 0, 0,   1, 0, 0,  1, 0, 0,  1, 0, 0,
             -1, 0, 0, -1, 0, 0, -1, 0, 0,  -1, 0, 0, -1, 0, 0, -1, 0, 0,
         ]);
+        // UVs: per-face full tile (0,0)-(1,1), 6 verts per face
+        const uvs = new Float32Array([
+            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
+            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
+            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
+            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
+            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
+            0,1, 1,1, 1,0,  0,1, 1,0, 0,0,
+        ]);
 
-        return this.loadModel({ positions, normals });
+        const textureId = opts.textureId;
+        const hasTexture = textureId ? this.gpuTextures.has(textureId) : false;
+        let textureBindGroup: GPUBindGroup | null = null;
+        if (hasTexture && textureId) {
+            textureBindGroup = this.gpuTextures.get(textureId)!.bindGroup;
+        }
+
+        const handle = this.loadModel({ positions, normals, uvs });
+        const model = this.models[handle.id];
+        model.hasTexture = hasTexture;
+        model.textureBindGroup = textureBindGroup;
+        return handle;
     }
     /**
      * Create a textured 3D quad (plane) mesh centered at the origin on the XY plane.
@@ -2609,14 +2657,28 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             const model = this.models[batch.modelId];
             if (!model) continue;
 
-            const pipeline = model.hasTexture ? this.rawTexturedPipeline : this.rawPipeline;
+            // Check if any instance in this batch has a per-instance texture override
+            let hasCustomTex = false;
+            if (!model.hasTexture || model.hasTexture) {
+                for (let i = 0; i < batch.count; i++) {
+                    const slot = this.slotIndexData[batch.offset + i];
+                    const handle = this.instanceHandles[slot];
+                    if (handle && this.instanceTextureBGs.has(handle.id)) {
+                        hasCustomTex = true;
+                        break;
+                    }
+                }
+            }
+
+            const needsTextured = model.hasTexture || hasCustomTex;
+            const pipeline = needsTextured ? this.rawTexturedPipeline : this.rawPipeline;
             if (pipeline !== currentPipeline) {
                 pass.setPipeline(pipeline);
                 pass.setBindGroup(0, this.rawBindGroup);
                 currentPipeline = pipeline;
             }
 
-            if (!model.hasTexture) {
+            if (!needsTextured) {
                 // Untextured — draw entire batch at once
                 pass.setVertexBuffer(0, model.rawVertexBuffer);
                 if (model.rawIndexBuffer) {
@@ -2628,18 +2690,15 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
                 continue;
             }
 
-            // Textured — per-instance bind group (custom texture override or default)
+            // Textured — per-instance bind group (custom override, model default, or white fallback)
             pass.setVertexBuffer(0, model.rawVertexBuffer);
             if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
+            const whiteBG = this.gpuTextures.get('')!.bindGroup;
             for (let i = 0; i < batch.count; i++) {
                 const slot = this.slotIndexData[batch.offset + i];
                 const handle = this.instanceHandles[slot];
                 const customBG = handle ? this.instanceTextureBGs.get(handle.id) : undefined;
-                if (customBG) {
-                    pass.setBindGroup(1, customBG);
-                } else if (model.textureBindGroup) {
-                    pass.setBindGroup(1, model.textureBindGroup);
-                }
+                pass.setBindGroup(1, customBG ?? model.textureBindGroup ?? whiteBG);
                 if (model.rawIndexBuffer) {
                     pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
                 } else {
@@ -2655,24 +2714,51 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             const model = this.models[batch.modelId];
             if (!model) continue;
 
-            const pipeline = model.hasTexture ? this.rawSkinnedTexturedPipeline : this.rawSkinnedPipeline;
+            // Check for per-instance texture overrides in this batch
+            let hasCustomTex = false;
+            if (!model.hasTexture || model.hasTexture) {
+                for (let i = 0; i < batch.count; i++) {
+                    const slot = this.skinnedSlotIndexData[batch.offset + i];
+                    const handle = this.skinnedInstanceHandles[slot];
+                    if (handle && this.instanceTextureBGs.has(handle.id)) {
+                        hasCustomTex = true;
+                        break;
+                    }
+                }
+            }
+
+            const needsTextured = model.hasTexture || hasCustomTex;
+            const pipeline = needsTextured ? this.rawSkinnedTexturedPipeline : this.rawSkinnedPipeline;
             if (pipeline !== currentPipeline) {
                 pass.setPipeline(pipeline);
                 pass.setBindGroup(0, this.rawSkinnedBindGroup);
                 currentPipeline = pipeline;
             }
 
-            if (model.hasTexture && model.textureBindGroup) {
-                pass.setBindGroup(1, model.textureBindGroup);
+            if (!needsTextured) {
+                pass.setVertexBuffer(0, model.rawVertexBuffer);
+                if (model.rawIndexBuffer) {
+                    pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
+                    pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
+                } else {
+                    pass.draw(model.vertexCount, batch.count, 0, batch.offset);
+                }
+                continue;
             }
 
             pass.setVertexBuffer(0, model.rawVertexBuffer);
-
-            if (model.rawIndexBuffer) {
-                pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
-            } else {
-                pass.draw(model.vertexCount, batch.count, 0, batch.offset);
+            if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
+            const whiteBG = this.gpuTextures.get('')!.bindGroup;
+            for (let i = 0; i < batch.count; i++) {
+                const slot = this.skinnedSlotIndexData[batch.offset + i];
+                const handle = this.skinnedInstanceHandles[slot];
+                const customBG = handle ? this.instanceTextureBGs.get(handle.id) : undefined;
+                pass.setBindGroup(1, customBG ?? model.textureBindGroup ?? whiteBG);
+                if (model.rawIndexBuffer) {
+                    pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
+                } else {
+                    pass.draw(model.vertexCount, 1, 0, batch.offset + i);
+                }
             }
         }
 
