@@ -18,6 +18,7 @@ import { Bucket, type BucketBaseEvents, type BucketSpecBase } from '../bucket/bu
 import { parsers2d, parsers3d } from '../../prefab-bucket/parsers';
 import { EventSystem } from '../../../core/events';
 import type { PrefabBucketEvents } from '../../prefab-bucket/index';
+import type { HitboxLibrary } from '../../../core/hitbox/hitbox-library';
 import type {
     Prefab2D,
     Prefab2DSpec,
@@ -58,12 +59,27 @@ export class PrefabBucket<
     SpecUnion extends BucketSpecBase = SpecForMode<M>,
 > extends Bucket<SpecUnion, PrefabUnionForMode<M>, Specs, PrefabEvents> {
 
+    private _hitboxLibrary: HitboxLibrary<M> | null = null;
+
     constructor(mode: M) {
         const parsers = mode === '3d' ? parsers3d : parsers2d;
         const events = new EventSystem<[...BucketBaseEvents, ...PrefabEvents]>({
             events: ['loading', 'load-complete', 'clips-changed'],
         });
         super(parsers as unknown as any, events);
+    }
+
+    /** Register a hitbox library. Chains. */
+    hitboxes<N extends string>(
+        library: HitboxLibrary<M, N>,
+    ): PrefabBucket<M, Specs, SpecUnion> {
+        this._hitboxLibrary = library as HitboxLibrary<M>;
+        return this;
+    }
+
+    /** The registered hitbox library, or null. */
+    get hitboxLibrary(): HitboxLibrary<M> | null {
+        return this._hitboxLibrary;
     }
 
     /**

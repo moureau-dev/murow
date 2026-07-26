@@ -1,1 +1,1 @@
-export { Bucket, type BucketPrefabBase, type BucketSpecBase, type StringOr } from './bucket';
+export { Bucket, type BucketPrefabBase, type BucketSpecBase, type StringOr, type BucketBaseEvents } from './bucket';
