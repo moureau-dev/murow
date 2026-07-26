@@ -53,4 +53,4 @@ export type {
     SpritesheetSpec,
     TexturePrefab,
     TextureSpec,
-} from '../prefab-bucket/specs';
+} from './prefab/utility/specs';
