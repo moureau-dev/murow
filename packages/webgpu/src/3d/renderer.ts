@@ -81,6 +81,7 @@ import { HitboxDebugRenderer } from './hitbox';
 import type { Ray3D } from 'murow/core/ray';
 import type { CubeUvMode, TextureSpec, Prefab3DSpec } from 'murow/renderer';
 import type { ComputeKernel } from '../compute/compute-builder';
+import { createCube as builtInCube, createPlane as builtInPlane, createGrid as builtInGrid, deinterleaveGeometry } from '../geometry/built-in';
 
 // --- Dynamic offset constants ---
 const DYN_PREV_PX = 0, DYN_PREV_PY = 1, DYN_PREV_PZ = 2;
@@ -302,58 +303,6 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<any, any, any> = 
      * Set to `Infinity` to disable. Default 50.
      */
     animationCullDistance?: number;
-}
-
-// Face order: front, back, top, bottom, right, left — matches createCube() order.
-const CROSS_FACE_RECTS: Record<string, [number, number, number, number]> = {
-    front:  [0.25, 0.333, 0.5,  0.667],
-    back:   [0.75, 0.333, 1.0,  0.667],
-    top:    [0.25, 0,     0.5,  0.333],
-    bottom: [0.25, 0.667, 0.5,  1.0  ],
-    right:  [0.5,  0.333, 0.75, 0.667],
-    left:   [0,    0.333, 0.25, 0.667],
-};
-
-const CUBE_FACE_NAMES = ['front', 'back', 'top', 'bottom', 'right', 'left'] as const;
-
-/**
- * Generate cube UVs based on the UV mode.
- * Returns 72 floats (6 faces × 6 verts × 2 UV coords).
- */
-function generateCubeUvs(mode: CubeUvMode): Float32Array {
-    const uvs = new Float32Array(72);
-    let i = 0;
-
-    let rects: Record<string, readonly [number, number, number, number]>;
-    if (mode === 'repeat') {
-        rects = {
-            front:  [0, 0, 1, 1],
-            back:   [0, 0, 1, 1],
-            top:    [0, 0, 1, 1],
-            bottom: [0, 0, 1, 1],
-            right:  [0, 0, 1, 1],
-            left:   [0, 0, 1, 1],
-        };
-    } else if (mode === 'cross') {
-        rects = CROSS_FACE_RECTS;
-    } else {
-        // Atlas mode: user-provided per-face rects. Missing faces get [0,0,1,1].
-        rects = mode.atlas;
-    }
-
-    for (const face of CUBE_FACE_NAMES) {
-        const r = rects[face] ?? [0, 0, 1, 1];
-        const [uMin, vMin, uMax, vMax] = r;
-        // Each face: 6 verts in the pattern 0,1→1,1→1,0 then 0,1→1,0→0,0
-        uvs[i++] = uMin; uvs[i++] = vMax; // 0,1
-        uvs[i++] = uMax; uvs[i++] = vMax; // 1,1
-        uvs[i++] = uMax; uvs[i++] = vMin; // 1,0
-        uvs[i++] = uMin; uvs[i++] = vMax; // 0,1
-        uvs[i++] = uMax; uvs[i++] = vMin; // 1,0
-        uvs[i++] = uMin; uvs[i++] = vMin; // 0,0
-    }
-
-    return uvs;
 }
 
 export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket<any, any, any>> extends Base3DRenderer {
@@ -1051,44 +1000,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
     }
 
     /**
-     * Create a flat grid mesh on the XZ plane at Y=0.
-     *
-     * ```ts
-     * const grid = renderer.createGrid({ size: 20, step: 1, lineWidth: 0.005 });
-     * renderer.addInstance({ model: grid, color: [0.3, 0.3, 0.3] });
-     * ```
-     */
-    createGrid(opts: { size?: number; step?: number; lineWidth?: number } = {}): ModelHandle {
-        const size = opts.size ?? 20;
-        const step = opts.step ?? 1;
-        const lw = opts.lineWidth ?? 0.005;
-
-        const positions: number[] = [];
-        const normals: number[] = [];
-        const indices: number[] = [];
-
-        for (let i = -size; i <= size; i += step) {
-            const idx = positions.length / 3;
-            // Line along Z
-            positions.push(i - lw, 0, -size, i + lw, 0, -size, i + lw, 0, size, i - lw, 0, size);
-            normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
-            indices.push(idx, idx + 1, idx + 2, idx, idx + 2, idx + 3);
-
-            const idx2 = positions.length / 3;
-            // Line along X
-            positions.push(-size, 0, i - lw, size, 0, i - lw, size, 0, i + lw, -size, 0, i + lw);
-            normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
-            indices.push(idx2, idx2 + 1, idx2 + 2, idx2, idx2 + 2, idx2 + 3);
-        }
-
-        return this.loadModel({
-            positions: new Float32Array(positions),
-            normals: new Float32Array(normals),
-            indices: new Uint16Array(indices),
-        });
-    }
-
-    /**
      * Create a mesh from raw geometry data. The resulting model is registered
      * with the renderer and can be used with `addInstance`.
      */
@@ -1117,34 +1028,27 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         return handle;
     }
 
-    createCube(opts: { size?: number; textureId?: string; uv?: CubeUvMode } = {}): ModelHandle {
-        const h = (opts.size ?? 1) / 2;
-        const mode = opts.uv ?? 'repeat';
+    /**
+     * Create a flat grid mesh on the XZ plane at Y=0.
+     *
+     * ```ts
+     * const grid = renderer.createGrid({ size: 20, step: 1, lineWidth: 0.005 });
+     * renderer.addInstance({ model: grid, color: [0.3, 0.3, 0.3] });
+     * ```
+     */
+    createGrid(opts: { size?: number; step?: number; lineWidth?: number } = {}): ModelHandle {
+        const geometry = builtInGrid({ size: opts.size, step: opts.step, lineWidth: opts.lineWidth });
+        const { positions, normals, uvs } = deinterleaveGeometry(geometry);
+        return this.createMesh({ positions, normals, uvs, indices: geometry.indices! });
+    }
 
-        // 36 vertices, 6 faces, 2 triangles per face.
-        const positions = new Float32Array([
-            -h, -h,  h,   h, -h,  h,   h,  h,  h,
-            -h, -h,  h,   h,  h,  h,  -h,  h,  h,
-             h, -h, -h,  -h, -h, -h,  -h,  h, -h,
-             h, -h, -h,  -h,  h, -h,   h,  h, -h,
-            -h,  h,  h,   h,  h,  h,   h,  h, -h,
-            -h,  h,  h,   h,  h, -h,  -h,  h, -h,
-            -h, -h, -h,   h, -h, -h,   h, -h,  h,
-            -h, -h, -h,   h, -h,  h,  -h, -h,  h,
-             h, -h,  h,   h, -h, -h,   h,  h, -h,
-             h, -h,  h,   h,  h, -h,   h,  h,  h,
-            -h, -h, -h,  -h, -h,  h,  -h,  h,  h,
-            -h, -h, -h,  -h,  h,  h,  -h,  h, -h,
-        ]);
-        const normals = new Float32Array([
-             0, 0, 1,  0, 0, 1,  0, 0, 1,   0, 0, 1,  0, 0, 1,  0, 0, 1,
-             0, 0,-1,  0, 0,-1,  0, 0,-1,   0, 0,-1,  0, 0,-1,  0, 0,-1,
-             0, 1, 0,  0, 1, 0,  0, 1, 0,   0, 1, 0,  0, 1, 0,  0, 1, 0,
-             0,-1, 0,  0,-1, 0,  0,-1, 0,   0,-1, 0,  0,-1, 0,  0,-1, 0,
-             1, 0, 0,  1, 0, 0,  1, 0, 0,   1, 0, 0,  1, 0, 0,  1, 0, 0,
-            -1, 0, 0, -1, 0, 0, -1, 0, 0,  -1, 0, 0, -1, 0, 0, -1, 0, 0,
-        ]);
-        const uvs = generateCubeUvs(mode);
+    /**
+     * Create a cube mesh. The cube is centered at the origin and extends from
+     * -size/2 to +size/2 in all axes.
+     */
+    createCube(opts: { size?: number; textureId?: string; uv?: CubeUvMode } = {}): ModelHandle {
+        const geometry = builtInCube({ size: opts.size, uv: opts.uv });
+        const { positions, normals, uvs } = deinterleaveGeometry(geometry);
         return this.createMesh({ positions, normals, uvs, textureId: opts.textureId });
     }
     /**
@@ -1152,22 +1056,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
      * Normals face +Z. Width and height default to 1.
      */
     createPlane(opts: { width?: number; height?: number; textureId?: string } = {}): ModelHandle {
-        const w = (opts.width ?? 1) / 2;
-        const h = (opts.height ?? 1) / 2;
-
-        const positions = new Float32Array([
-            -w, -h, 0,   w, -h, 0,   w,  h, 0,
-            -w, -h, 0,   w,  h, 0,  -w,  h, 0,
-        ]);
-        const normals = new Float32Array([
-            0, 0, 1,  0, 0, 1,  0, 0, 1,
-            0, 0, 1,  0, 0, 1,  0, 0, 1,
-        ]);
-        const uvs = new Float32Array([
-            0, 1,  1, 1,  1, 0,
-            0, 1,  1, 0,  0, 0,
-        ]);
-
+        const geometry = builtInPlane({ width: opts.width, height: opts.height });
+        const { positions, normals, uvs } = deinterleaveGeometry(geometry);
         return this.createMesh({ positions, normals, uvs, textureId: opts.textureId });
     }
 

@@ -3,6 +3,8 @@
  * Each returns a typed array of vertex data and optional indices.
  */
 
+import type { CubeUvMode } from 'murow/renderer';
+
 export type BuiltInGeometry =
     | 'quad'
     | 'triangle'
@@ -10,6 +12,8 @@ export type BuiltInGeometry =
     | 'point'
     | 'circle'
     | 'cube'
+    | 'plane'
+    | 'grid'
     | 'sphere'
     | 'cylinder'
     | 'cone';
@@ -108,57 +112,182 @@ export function createCircle(segments: number = 32): GeometryData {
     };
 }
 
+// ——— Cube UV helpers ———
+
+const CROSS_FACE_RECTS: Record<string, [number, number, number, number]> = {
+    front:  [0.25, 0.333, 0.5,  0.667],
+    back:   [0.75, 0.333, 1.0,  0.667],
+    top:    [0.25, 0,     0.5,  0.333],
+    bottom: [0.25, 0.667, 0.5,  1.0  ],
+    right:  [0.5,  0.333, 0.75, 0.667],
+    left:   [0,    0.333, 0.25, 0.667],
+};
+
+const CUBE_FACE_NAMES = ['front', 'back', 'top', 'bottom', 'right', 'left'] as const;
+
+/** Face order matches createCube vertex layout. */
+function generateCubeUvs(mode: CubeUvMode): Float32Array {
+    const uvs = new Float32Array(72);
+    let i = 0;
+
+    let rects: Record<string, readonly [number, number, number, number]>;
+    if (mode === 'repeat') {
+        rects = {
+            front:  [0, 0, 1, 1],
+            back:   [0, 0, 1, 1],
+            top:    [0, 0, 1, 1],
+            bottom: [0, 0, 1, 1],
+            right:  [0, 0, 1, 1],
+            left:   [0, 0, 1, 1],
+        };
+    } else if (mode === 'cross') {
+        rects = CROSS_FACE_RECTS;
+    } else {
+        rects = mode.atlas;
+    }
+
+    for (const face of CUBE_FACE_NAMES) {
+        const r = rects[face] ?? [0, 0, 1, 1];
+        const [uMin, vMin, uMax, vMax] = r;
+        // Each face: 6 verts in the pattern 0,1→1,1→1,0 then 0,1→1,0→0,0
+        uvs[i++] = uMin; uvs[i++] = vMax;
+        uvs[i++] = uMax; uvs[i++] = vMax;
+        uvs[i++] = uMax; uvs[i++] = vMin;
+        uvs[i++] = uMin; uvs[i++] = vMax;
+        uvs[i++] = uMax; uvs[i++] = vMin;
+        uvs[i++] = uMin; uvs[i++] = vMin;
+    }
+
+    return uvs;
+}
+
 /**
  * 3D cube: 36 vertices with position (x,y,z) + normal (nx,ny,nz) + uv (u,v).
+ * Edge length is 2 by default (centered at origin, -1 to +1 on each axis).
+ * Pass `size` to scale proportionally.
  */
-export function createCube(): GeometryData {
+export function createCube(opts?: { size?: number; uv?: CubeUvMode }): GeometryData {
+    const s = (opts?.size ?? 1) / 2;
+    const mode = opts?.uv ?? 'repeat';
+    const h = s;
+
     // prettier-ignore
     const vertices = new Float32Array([
         // Front face
-        -1, -1,  1,  0, 0, 1,  0, 1,
-         1, -1,  1,  0, 0, 1,  1, 1,
-         1,  1,  1,  0, 0, 1,  1, 0,
-        -1, -1,  1,  0, 0, 1,  0, 1,
-         1,  1,  1,  0, 0, 1,  1, 0,
-        -1,  1,  1,  0, 0, 1,  0, 0,
+        -h, -h,  h,  0, 0, 1,  0, 1,
+         h, -h,  h,  0, 0, 1,  1, 1,
+         h,  h,  h,  0, 0, 1,  1, 0,
+        -h, -h,  h,  0, 0, 1,  0, 1,
+         h,  h,  h,  0, 0, 1,  1, 0,
+        -h,  h,  h,  0, 0, 1,  0, 0,
         // Back face
-         1, -1, -1,  0, 0,-1,  0, 1,
-        -1, -1, -1,  0, 0,-1,  1, 1,
-        -1,  1, -1,  0, 0,-1,  1, 0,
-         1, -1, -1,  0, 0,-1,  0, 1,
-        -1,  1, -1,  0, 0,-1,  1, 0,
-         1,  1, -1,  0, 0,-1,  0, 0,
+         h, -h, -h,  0, 0,-1,  0, 1,
+        -h, -h, -h,  0, 0,-1,  1, 1,
+        -h,  h, -h,  0, 0,-1,  1, 0,
+         h, -h, -h,  0, 0,-1,  0, 1,
+        -h,  h, -h,  0, 0,-1,  1, 0,
+         h,  h, -h,  0, 0,-1,  0, 0,
         // Top face
-        -1,  1,  1,  0, 1, 0,  0, 1,
-         1,  1,  1,  0, 1, 0,  1, 1,
-         1,  1, -1,  0, 1, 0,  1, 0,
-        -1,  1,  1,  0, 1, 0,  0, 1,
-         1,  1, -1,  0, 1, 0,  1, 0,
-        -1,  1, -1,  0, 1, 0,  0, 0,
+        -h,  h,  h,  0, 1, 0,  0, 1,
+         h,  h,  h,  0, 1, 0,  1, 1,
+         h,  h, -h,  0, 1, 0,  1, 0,
+        -h,  h,  h,  0, 1, 0,  0, 1,
+         h,  h, -h,  0, 1, 0,  1, 0,
+        -h,  h, -h,  0, 1, 0,  0, 0,
         // Bottom face
-        -1, -1, -1,  0,-1, 0,  0, 1,
-         1, -1, -1,  0,-1, 0,  1, 1,
-         1, -1,  1,  0,-1, 0,  1, 0,
-        -1, -1, -1,  0,-1, 0,  0, 1,
-         1, -1,  1,  0,-1, 0,  1, 0,
-        -1, -1,  1,  0,-1, 0,  0, 0,
+        -h, -h, -h,  0,-1, 0,  0, 1,
+         h, -h, -h,  0,-1, 0,  1, 1,
+         h, -h,  h,  0,-1, 0,  1, 0,
+        -h, -h, -h,  0,-1, 0,  0, 1,
+         h, -h,  h,  0,-1, 0,  1, 0,
+        -h, -h,  h,  0,-1, 0,  0, 0,
         // Right face
-         1, -1,  1,  1, 0, 0,  0, 1,
-         1, -1, -1,  1, 0, 0,  1, 1,
-         1,  1, -1,  1, 0, 0,  1, 0,
-         1, -1,  1,  1, 0, 0,  0, 1,
-         1,  1, -1,  1, 0, 0,  1, 0,
-         1,  1,  1,  1, 0, 0,  0, 0,
+         h, -h,  h,  1, 0, 0,  0, 1,
+         h, -h, -h,  1, 0, 0,  1, 1,
+         h,  h, -h,  1, 0, 0,  1, 0,
+         h, -h,  h,  1, 0, 0,  0, 1,
+         h,  h, -h,  1, 0, 0,  1, 0,
+         h,  h,  h,  1, 0, 0,  0, 0,
         // Left face
-        -1, -1, -1, -1, 0, 0,  0, 1,
-        -1, -1,  1, -1, 0, 0,  1, 1,
-        -1,  1,  1, -1, 0, 0,  1, 0,
-        -1, -1, -1, -1, 0, 0,  0, 1,
-        -1,  1,  1, -1, 0, 0,  1, 0,
-        -1,  1, -1, -1, 0, 0,  0, 0,
+        -h, -h, -h, -1, 0, 0,  0, 1,
+        -h, -h,  h, -1, 0, 0,  1, 1,
+        -h,  h,  h, -1, 0, 0,  1, 0,
+        -h, -h, -h, -1, 0, 0,  0, 1,
+        -h,  h,  h, -1, 0, 0,  1, 0,
+        -h,  h, -h, -1, 0, 0,  0, 0,
     ]);
 
+    // Override UVs when mode is not 'repeat'
+    if (mode !== 'repeat') {
+        const uvs = generateCubeUvs(mode);
+        for (let vi = 0; vi < 36; vi++) {
+            vertices[vi * 8 + 6] = uvs[vi * 2];
+            vertices[vi * 8 + 7] = uvs[vi * 2 + 1];
+        }
+    }
+
     return { vertices, vertexCount: 36, floatsPerVertex: 8, is3D: true };
+}
+
+/**
+ * 3D plane (quad) on the XY plane facing +Z.
+ * 6 vertices (2 triangles) with position + normal + uv.
+ */
+export function createPlane(opts?: { width?: number; height?: number }): GeometryData {
+    const w = (opts?.width ?? 1) / 2;
+    const h = (opts?.height ?? 1) / 2;
+
+    // prettier-ignore
+    const vertices = new Float32Array([
+        // pos (xyz), normal (xyz), uv (uv)
+        -w, -h, 0,  0, 0, 1,  0, 1,
+         w, -h, 0,  0, 0, 1,  1, 1,
+         w,  h, 0,  0, 0, 1,  1, 0,
+
+        -w, -h, 0,  0, 0, 1,  0, 1,
+         w,  h, 0,  0, 0, 1,  1, 0,
+        -w,  h, 0,  0, 0, 1,  0, 0,
+    ]);
+
+    return { vertices, vertexCount: 6, floatsPerVertex: 8, is3D: true };
+}
+
+/**
+ * Flat grid mesh on the XZ plane at Y=0, made of crossed line ribbons.
+ */
+export function createGrid(opts?: { size?: number; step?: number; lineWidth?: number }): GeometryData {
+    const size = opts?.size ?? 20;
+    const step = opts?.step ?? 1;
+    const lw = opts?.lineWidth ?? 0.005;
+
+    const verts: number[] = [];
+    const indices: number[] = [];
+
+    for (let i = -size; i <= size; i += step) {
+        const idx = verts.length / 8;
+        // Line along Z
+        verts.push(i - lw, 0, -size, 0, 1, 0, 0, 0);
+        verts.push(i + lw, 0, -size, 0, 1, 0, 1, 0);
+        verts.push(i + lw, 0,  size, 0, 1, 0, 1, 1);
+        verts.push(i - lw, 0,  size, 0, 1, 0, 0, 1);
+        indices.push(idx, idx + 1, idx + 2, idx, idx + 2, idx + 3);
+
+        const idx2 = verts.length / 8;
+        // Line along X
+        verts.push(-size, 0, i - lw, 0, 1, 0, 0, 0);
+        verts.push( size, 0, i - lw, 0, 1, 0, 1, 0);
+        verts.push( size, 0, i + lw, 0, 1, 0, 1, 1);
+        verts.push(-size, 0, i + lw, 0, 1, 0, 0, 1);
+        indices.push(idx2, idx2 + 1, idx2 + 2, idx2, idx2 + 2, idx2 + 3);
+    }
+
+    return {
+        vertices: new Float32Array(verts),
+        indices: new Uint16Array(indices),
+        vertexCount: verts.length / 8,
+        floatsPerVertex: 8,
+        is3D: true,
+    };
 }
 
 /**
@@ -295,6 +424,34 @@ export function createCone(segments: number = 32): GeometryData {
 }
 
 /**
+ * De-interleave a GeometryData's interleaved vertices into separate
+ * position / normal / uv arrays. Useful when bridging built-in geometry
+ * into renderers that expect flat arrays instead of the interleaved format.
+ */
+export function deinterleaveGeometry(geo: GeometryData): {
+    positions: Float32Array;
+    normals: Float32Array;
+    uvs: Float32Array;
+} {
+    const { vertices, vertexCount, floatsPerVertex } = geo;
+    const positions = new Float32Array(vertexCount * 3);
+    const normals = new Float32Array(vertexCount * 3);
+    const uvs = new Float32Array(vertexCount * 2);
+    for (let i = 0; i < vertexCount; i++) {
+        const o = i * floatsPerVertex;
+        positions[i * 3]     = vertices[o];
+        positions[i * 3 + 1] = vertices[o + 1];
+        positions[i * 3 + 2] = vertices[o + 2];
+        normals[i * 3]       = vertices[o + 3];
+        normals[i * 3 + 1]   = vertices[o + 4];
+        normals[i * 3 + 2]   = vertices[o + 5];
+        uvs[i * 2]           = vertices[o + 6];
+        uvs[i * 2 + 1]       = vertices[o + 7];
+    }
+    return { positions, normals, uvs };
+}
+
+/**
  * Resolve a built-in geometry name to actual data.
  */
 export function resolveBuiltInGeometry(name: BuiltInGeometry): GeometryData {
@@ -305,6 +462,8 @@ export function resolveBuiltInGeometry(name: BuiltInGeometry): GeometryData {
         case 'point': return createPoint();
         case 'circle': return createCircle();
         case 'cube': return createCube();
+        case 'plane': return createPlane();
+        case 'grid': return createGrid();
         case 'sphere': return createSphere();
         case 'cylinder': return createCylinder();
         case 'cone': return createCone();
