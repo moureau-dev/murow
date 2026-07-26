@@ -8,7 +8,7 @@ Murow is a TypeScript game engine for **server-authoritative multiplayer** games
 
 The `webgpu` and `netcode` subpaths are bundled with the `murow` package — `npm install murow` is the only install.
 
-**The engine is renderer-agnostic.** `murow` ships *abstract renderer contracts* + the asset pipeline (`PrefabBucket`, `parseGltf`, `parseSpritesheet`, `SkeletalAnimation`) + CPU collision/picking (`Hitbox`, `HitboxLibrary`, `Raycaster`, `Ray3D`) — all pure CPU, usable on a headless server. `murow/webgpu` is the reference backend; you can write a Three.js / PixiJS / Babylon backend by subclassing `Base2DRenderer` / `Base3DRenderer`. The WebGPU backend handles GPU-side frame interpolation (lerp), frustum culling, distance-based animation culling, sparse-batched draw calls, glTF skinning, and instance recycling automatically — see "WebGPU Renderer" section.
+**The engine is renderer-agnostic.** `murow` ships *abstract renderer contracts* + the asset pipeline (`AssetBucket`, `PrefabBucket`, `parseGltf`, `parseSpritesheet`, `SkeletalAnimation`) + CPU collision/picking (`Hitbox`, `HitboxLibrary`, `Raycaster`, `Ray3D`) — all pure CPU, usable on a headless server. `murow/webgpu` is the reference backend; you can write a Three.js / PixiJS / Babylon backend by subclassing `Base2DRenderer` / `Base3DRenderer`. The WebGPU backend handles GPU-side frame interpolation (lerp), frustum culling, distance-based animation culling, sparse-batched draw calls, glTF skinning, and instance recycling automatically — see "WebGPU Renderer" section.
 
 **This is not Unity, Three.js, PlayCanvas, or Phaser.** Do not apply patterns from those. Murow is **data-oriented**: an ECS World holds typed components in Structure-of-Arrays storage, a GameLoop drives systems at a fixed tick rate, and a renderer reads world state once per frame.
 
@@ -54,16 +54,16 @@ Many entities / want systems & SoA speed?
 Minimal single-player skeleton (no ECS, no netcode):
 
 ```ts
-import { GameLoop, PrefabBucket } from 'murow';
+import { GameLoop, AssetBucket } from 'murow';
 import { WebGPU3DRenderer } from 'murow/webgpu';
 
-const prefabs = new PrefabBucket('3d').add({ type: 'cube', id: 'box', size: 1 });
-await prefabs.load();
-const renderer = new WebGPU3DRenderer(canvas, { prefabs, maxInstances: 500, autoResize: true });
+const assets = new AssetBucket('3d').prefabs(({ bucket }) => bucket.add({ type: 'cube', id: 'box', size: 1 }));
+await assets.load();
+const renderer = new WebGPU3DRenderer(canvas, { assets, maxInstances: 500, autoResize: true });
 await renderer.init();
 
 const boxes = Array.from({ length: 200 }, (_, i) =>
-  renderer.addInstance({ model: prefabs.get('box'), position: [i % 20, 0, (i / 20) | 0] }));
+  renderer.addInstance({ model: assets.prefabs.get('box'), position: [i % 20, 0, (i / 20) | 0] }));
 
 const loop = new GameLoop({ type: 'client', tickRate: 30 });
 loop.events.on('pre-tick', () => renderer.storePreviousState());
@@ -94,7 +94,7 @@ import {
   // Input
   type InputSnapshot,
   // Math & misc
-  SimpleRNG, lerp, generateId,
+  SimpleRNG, StateMachine, lerp, generateId,
   Ray2D, Ray3D,
   NavMesh,
   // mat4 helpers (column-major, offset-based, zero-alloc)
@@ -111,7 +111,7 @@ import {
   type TransportAdapter, type ServerTransportAdapter,
   BunWebSocketServerTransport,
   // Renderer abstractions + asset pipeline (pure CPU — no GPU)
-  PrefabBucket, type GltfPrefab,
+  AssetBucket, PrefabBucket, type GltfPrefab,
   parseGltf, parseSpritesheet, SkeletalAnimation,
   type SpriteHandle, type SpritesheetHandle,
 } from 'murow';
@@ -1980,24 +1980,28 @@ The netcode layer assumes **ordered delivery**. WebSocket over TCP satisfies tha
 `murow` ships abstract renderer contracts and the asset pipeline. Everything here is **pure CPU** — no GPU, no canvas, no device. The `webgpu` (or any) backend is responsible for the upload step.
 
 ### Implementing a custom backend (PixiJS, Three.js, Babylon, …)
-
-Subclass `Base2DRenderer` or `Base3DRenderer` and consume a `PrefabBucket` to drive sizing and uploads:
+Subclass `Base2DRenderer` or `Base3DRenderer` and consume an `AssetBucket` to drive sizing and uploads:
 
 ```ts
 import {
   Base3DRenderer,
-  parseGltf,
-  type PrefabBucket3D,
+  type AssetBucket,
   type Renderer3DOptions,
 } from 'murow';
 
 class MyBackendRenderer extends Base3DRenderer {
-  constructor(canvas: HTMLCanvasElement, options: Renderer3DOptions & { prefabs?: PrefabBucket3D }) {
+  constructor(canvas: HTMLCanvasElement, options: Renderer3DOptions & { assets?: AssetBucket }) {
     super(canvas, options);
-    // Read options.prefabs to size your GPU buffers
+    // Read options.assets — it's an AssetBucket, walk assets.prefabs.entries() to size GPU buffers
   }
   async init() {
-    // Walk bucket.entries() and upload each parsed prefab to your renderer's primitives
+    const bucket = this._prefabs as AssetBucket | undefined;
+    if (bucket) {
+      await bucket.load();
+      for (const prefab of bucket.prefabs.entries()) {
+        // Upload each parsed prefab to your renderer's primitives
+      }
+    }
   }
   render(alpha: number) { /* draw with interpolation alpha */ }
   destroy()             { /* cleanup */ }
@@ -2006,7 +2010,28 @@ class MyBackendRenderer extends Base3DRenderer {
 
 `@murow/webgpu` is the reference implementation. You only need to write a backend if WebGPU doesn't fit (older browsers, native target via Skia, integrating into an existing Three.js scene, etc.). Everything else in the engine — ECS, game loop, netcode — is renderer-independent.
 
-### `PrefabBucket` — typed asset registry
+### `AssetBucket` — primary entry point (wraps PrefabBucket + TextureBucket)
+
+```ts
+import { AssetBucket } from 'murow';
+
+const assets = new AssetBucket('3d')
+  .textures(({ bucket }) => bucket
+    .add({ type: 'texture', id: 'brick', src: '/brick.png' })
+  )
+  .prefabs(({ bucket }) => bucket
+    .add({ type: 'cube', id: 'crate', size: 1, metadata: { hp: 10 } })
+    .add({ type: 'plane', id: 'wall', width: 4, height: 3, texture: 'brick' })
+  );
+
+await assets.load();
+assets.prefabs.get('crate');  // CubePrefab — narrowed by id
+assets.textures.get('brick'); // TexturePrefab
+```
+
+Because textures are declared first, every prefab spec with a `texture` field autocompletes to the registered texture ids. Both inner buckets emit `loading` / `load-complete` events; the prefab bucket also emits `clips-changed` when animations are loaded/unloaded at runtime.
+
+### `PrefabBucket` — typed asset registry (internal, accessed via `assets.prefabs`)
 
 Declare every spawnable asset up-front, parallel-load, look up by id with full type safety. **The bucket sizes the renderer's GPU buffers** — no magic numbers.
 
@@ -2036,6 +2061,62 @@ interface GridSpec {
   lineWidth: number;
   metadata?: Record<string, unknown>;
   hitbox?: string;
+}
+
+interface PlaneSpec {
+  type: 'plane';
+  id: string;
+  width?: number;              // default 1
+  height?: number;             // default 1
+  texture?: string;
+  metadata?: Record<string, unknown>;
+  hitbox?: string;
+}
+
+interface SphereSpec {
+  type: 'sphere';
+  id: string;
+  segments?: number;           // default 16
+  texture?: string;
+  metadata?: Record<string, unknown>;
+  hitbox?: string;
+}
+
+interface CylinderSpec {
+  type: 'cylinder';
+  id: string;
+  segments?: number;           // default 32
+  texture?: string;
+  metadata?: Record<string, unknown>;
+  hitbox?: string;
+}
+
+interface ConeSpec {
+  type: 'cone';
+  id: string;
+  segments?: number;           // default 32
+  texture?: string;
+  metadata?: Record<string, unknown>;
+  hitbox?: string;
+}
+
+interface MeshSpec {
+  type: 'mesh';
+  id: string;
+  positions: number[];
+  normals?: number[];
+  uvs?: number[];
+  indices?: number[];
+  texture?: string;
+  metadata?: Record<string, unknown>;
+  hitbox?: string;
+}
+
+interface TextureSpec {
+  type: 'texture';
+  id: string;
+  src: string;                 // URL to image
+  metadata?: Record<string, unknown>;
 }
 
 interface CubeSpec {
@@ -2102,6 +2183,50 @@ type CubePrefab<S extends CubeSpec = CubeSpec> = {
   type: 'cube'; id: S['id'];
   size: number;
   metadata: MetadataOf<S>;
+};
+
+type PlanePrefab<S extends PlaneSpec = PlaneSpec> = {
+  type: 'plane'; id: S['id'];
+  width: number; height: number;
+  texture?: string;
+  metadata: MetadataOf<S>;
+};
+
+type SpherePrefab<S extends SphereSpec = SphereSpec> = {
+  type: 'sphere'; id: S['id'];
+  segments: number;
+  texture?: string;
+  metadata: MetadataOf<S>;
+};
+
+type CylinderPrefab<S extends CylinderSpec = CylinderSpec> = {
+  type: 'cylinder'; id: S['id'];
+  segments: number;
+  texture?: string;
+  metadata: MetadataOf<S>;
+};
+
+type ConePrefab<S extends ConeSpec = ConeSpec> = {
+  type: 'cone'; id: S['id'];
+  segments: number;
+  texture?: string;
+  metadata: MetadataOf<S>;
+};
+
+type MeshPrefab<S extends MeshSpec = MeshSpec> = {
+  type: 'mesh'; id: S['id'];
+  positions: Float32Array;
+  normals?: Float32Array;
+  uvs?: Float32Array;
+  indices?: Uint16Array | Uint32Array;
+  texture?: string;
+  metadata: MetadataOf<S>;
+};
+
+type TexturePrefab = {
+  type: 'texture'; id: string;
+  src: string;
+  parsed: HTMLImageElement;
 };
 
 type CompositePrefab<S extends CompositeSpec = CompositeSpec> = {
@@ -2192,6 +2317,58 @@ SkeletalAnimation         // → CPU-side bone evaluation for skinned meshes
 
 These are used by the WebGPU backend, but they're available for custom backends too.
 
+### `StateMachine` — zero-GC finite state machine for many entities
+
+```ts
+import { StateMachine } from 'murow';
+```
+
+Fixed-capacity, dense-column state machine for AI, lifecycle, or animation state. One machine definition drives every entity; per-entity state and data live in binary columns indexed by a stable slot. Transitions allocate nothing.
+
+```typescript
+const ai = new StateMachine({
+  initial: 'patrol',
+  capacity: 1024,
+  states: {
+    patrol: { waypoint: u8 },
+    chase:  { targetId: u32 },
+    flee:   { until: u32 },
+  },
+})
+  .add('patrol', {
+    update: (e) => {
+      if (npc.seesEnemy) e.change('chase', npc.target);
+      else patrol(e.waypoint);
+    },
+  })
+  .add('chase', {
+    enter:  (e, targetId) => { e.targetId = targetId; },
+    update: (e) => { if (npc.hp < 20) e.change('flee', tick + 60); },
+  })
+  .add('flee', { update: (e) => { if (e.ticksInState > 60) e.change('patrol'); } });
+
+ai.events.on('change', ({ id, to }) => { if (to === ai.id.chase) playAlert(id); });
+
+// Drive from your loop
+loop.events.on('tick', () => ai.tick());
+```
+
+Key design:
+- **States are numeric** — string names are authoring keys; `ai.id.chase` is the numeric id. Stored as a `u8` column (max 256 states).
+- **Per-state data** is a `BinaryCodec` schema — fields are dense columns, the handle exposes typed properties.
+- **Behavior is shared handlers** (`enter`/`update`/`exit`) registered with `add`, not per-entity objects.
+- **First-transition-wins** in `update` — the first handler to call `e.change` ends that entity's chain for the tick.
+- **No ECS dependency** — the handler closures read whatever they need (components, plain objects, sensors).
+
+API:
+- `new StateMachine({ initial, states, capacity?, maxId?, rng? })`
+- `.add(state, { enter?, update?, exit? }): this` — cumulative, chainable
+- `.spawn(id): Handle` / `.of(id): Handle | null` / `.has(id)` / `.remove(id)`
+- `.tick()` — advance all entities one step
+- `.serialize(id, dv, offset)` / `.restore(id, dv, offset)` — binary snapshot for transport
+- `.events.on('change', ({ id, from, to }) => ...)`
+- Handle properties: `.id`, `.state`, `.stateId`, `.ticksInState`, `.is(name)`, `.change(to, payload?)`, plus typed field accessors from the schema
+
 ---
 
 ## WebGPU Renderer (`murow/webgpu`)
@@ -2212,14 +2389,63 @@ You don't write any of this. The renderer handles it under the hood as long as y
 | **Auto canvas resize** | With `autoResize: true`, the renderer attaches a `ResizeObserver`, updates the swap chain, and reprojects the camera. |
 | **Buffer self-sizing from `PrefabBucket`** | The bucket reports total vertex count, joint count, skinned-part count etc. The renderer allocates GPU buffers from those numbers — no magic constants. |
 | **glTF skeletal animation** | Crossfading, looping, `onEnd` callbacks, typed animation names. On-demand load/unload via `hero.loadAnimations(['Attack'])`. |
-| **Fixed directional + ambient lighting (3D)** | The 3D shader applies a single hard-coded directional light (`dir ~= (0.3, 0.8, 0.5)`) plus a constant ambient term. See "Lighting" below. |
+| **Dynamic point + spot lights + sun** | Point and spot lights with live-mutable properties per frame. Configurable directional light and ambient. Up to 16 dynamic lights. GPU-side interpolation for moving lights. No shadows or PBR. |
 | **Zero-GC hot path** | `Float32Array` buffers + `FreeList` slot allocation. No per-frame object creation. |
 
 ### Lighting (3D)
 
-The 3D renderer is **not a PBR/material engine.** It applies one **hard-coded directional light** plus a constant ambient term in the shader. There is **no public API** to move the light, add lights, change ambient, or set shadows/fog/skybox/specular/metallic/emissive — none of those exist. Per-instance `color` (a flat tint, see below) is the only surface property you control.
+Dynamic point and spot lights with GPU-side interpolation, plus a configurable global directional light and ambient term. The renderer supports up to `MAX_LIGHTS` (default 16) dynamic lights + one sun.
 
-If you need configurable or multiple lights, shadows, or a real material model, that's a job for a custom backend (subclass `Base3DRenderer`) or a different renderer — the WebGPU backend deliberately ships a single fixed look.
+```ts
+import { type LightSpec, type LightHandle } from 'murow/webgpu';
+
+// Point light
+const point = renderer.addLight({
+  type: 'point',
+  position: [0, 5, 0],
+  color: [1, 0.3, 0.3],        // RGB, default [1,1,1]
+  intensity: 2,                 // brightness multiplier, default 1
+  range: 15,                    // world-unit radius, default 10
+});
+
+// Spot light (cone with soft edge)
+const spot = renderer.addLight({
+  type: 'spot',
+  position: [0, 3, 0],
+  direction: [0, -1, 0],
+  color: [1, 1, 0.8],
+  intensity: 3,
+  range: 20,
+  angle: 0.5,                   // cone half-angle in radians, default 0.5
+  smoothness: 0.3,              // 0 = hard edge, 1 = fades from center, default 0.5
+});
+
+// All light properties are live-mutable every frame
+spot.setPosition(10, 3, 10);
+spot.setColor(0.2, 0.5, 1);
+spot.intensity = 5;
+spot.range = 30;
+spot.angle = 0.8;
+spot.smoothness = 0.7;
+spot.enabled = false;           // toggle without freeing the slot
+
+// Global directional light (the "sun") — configurable, defaults to (0.3, 0.8, 0.5), white, intensity 1
+renderer.lights.setDirectional(
+  [0.5, -0.8, 0.3],           // direction (points toward the light)
+  [1, 0.95, 0.9],             // color
+  1.5,                         // intensity
+);
+
+// Global ambient — defaults to (0.3, 0.3, 0.3)
+renderer.lights.setAmbient([0.1, 0.1, 0.15]);
+
+// Light positions/directions interpolate on the GPU (store previous state in pre-tick)
+loop.events.on('pre-tick', () => renderer.storePreviousState());
+
+spot.destroy();                 // free the slot
+```
+
+The 3D renderer is **not a PBR/material engine** — there are no shadows, no skybox, no specular/metallic/emissive. Per-instance `color` (a flat tint set at spawn) is the only surface property you control. Lighting is per-vertex diffuse with the dynamic lights plus the directional + ambient globals.
 
 ### Renderer shape
 
@@ -2227,7 +2453,7 @@ If you need configurable or multiple lights, shadows, or a real material model, 
 
 ```ts
 interface WebGPU2DRendererOptions {
-  prefabs?: PrefabBucket2D;
+  assets?: PrefabBucket2D;
   maxInstances?: number;          // also accepts `maxSprites` as an alias
   maxSprites?: number;
   clearColor?: [number, number, number, number];
@@ -2235,7 +2461,7 @@ interface WebGPU2DRendererOptions {
 }
 
 const renderer = new WebGPU2DRenderer(canvas, {
-  prefabs,
+  assets,
   maxSprites: 60_000,
   clearColor: [0.2, 0.05, 0.15, 1],
   autoResize: true,
@@ -2283,7 +2509,7 @@ renderer.onResize((w, h) => { /* ... */ });
 
 ```ts
 interface WebGPU3DRendererOptions {
-  prefabs?: PrefabBucket3D;
+  assets?: PrefabBucket3D;
   maxInstances?: number;
   maxSkinnedInstances?: number;          // cap on simultaneously animated meshes
   maxBonesPerSkin?: number;              // cap on bones per skinned model
@@ -2301,7 +2527,7 @@ interface MeshInstanceOptions {
 }
 
 const renderer = new WebGPU3DRenderer(canvas, {
-  prefabs,
+  assets,
   maxInstances: 5000,
   clearColor: [0.05, 0.07, 0.13, 1],
   autoResize: true,
@@ -2744,6 +2970,7 @@ class MorphAnimation {
 
 - `Spritesheet`, `createTextureFromBitmap` — manual GPU texture/atlas building if you're not going through `PrefabBucket`.
 - `GeometryData`, `BuiltInGeometry`, `resolveBuiltInGeometry` — for plugging custom vertex layouts into `createGeometry`.
+- `createCube`, `createPlane`, `createGrid`, `createSphere`, `createCylinder`, `createCone` — individual geometry factory functions (e.g. `createCube({ size: 2, uv: 'cross' })`).
 - `DynamicSprite`, `StaticSprite`, `SpriteUniforms`, `DynamicInstance3D`, `StaticInstance3D`, `DynamicMesh`, `StaticMesh`, `SkinnedStaticMesh`, `MeshUniforms` — exported `d.struct` shapes the renderer uses internally. Use these if you want to pack data into the same format the renderer reads.
 
 ### Shader util signatures (TypeGPU functions — call inside vertex/fragment closures)
@@ -2800,7 +3027,7 @@ inverseLerp(min: number, max: number, value: number): number;
 | Calling `server.on('intent', handler)` to implement gameplay | That event is **observe-only** telemetry. Gameplay belongs in `defineHandlers(intents, {...})`. Both can coexist |
 | Casting `world.fields(C)` results to specific typed arrays | Don't - the return type is precisely inferred from the schema (`f32 -> Float32Array`, `u8 -> Uint8Array`, etc.). Casts only mask bugs |
 | Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `addInstance({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
-| Expecting to move/add lights, set shadows, or pick a material on the 3D renderer | The WebGPU 3D renderer has ONE hard-coded directional light + ambient, no public lighting/material API. Write a custom `Base3DRenderer` backend if you need more |
+| Expecting shadows, a skybox, or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, but no shadows, skybox, or material API. Write a custom `Base3DRenderer` backend if you need more |
 | `import { type Vec2 } from 'murow'` | Not exported. Use a `{ x: number; y: number }` literal (NavMesh, etc. accept it). `Vector2` exists at `murow/core/input` if you want a named type |
 | Treating `world.query(...)` as a fresh array you can keep | It's a reused, cached buffer rebuilt on any structural change. Iterate it now; re-query after spawn/despawn/add/remove. Same for `getEntities()` / `getDespawned()` |
 | Assuming `world.getDespawned()` is an `Entity[]` | It's a reused `Uint32Array` subarray - valid until `flushDespawned()`; don't retain it |
@@ -3065,9 +3292,9 @@ import { Components, intents, rpcs, predictions } from './shared';
 
 const canvas  = document.getElementById('canvas') as HTMLCanvasElement;
 const prefabs = new PrefabBucket('3d').add({ type: 'cube', id: 'player', size: 0.9 });
-await prefabs.load();
+await assets.load();
 
-const renderer = new WebGPU3DRenderer(canvas, { prefabs, maxInstances: 64, autoResize: true });
+const renderer = new WebGPU3DRenderer(canvas, { assets: prefabs, maxInstances: 64, autoResize: true });
 await renderer.init();
 
 const world = new World({ maxEntities: 64, components: Object.values(Components) });
