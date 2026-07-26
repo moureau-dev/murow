@@ -117,6 +117,7 @@ export interface MeshInstanceHandle {
     readonly skinned: boolean;
     /** Source prefab id, or `null` if spawned from a raw model handle. */
     readonly prefabId: string | null;
+    readonly textureId: string | null;
     setPosition(x: number, y: number, z: number): void;
     setRotation(x: number, y: number, z: number): void;
     setScale(x: number, y: number, z: number): void;
@@ -139,6 +140,7 @@ export interface MeshInstanceHandle {
     readonly scale: readonly [number, number, number];
     play?(name: string, opts?: PlayOptions): void;
     stop?(): void;
+    setTexture?(texture: string | TexturePrefab | null): void;
     /** Free this instance's renderer slot. Safe to call once per handle. */
     destroy(): void;
 }
@@ -234,6 +236,14 @@ export interface InstanceHandle {
     readonly skinned: boolean;
     /** Source prefab id, or `null` if spawned from a raw model handle. */
     readonly prefabId: string | null;
+    /** Current texture override id, or `null` if using the model's default texture. */
+    readonly textureId: string | null;
+    /**
+     * Swap the per-instance texture at runtime. Pass a texture ID or
+     * TexturePrefab. Clears the override when called with `null` or `undefined`,
+     * reverting to the model's default texture.
+     */
+    setTexture?(texture: string | TexturePrefab | null): void;
     /** Free this instance's renderer slot(s). Safe to call once per handle. */
     destroy(): void;
 }
@@ -1538,13 +1548,20 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         const rotOut: [number, number, number] = [0, 0, 0];
         const sclOut: [number, number, number] = [0, 0, 0];
 
+        // Capture initial texture override for the handle's textureId
+        const initTexId = opts.texture
+            ? (typeof opts.texture === 'string' ? opts.texture : (opts.texture as TexturePrefab).id)
+            : null;
+
         const id = ++this.nextInstanceId;
+        let currentTexId: string | null = initTexId;
         const handle: MeshInstanceHandle = {
             id,
             slot,
             modelId: modelHandle.id,
             skinned: false,
             prefabId: userPrefabId,
+            get textureId() { return currentTexId; },
             setPosition(nx: number, ny: number, nz: number) {
                 dynamicData[dynBase + DYN_CURR_PX] = nx;
                 dynamicData[dynBase + DYN_CURR_PY] = ny;
@@ -1586,6 +1603,19 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
                 sclOut[2] = staticData[statBase + STAT_SZ];
                 return sclOut;
             },
+            setTexture(tex: string | TexturePrefab | null) {
+                if (tex == null) {
+                    self.instanceTextureBGs.delete(id);
+                    currentTexId = null;
+                } else {
+                    const texId = typeof tex === 'string' ? tex : tex.id;
+                    const gpuTex = self.gpuTextures.get(texId);
+                    if (gpuTex) {
+                        self.instanceTextureBGs.set(id, gpuTex.bindGroup);
+                        currentTexId = texId;
+                    }
+                }
+            },
             destroy() {
                 if (destroyed) return;
                 destroyed = true;
@@ -1602,9 +1632,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
 
         // Per-instance texture override (string ID or TexturePrefab)
         // Reuses the bind group cached in gpuTextures — created once per texture.
-        if (opts.texture) {
-            const texId = typeof opts.texture === 'string' ? opts.texture : (opts.texture as TexturePrefab).id;
-            const gpuTex = this.gpuTextures.get(texId);
+        if (initTexId) {
+            const gpuTex = this.gpuTextures.get(initTexId);
             if (gpuTex) this.instanceTextureBGs.set(id, gpuTex.bindGroup);
         }
 
@@ -1636,10 +1665,12 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         // The user-facing handle reads transforms from the first child (all children share the same logical pose).
         const lead = childHandles[0];
 
+        const gltfTexId = lead.textureId;
         return {
             id: lead.id,
             skinned: gltf.skinned,
             prefabId,
+            get textureId() { return lead.textureId; },
             setPosition(x: number, y: number, z: number) {
                 for (const h of childHandles) h.setPosition(x, y, z);
             },
@@ -1661,6 +1692,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             stop: skinnedHandle?.stop ? () => {
                 skinnedHandle.stop!();
             } : undefined,
+            setTexture(tex: string | TexturePrefab | null) {
+                for (const h of childHandles) h.setTexture?.(tex);
+            },
             destroy() {
                 for (const h of childHandles) h.destroy();
             },
@@ -1722,6 +1756,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             id: childHandles[0].id,
             skinned: childHandles.some((h) => h.skinned),
             prefabId: composite.id,
+            get textureId() { return childHandles[0].textureId; },
             setPosition(x: number, y: number, z: number) {
                 posOut[0] = x; posOut[1] = y; posOut[2] = z;
                 for (let i = 0; i < childHandles.length; i++) {
@@ -1750,6 +1785,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             get position() { return posOut as readonly [number, number, number]; },
             get rotation() { return rotOut as readonly [number, number, number]; },
             get scale() { return sclOut as readonly [number, number, number]; },
+            setTexture(tex: string | TexturePrefab | null) {
+                for (const h of childHandles) h.setTexture?.(tex);
+            },
             destroy() {
                 for (const h of childHandles) h.destroy();
             },
@@ -1855,12 +1893,14 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         const sclOut: [number, number, number] = [0, 0, 0];
 
         const id = ++this.nextInstanceId;
+        let currentTexId: string | null = null;
         const handle: MeshInstanceHandle = {
             id,
             slot,
             modelId: modelHandle.id,
             skinned: true,
             prefabId,
+            get textureId() { return currentTexId; },
             setPosition(nx: number, ny: number, nz: number) {
                 dynamicData[dynBase + DYN_CURR_PX] = nx;
                 dynamicData[dynBase + DYN_CURR_PY] = ny;
@@ -1909,6 +1949,19 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             stop() {
                 const state = animStates[slot];
                 if (state) animation.stop(state);
+            },
+            setTexture(tex: string | TexturePrefab | null) {
+                if (tex == null) {
+                    self.instanceTextureBGs.delete(id);
+                    currentTexId = null;
+                } else {
+                    const texId = typeof tex === 'string' ? tex : tex.id;
+                    const gpuTex = self.gpuTextures.get(texId);
+                    if (gpuTex) {
+                        self.instanceTextureBGs.set(id, gpuTex.bindGroup);
+                        currentTexId = texId;
+                    }
+                }
             },
             destroy() {
                 if (destroyed) return;
