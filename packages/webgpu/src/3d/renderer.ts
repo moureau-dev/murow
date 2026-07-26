@@ -531,7 +531,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         this.context.configure({
             device: this.device,
             format: this.format,
-            alphaMode: 'premultiplied',
+            alphaMode: 'opaque',
         });
 
         this._width = this.canvas.width;
@@ -596,7 +596,16 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         this.rawTexturedPipeline = this.device.createRenderPipeline({
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [rawBGL, rawTexBGL] }),
             vertex: { module: texShaderModule, buffers: [vertexBufferLayout] },
-            fragment: { module: texShaderModule, targets: [{ format: this.format }] },
+            fragment: {
+                module: texShaderModule,
+                targets: [{
+                    format: this.format,
+                    blend: {
+                        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                    },
+                }],
+            },
             primitive,
             depthStencil,
         });
@@ -666,7 +675,16 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         this.rawSkinnedTexturedPipeline = this.device.createRenderPipeline({
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [rawSkinnedBGL, rawTexBGL] }),
             vertex: { module: skinnedTexShaderModule, buffers: [skinnedVertexBufferLayout] },
-            fragment: { module: skinnedTexShaderModule, targets: [{ format: this.format }] },
+            fragment: {
+                module: skinnedTexShaderModule,
+                targets: [{
+                    format: this.format,
+                    blend: {
+                        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                    },
+                }],
+            },
             primitive,
             depthStencil,
         });
@@ -695,7 +713,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         });
 
         if (this._prefabs) {
-            this.uploadPrefabBucket(this._assets!);
+            await this.uploadPrefabBucket(this._assets!);
         }
 
         this.hitboxDebug.init(this.device, this.format);
@@ -709,16 +727,19 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
      * subscribes the resync coordinator to the bucket's `clips-changed`
      * channel for lazy load/unload.
      */
-    private uploadPrefabBucket(assets: AssetBucket<any, any, any>): void {
+    private async uploadPrefabBucket(assets: AssetBucket<any, any, any>): Promise<void> {
         const bucket = assets.prefabs as unknown as PrefabBucket3D;
         this.clipResync = new GltfClipResyncCoordinator(bucket);
 
         // Upload textures from the asset's texture bucket
+        // Must await all texture uploads so createPlane() finds them in gpuTextures.
+        const texturePromises: Promise<void>[] = [];
         for (const prefab of assets.textures.entries()) {
             if (prefab.type === 'texture') {
-                this.uploadTexturePrefab(prefab as TexturePrefab);
+                texturePromises.push(this.uploadTexturePrefab(prefab as TexturePrefab));
             }
         }
+        await Promise.all(texturePromises);
 
         for (const prefab of bucket.entries()) {
             if (prefab.type === 'gltf') {
@@ -795,7 +816,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
                     this.context.configure({
                         device: this.device,
                         format: navigator.gpu.getPreferredCanvasFormat(),
-                        alphaMode: 'premultiplied',
+                        alphaMode: 'opaque',
                     });
                 }
 
