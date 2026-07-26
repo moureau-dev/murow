@@ -406,6 +406,8 @@ export function createSkinnedMeshLayout(maxInstances: number, maxBones: number) 
         dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
         staticInstances: { storage: d.arrayOf(SkinnedStaticMesh, maxInstances) },
         slotIndices: { storage: d.arrayOf(d.u32, maxInstances) },
+        // mat4x4f array — the compute kernel writes via TypeGPU's mat4 * mat4
+        // operator, and the vertex shader reads them as full mat4x4f values.
         boneMatrices: { storage: d.arrayOf(d.mat4x4f, maxBones) },
         lights: { storage: d.arrayOf(Light, MAX_LIGHTS) },
     });
@@ -431,10 +433,13 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
         const w2 = input.weights.z;
         const w3 = input.weights.w;
 
-        const m0 = layout.$.boneMatrices[boneOffset + j0];
-        const m1 = layout.$.boneMatrices[boneOffset + j1];
-        const m2 = layout.$.boneMatrices[boneOffset + j2];
-        const m3 = layout.$.boneMatrices[boneOffset + j3];
+        // Read bone matrices as full mat4x4f by value (TypeGPU returns by value
+        // for d.arrayOf(d.mat4x4f, ...) storage buffers).
+        const bm = layout.$.boneMatrices;
+        const m0 = bm[(d.i32(boneOffset) + d.i32(j0))];
+        const m1 = bm[(d.i32(boneOffset) + d.i32(j1))];
+        const m2 = bm[(d.i32(boneOffset) + d.i32(j2))];
+        const m3 = bm[(d.i32(boneOffset) + d.i32(j3))];
 
         // Blend: skinMatrix = w0*m0 + w1*m1 + w2*m2 + w3*m3
         // Apply to position

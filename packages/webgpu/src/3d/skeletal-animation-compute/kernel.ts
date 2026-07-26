@@ -6,12 +6,12 @@
  * - if/else instead of ternaries for runtime values
  * - No nested function declarations
  * - No closure captures — offsets passed via uniforms
- * - const for non-reassigned values
  * - 6 buffers (under 8 binding limit)
  */
 // Use bundler-safe wraps so `d.X` / `std.X` accesses inside the shader
 // function body survive Rollup's namespace-member inlining (see
 // ../../shaders/typegpu.ts).
+import type * as _d from 'typegpu/data';
 import { d, std } from '../../shaders/typegpu';
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { AnimComputeUniforms, InstanceAnimStateGPU } from '../../core/types';
@@ -41,16 +41,24 @@ export function buildAnimationKernel(
 ): { kernel: ComputeKernel; packedBuffers: PackedBuffers; budgets: AnimationKernelBudgets } {
     const pb = packAnimationData(packed);
 
+    // Packed data layout (see packer.ts):
+    //   skelI32: 10 i32 per skin entry
+    //   animF32: 10 f32 per joint (tx,ty,tz, qx,qy,qz,qw, sx,sy,sz)
+    //   lookup:   2 i32 per joint per clip
+    //   channel:  4 i32 per animation channel entry
     const kernel = new ComputeBuilder('skeletal-animation', { workgroupSize: WORKGROUP_SIZE }, root)
         .buffers({
             uniforms:     { uniform: AnimComputeUniforms },
             instances:    { storage: d.arrayOf(InstanceAnimStateGPU, maxInstances) },
             skelI32:      { storage: d.arrayOf(d.i32, budgets.skelI32Capacity) },
             animF32:      { storage: d.arrayOf(d.f32, budgets.animF32Capacity) },
+            // mat4x4f arrays — TypeGPU's built-in mat4 * mat4 operator gives
+            // correct matrix multiplication (tested in the original working code).
             matrices:     { storage: d.arrayOf(d.mat4x4f, budgets.matricesCapacity) },
             boneMatrices: { storage: d.arrayOf(d.mat4x4f, maxTotalBones), readwrite: true },
         })
         .shader(({ uniforms, instances, skelI32, animF32, matrices, boneMatrices }, { globalId }) => {
+            'use gpu';
             const idx = globalId.x;
             // @ts-ignore — TGSL struct field access
             if (idx >= uniforms.instanceCount) { return; }
@@ -58,23 +66,23 @@ export function buildAnimationKernel(
             const inst = instances[idx];
             if (inst.clipId < 0) { return; }
 
-            // Read skin entry (10 i32 per skin)
+            // Read skin entry
             const skinBase = inst.skinIndex * 10;
-            const jc = skelI32[skinBase + 0];
-            const parentOff = skelI32[skinBase + 1];
-            const topoOff: number = skelI32[skinBase + 2];
+            const jointCount = skelI32[skinBase + 0];
+            const parentDataOff = skelI32[skinBase + 1];
+            const topoDataOff: number = skelI32[skinBase + 2];
             const ibmOff = skelI32[skinBase + 3];
             const restOff = skelI32[skinBase + 4];
             const skelRootIdx = skelI32[skinBase + 5];
             const skinLookupOff = skelI32[skinBase + 7];
             const boneOff = d.i32(inst.boneOffset);
-            const worldOff = boneOff - jc;
+            const worldOff = boneOff - jointCount;
 
             const time = inst.time;
 
             // Process each joint in topological order
-            for (let ti = 0; ti < jc; ti = ti + 1) {
-                const j = skelI32[topoOff + ti];
+            for (let ti = 0; ti < jointCount; ti = ti + 1) {
+                const j = skelI32[topoDataOff + ti];
 
                 // Read rest pose TRS
                 const trsBase = restOff + j * 10;
@@ -82,32 +90,32 @@ export function buildAnimationKernel(
                 let qx = animF32[trsBase + 3]; let qy = animF32[trsBase + 4]; let qz = animF32[trsBase + 5]; let qw = animF32[trsBase + 6];
                 let sx = animF32[trsBase + 7]; let sy = animF32[trsBase + 8]; let sz = animF32[trsBase + 9];
 
-                // Per-joint channel lookup
-                const lookupIdx = skinLookupOff + inst.clipId * jc * 2 + j * 2;
-                const jChStart = skelI32[lookupIdx];
-                const jChCount = skelI32[lookupIdx + 1];
+                // Per-joint channel lookup (2 i32 per joint per clip: start, count)
+                const lookupIdx = skinLookupOff + inst.clipId * jointCount * 2 + j * 2;
+                const channelStart = skelI32[lookupIdx];
+                const channelCount = skelI32[lookupIdx + 1];
 
                 // Sample animation channels
-                for (let ci = 0; ci < jChCount; ci = ci + 1) {
+                for (let ci = 0; ci < channelCount; ci = ci + 1) {
                     // @ts-ignore
-                    const chBase = (jChStart + ci) * 4 + d.i32(uniforms.channelTableOffset);
+                    const chBase = (channelStart + ci) * 4 + d.i32(uniforms.channelTableOffset);
                     const chPathInterp = skelI32[chBase + 1];
-                    const chN = skelI32[chBase + 2];
+                    const chKeyCount = skelI32[chBase + 2];
                     const chDataOff = skelI32[chBase + 3];
 
                     const path = chPathInterp & 3;
                     const isStep = (chPathInterp & 4) !== 0;
 
                     const t0 = animF32[chDataOff];
-                    const tN = animF32[chDataOff + chN - 1];
+                    const tN = animF32[chDataOff + chKeyCount - 1];
 
-                    let lo = 0;
-                    let hi = chN - 1;
+                    let lo = d.i32(idx - idx);   // runtime expression prevents TypeGPU const-folding
+                    let hi = chKeyCount - 1;
 
                     if (time <= t0) {
-                        lo = 0; hi = 0;
+                        lo = d.i32(0); hi = d.i32(0);
                     } else if (time >= tN) {
-                        lo = chN - 1; hi = chN - 1;
+                        lo = d.i32(chKeyCount - 1); hi = d.i32(chKeyCount - 1);
                     } else {
                         for (let iter = 0; iter < 20; iter = iter + 1) {
                             if (lo >= hi - 1) { break; }
@@ -116,9 +124,9 @@ export function buildAnimationKernel(
                         }
                     }
 
-                    let compCount = 3;
-                    if (path === 1) { compCount = 4; }
-                    const valBase = chDataOff + chN;
+                    let compCount = d.i32(time - time) + 3;
+                    if (path === 1) { compCount = d.i32(4); }
+                    const valBase = chDataOff + chKeyCount;
 
                     if (lo === hi || isStep) {
                         const off = valBase + lo * compCount;
@@ -128,7 +136,7 @@ export function buildAnimationKernel(
                     } else {
                         const tLo = animF32[chDataOff + lo];
                         const tHi = animF32[chDataOff + hi];
-                        let f = d.f32(0);
+                        let f = d.f32(time - time);
                         if (tHi > tLo) { f = (time - tLo) / (tHi - tLo); }
                         const offA = valBase + lo * compCount;
                         const offB = valBase + hi * compCount;
@@ -154,30 +162,33 @@ export function buildAnimationKernel(
                     }
                 }
 
-                // Build local matrix from TRS
+                // Build local matrix from TRS (quaternion → rotation matrix)
                 const xx = qx*qx; const yy = qy*qy; const zz = qz*qz;
                 const xy = qx*qy; const xz = qx*qz; const yz = qy*qz;
                 const wx = qw*qx; const wy = qw*qy; const wz = qw*qz;
 
+                // @ts-ignore — TGSL: d.mat4x4f(16 x f32)
                 const localMat = d.mat4x4f(
-                    (1.0 - 2.0*(yy+zz))*sx, 2.0*(xy+wz)*sx, 2.0*(xz-wy)*sx, 0.0,
-                    2.0*(xy-wz)*sy, (1.0 - 2.0*(xx+zz))*sy, 2.0*(yz+wx)*sy, 0.0,
-                    2.0*(xz+wy)*sz, 2.0*(yz-wx)*sz, (1.0 - 2.0*(xx+yy))*sz, 0.0,
-                    tx, ty, tz, 1.0,
+                    (1.0 - 2.0*(yy+zz))*sx, 2.0*(xy+wz)*sx, 2.0*(xz-wy)*sx, d.f32(0),
+                    2.0*(xy-wz)*sy, (1.0 - 2.0*(xx+zz))*sy, 2.0*(yz+wx)*sy, d.f32(0),
+                    2.0*(xz+wy)*sz, 2.0*(yz-wx)*sz, (1.0 - 2.0*(xx+yy))*sz, d.f32(0),
+                    tx, ty, tz, d.f32(1),
                 );
 
-                // Hierarchy walk: world matrix to scratch, bone matrix to output
-                const parentJ = skelI32[parentOff + j];
+                // Hierarchy walk: world → worldOff, final (IBM-applied) → boneOff
+                const parentJ = skelI32[parentDataOff + j];
                 if (parentJ < 0) {
+                    // Root: world = srm * local, final = world * ibm
                     // @ts-ignore — TGSL mat4 * mat4
-                    boneMatrices[worldOff + j] = matrices[skelRootIdx] * localMat;
+                    boneMatrices[(worldOff + j)] = matrices[skelRootIdx] * localMat;
                     // @ts-ignore
-                    boneMatrices[boneOff + j] = boneMatrices[worldOff + j] * matrices[ibmOff + j];
+                    boneMatrices[(boneOff + j)] = boneMatrices[(worldOff + j)] * matrices[(ibmOff + j)];
                 } else {
+                    // Non-root: world = parentWorld * local, final = world * ibm
                     // @ts-ignore
-                    boneMatrices[worldOff + j] = boneMatrices[worldOff + parentJ] * localMat;
+                    boneMatrices[(worldOff + j)] = boneMatrices[(worldOff + parentJ)] * localMat;
                     // @ts-ignore
-                    boneMatrices[boneOff + j] = boneMatrices[worldOff + j] * matrices[ibmOff + j];
+                    boneMatrices[(boneOff + j)] = boneMatrices[(worldOff + j)] * matrices[(ibmOff + j)];
                 }
             }
 
@@ -185,58 +196,58 @@ export function buildAnimationKernel(
             if (inst.prevClipId >= 0 && inst.blendWeight < 1.0) {
                 const prevTime = inst.prevTime;
 
-                for (let pti = 0; pti < jc; pti = pti + 1) {
-                    const pj: number = skelI32[(topoOff as unknown as number) + pti];
+                for (let pti = 0; pti < jointCount; pti = pti + 1) {
+                    const pj = skelI32[topoDataOff + pti];
 
                     const ptrsBase = restOff + pj * 10;
                     let ptx = animF32[ptrsBase + 0]; let pty = animF32[ptrsBase + 1]; let ptz = animF32[ptrsBase + 2];
                     let pqx = animF32[ptrsBase + 3]; let pqy = animF32[ptrsBase + 4]; let pqz = animF32[ptrsBase + 5]; let pqw = animF32[ptrsBase + 6];
                     let psx = animF32[ptrsBase + 7]; let psy = animF32[ptrsBase + 8]; let psz = animF32[ptrsBase + 9];
 
-                    const pLookupIdx = skinLookupOff + inst.prevClipId * jc * 2 + (pj as unknown as number) * 2;
-                    const pChStart = skelI32[pLookupIdx];
-                    const pChCount = skelI32[pLookupIdx + 1];
+                    const pLookupIdx = skinLookupOff + inst.prevClipId * jointCount * 2 + pj * 2;
+                    const prevChStart = skelI32[pLookupIdx];
+                    const prevChCount = skelI32[pLookupIdx + 1];
 
-                    for (let pci = 0; pci < pChCount; pci = pci + 1) {
+                    for (let pci = 0; pci < prevChCount; pci = pci + 1) {
                         // @ts-ignore
-                        const pchBase = (pChStart + pci) * 4 + d.i32(uniforms.channelTableOffset);
+                        const pchBase = (prevChStart + pci) * 4 + d.i32(uniforms.channelTableOffset);
                         const pchPathInterp = skelI32[pchBase + 1];
-                        const pchN = skelI32[pchBase + 2];
+                        const pchKeyCount = skelI32[pchBase + 2];
                         const pchDataOff = skelI32[pchBase + 3];
                         const ppath = pchPathInterp & 3;
                         const pisStep = (pchPathInterp & 4) !== 0;
 
                         const pt0 = animF32[pchDataOff];
-                        const ptN = animF32[pchDataOff + pchN - 1];
-                        let plo = 0;
-                        let phi = pchN - 1;
+                        const ptN = animF32[pchDataOff + pchKeyCount - 1];
+                        let prevLo = d.i32(time - time);
+                        let prevHi = pchKeyCount - 1;
 
-                        if (prevTime <= pt0) { plo = 0; phi = 0; }
-                        else if (prevTime >= ptN) { plo = pchN - 1; phi = pchN - 1; }
+                        if (prevTime <= pt0) { prevLo = d.i32(0); prevHi = d.i32(0); }
+                        else if (prevTime >= ptN) { prevLo = d.i32(pchKeyCount - 1); prevHi = d.i32(pchKeyCount - 1); }
                         else {
                             for (let piter = 0; piter < 20; piter = piter + 1) {
-                                if (plo >= phi - 1) { break; }
-                                const pmid = d.i32((plo + phi) / 2);
-                                if (animF32[pchDataOff + pmid] <= prevTime) { plo = pmid; } else { phi = pmid; }
+                                if (prevLo >= prevHi - 1) { break; }
+                                const pmid = d.i32((prevLo + prevHi) / 2);
+                                if (animF32[pchDataOff + pmid] <= prevTime) { prevLo = pmid; } else { prevHi = pmid; }
                             }
                         }
 
-                        let pcompCount = 3;
-                        if (ppath === 1) { pcompCount = 4; }
-                        const pvalBase = pchDataOff + pchN;
+                        let prevCompCount = d.i32(time - time) + 3;
+                        if (ppath === 1) { prevCompCount = d.i32(4); }
+                        const pvalBase = pchDataOff + pchKeyCount;
 
-                        if (plo === phi || pisStep) {
-                            const poff = pvalBase + plo * pcompCount;
+                        if (prevLo === prevHi || pisStep) {
+                            const poff = pvalBase + prevLo * prevCompCount;
                             if (ppath === 0) { ptx = animF32[poff]; pty = animF32[poff+1]; ptz = animF32[poff+2]; }
                             else if (ppath === 1) { pqx = animF32[poff]; pqy = animF32[poff+1]; pqz = animF32[poff+2]; pqw = animF32[poff+3]; }
                             else { psx = animF32[poff]; psy = animF32[poff+1]; psz = animF32[poff+2]; }
                         } else {
-                            const ptLo = animF32[pchDataOff + plo];
-                            const ptHi = animF32[pchDataOff + phi];
-                            let pf = d.f32(0);
+                            const ptLo = animF32[pchDataOff + prevLo];
+                            const ptHi = animF32[pchDataOff + prevHi];
+                            let pf = d.f32(time - time);
                             if (ptHi > ptLo) { pf = (prevTime - ptLo) / (ptHi - ptLo); }
-                            const poffA = pvalBase + plo * pcompCount;
-                            const poffB = pvalBase + phi * pcompCount;
+                            const poffA = pvalBase + prevLo * prevCompCount;
+                            const poffB = pvalBase + prevHi * prevCompCount;
 
                             if (ppath === 0) {
                                 ptx = std.mix(animF32[poffA], animF32[poffB], pf);
@@ -264,54 +275,51 @@ export function buildAnimationKernel(
                     const pxy = pqx*pqy; const pxz = pqx*pqz; const pyz = pqy*pqz;
                     const pwx = pqw*pqx; const pwy = pqw*pqy; const pwz = pqw*pqz;
 
+                    // @ts-ignore
                     const prevLocalMat = d.mat4x4f(
-                        (1.0 - 2.0*(pyy+pzz))*psx, 2.0*(pxy+pwz)*psx, 2.0*(pxz-pwy)*psx, 0.0,
-                        2.0*(pxy-pwz)*psy, (1.0 - 2.0*(pxx+pzz))*psy, 2.0*(pyz+pwx)*psy, 0.0,
-                        2.0*(pxz+pwy)*psz, 2.0*(pyz-pwx)*psz, (1.0 - 2.0*(pxx+pyy))*psz, 0.0,
-                        ptx, pty, ptz, 1.0,
+                        (1.0 - 2.0*(pyy+pzz))*psx, 2.0*(pxy+pwz)*psx, 2.0*(pxz-pwy)*psx, d.f32(0),
+                        2.0*(pxy-pwz)*psy, (1.0 - 2.0*(pxx+pzz))*psy, 2.0*(pyz+pwx)*psy, d.f32(0),
+                        2.0*(pxz+pwy)*psz, 2.0*(pyz-pwx)*psz, (1.0 - 2.0*(pxx+pyy))*psz, d.f32(0),
+                        ptx, pty, ptz, d.f32(1),
                     );
 
                     // Hierarchy walk for prev clip
-                    const prevParentJ = skelI32[parentOff + pj];
+                    const prevParentJ = skelI32[parentDataOff + pj];
                     if (prevParentJ < 0) {
                         // @ts-ignore
-                        boneMatrices[worldOff + pj] = matrices[skelRootIdx] * prevLocalMat;
+                        boneMatrices[(worldOff + pj)] = matrices[skelRootIdx] * prevLocalMat;
                     } else {
                         // @ts-ignore
-                        boneMatrices[worldOff + pj] = boneMatrices[worldOff + prevParentJ] * prevLocalMat;
+                        boneMatrices[(worldOff + pj)] = boneMatrices[(worldOff + prevParentJ)] * prevLocalMat;
                     }
 
                     // Blend: final = lerp(prevBone, currentBone, blendWeight)
+                    // Assign to variables first so .columns resolve correctly.
                     // @ts-ignore
-                    const prevBoneMat: d.Mat4x4f = boneMatrices[worldOff + pj] * matrices[ibmOff + pj];
-                    const curBoneMat: d.Mat4x4f = boneMatrices[boneOff + pj];
-                    const w = inst.blendWeight;
-                    const omw = 1.0 - w;
-                    boneMatrices[boneOff + pj] = d.mat4x4f(
+                    const prevBoneMat: _d.Mat4x4f = boneMatrices[(worldOff + pj)] * matrices[(ibmOff + pj)];
+                    // @ts-ignore
+                    const curBoneMat: _d.Mat4x4f = boneMatrices[(boneOff + pj)];
+                    const blendWeight = inst.blendWeight;
+                    const oneMinusBlend = d.f32(1) - blendWeight;
+                    boneMatrices[(boneOff + pj)] = d.mat4x4f(
+                        // @ts-ignore — TGSL runtime: columns[col] returns vec4f
+                        curBoneMat.columns[0] * blendWeight + prevBoneMat.columns[0] * oneMinusBlend,
                         // @ts-ignore
-                        curBoneMat.columns[0] * w + prevBoneMat.columns[0] * omw,
+                        curBoneMat.columns[1] * blendWeight + prevBoneMat.columns[1] * oneMinusBlend,
                         // @ts-ignore
-                        curBoneMat.columns[1] * w + prevBoneMat.columns[1] * omw,
+                        curBoneMat.columns[2] * blendWeight + prevBoneMat.columns[2] * oneMinusBlend,
                         // @ts-ignore
-                        curBoneMat.columns[2] * w + prevBoneMat.columns[2] * omw,
-                        // @ts-ignore
-                        curBoneMat.columns[3] * w + prevBoneMat.columns[3] * omw,
+                        curBoneMat.columns[3] * blendWeight + prevBoneMat.columns[3] * oneMinusBlend,
                     );
                 }
             }
-        })
-        .build();
+        }).build();
 
     uploadPackedToKernel(root, kernel, pb);
 
     return { kernel, packedBuffers: pb, budgets };
 }
 
-/**
- * Re-upload packed animation data into an already-built kernel. Uses
- * `device.queue.writeBuffer` directly against the typed arrays — TypeGPU's
- * per-element write path is dramatically slower for big buffers.
- */
 export function uploadPackedToKernel(root: TgpuRoot, kernel: ComputeKernel, pb: PackedBuffers): void {
     const queue = root.device.queue;
 

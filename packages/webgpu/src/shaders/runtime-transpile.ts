@@ -74,6 +74,9 @@ export function attachShaderMetadata(
      */
     sourceOverride?: string,
 ): void {
+    // Lazily apply the GPUDevice shader patch on first call
+    (globalThis as any).__murow_ensureShaderPatch?.();
+
     let source = sourceOverride ?? fn.toString();
 
     // Handle method shorthand: `name(...) { }` → `function(...) { }`
@@ -323,18 +326,31 @@ export function attachShaderMetadata(
     });
 }
 
-// Patch GPUDevice.createShaderModule to replace `$` in generated WGSL.
-// Tinyest generates `$` as temp variable names, but `$` is invalid in WGSL
-// identifiers. All `$` become `zz` — a two-letter name that won't collide
-// with minified single-letter variable names from esbuild.
-if (typeof GPUDevice !== 'undefined' && GPUDevice.prototype && GPUDevice.prototype.createShaderModule) {
-    const origCreateShaderModule = GPUDevice.prototype.createShaderModule;
-    GPUDevice.prototype.createShaderModule = function (desc: GPUShaderModuleDescriptor) {
-        if (desc && typeof desc.code === 'string' && desc.code.indexOf('$') !== -1) {
-            // Replace all `$` with `zz` — a two-letter name that won't collide
-            // with minified single-letter variable names from esbuild.
-            desc.code = desc.code.replace(/\$/g, 'zz');
-        }
-        return origCreateShaderModule.call(this, desc);
-    };
-}
+// Patch GPUDevice.createShaderModule lazily on first attachShaderMetadata call.
+// Module-level check may run before GPUDevice is available.
+(globalThis as any).__murow_ensureShaderPatch = () => {
+    if ((globalThis as any).__murow_shaderPatched) return;
+    (globalThis as any).__murow_shaderPatched = true;
+    if (typeof GPUDevice !== 'undefined' && GPUDevice.prototype && GPUDevice.prototype.createShaderModule) {
+        const origCreateShaderModule = GPUDevice.prototype.createShaderModule;
+        GPUDevice.prototype.createShaderModule = function (desc: GPUShaderModuleDescriptor) {
+            if (desc && typeof desc.code === 'string') {
+                let code = desc.code;
+                if (code.indexOf('$') !== -1) {
+                    code = code.replace(/\$/g, 'zz');
+                }
+                if (code.indexOf('_') !== -1) {
+                    code = code.replace(/(?<![\w$])_(?![\w$])/g, 'zz_');
+                }
+                // Replace `let ` with `var ` so mutable TGSL variables produce valid WGSL.
+                // Skip `let` declarations that use `&` (references) — those require `let`.
+                code = code.replace(/let (?![^;]*&)/g, 'var ');
+                desc.code = code;
+            }
+            return origCreateShaderModule.call(this, desc);
+        };
+    }
+};
+
+// Ensure patch is applied at module load time too (in case GPUDevice IS available).
+(globalThis as any).__murow_ensureShaderPatch();

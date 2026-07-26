@@ -53,9 +53,12 @@ import {
     type PrimitiveSkinAttributes,
     type PackedAnimationData,
     type ParsedGltf,
+    type AssetBucket,
     type PrefabBucket3D,
     type Prefab3D,
     type CompositePrefab,
+    type PlanePrefab,
+    type TexturePrefab,
     type SkeletalAnimState,
     type PlayOptions,
     Raycast as RaycastBase,
@@ -160,7 +163,7 @@ const prefabHandles = new WeakMap<Prefab3D, ModelHandle | GltfModel>();
 /** True iff value is a Prefab3D (returned from `bucket.get(...)`). */
 function isPrefab3D(value: ModelHandle | GltfModel | Prefab3D): value is Prefab3D {
     const t = (value as Prefab3D).type;
-    return t === 'gltf' || t === 'grid' || t === 'cube' || t === 'composite';
+    return t === 'gltf' || t === 'grid' || t === 'cube' || t === 'composite' || t === 'plane';
 }
 
 /** Resolve the tuple-shape transform options into flat scalars + defaults. */
@@ -255,19 +258,19 @@ export type RaycastOptions = RaycastOptionsBase<MeshInstanceHandle>;
 export type Raycast = RaycastBase<MeshInstanceHandle, [number, number, number]>;
 export type RaycastMemo = RaycastMemoBase<MeshInstanceHandle, [number, number, number]>;
 
-export interface WebGPU3DRendererOptions extends Renderer3DOptions {
+export interface WebGPU3DRendererOptions<A extends AssetBucket<any, any, any> = AssetBucket<any, any, any>> extends Renderer3DOptions {
     maxSkinnedInstances?: number;
     maxBonesPerSkin?: number;
     /**
-     * Pre-loaded prefab bucket. When provided, the renderer self-sizes its
-     * skinned-instance + bone buffers from the bucket's prefab stats, and
-     * uploads each prefab to the GPU during `init()`. The bucket must have
-     * `load()` resolved before being passed in.
+     * Pre-loaded AssetBucket. When provided, the renderer uploads every
+     * prefab (glTF, grid, cube, plane) and texture to the GPU during
+     * `init()`. The bucket must have `load()` resolved before being passed in.
      *
+     * `maxInstances` defaults to `assets.prefabs.size + 16`.
      * `maxSkinnedInstances` defaults to `maxInstances * maxSkinnedPartsPerPrefab`.
      * `maxBonesPerSkin` defaults to the maximum joint count across all prefabs.
      */
-    prefabs?: PrefabBucket3D;
+    assets?: A;
     /**
      * Max distance (world units) at which skeletal animation is computed for
      * skinned instances. Past this, instances still render but reuse their
@@ -278,7 +281,7 @@ export interface WebGPU3DRendererOptions extends Renderer3DOptions {
     animationCullDistance?: number;
 }
 
-export class WebGPU3DRenderer extends Base3DRenderer {
+export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket<any, any, any>> extends Base3DRenderer {
     private root!: TgpuRoot;
     private device!: GPUDevice;
     private context!: GPUCanvasContext;
@@ -341,6 +344,9 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         skinned: boolean;
         skinIndex: number; // index into skinnedModels, or -1
     }[] = [];
+
+    // GPU textures uploaded from TexturePrefab references, keyed by prefab id.
+    private gpuTextures: Map<string, { view: GPUTextureView; sampler: GPUSampler }> = new Map();
     private nextModelId = 0;
 
     // Skinned model data
@@ -407,7 +413,6 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     // Raw skinned GPU buffers
     private rawSkinnedDynamicBuffer!: GPUBuffer;
     private rawSkinnedStaticBuffer!: GPUBuffer;
-    private rawSkinnedUniformBuffer!: GPUBuffer; // shares uniform data with non-skinned
     private rawSkinnedSlotIndexBuffer!: GPUBuffer;
 
     // Frustum planes (6 planes × 4 floats each), extracted from VP matrix
@@ -424,23 +429,25 @@ export class WebGPU3DRenderer extends Base3DRenderer {
     private uniformData = new Float32Array(MESH_UNIFORM_FLOATS);
     private lastRenderTime = 0;
 
+    private readonly _assets: AssetBucket<any, any, any> | null;
     private readonly _prefabs: PrefabBucket3D | null;
 
     debug: { hitboxes: boolean } = { hitboxes: false };
 
     private hitboxDebug = new HitboxDebugRenderer();
 
-    constructor(canvas: HTMLCanvasElement, options: WebGPU3DRendererOptions) {
+    constructor(canvas: HTMLCanvasElement, options: WebGPU3DRendererOptions<A>) {
         // Resolve maxInstances from the bucket before delegating to super:
         // default to `bucket.size + slack` so non-skinned prefabs (grids, primitives)
         // always have room without the user having to count them by hand.
         const resolvedMaxInstances = options.maxInstances
-            ?? (options.prefabs ? options.prefabs.size + 16 : 32);
+            ?? (options.assets ? options.assets.prefabs.size + 16 : 32);
         super(canvas, { ...options, maxInstances: resolvedMaxInstances });
         this.camera = new Camera3D();
         this.raycast = new WebGPURaycast3D(this);
 
-        this._prefabs = options.prefabs ?? null;
+        this._assets = options.assets ?? null;
+        this._prefabs = options.assets?.prefabs as unknown as PrefabBucket3D ?? null;
 
         // Derive skinned-budget sizing from the bucket when present; explicit options win.
         //
@@ -688,7 +695,7 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         });
 
         if (this._prefabs) {
-            this.uploadPrefabBucket(this._prefabs);
+            this.uploadPrefabBucket(this._assets!);
         }
 
         this.hitboxDebug.init(this.device, this.format);
@@ -702,8 +709,16 @@ export class WebGPU3DRenderer extends Base3DRenderer {
      * subscribes the resync coordinator to the bucket's `clips-changed`
      * channel for lazy load/unload.
      */
-    private uploadPrefabBucket(bucket: PrefabBucket3D): void {
+    private uploadPrefabBucket(assets: AssetBucket<any, any, any>): void {
+        const bucket = assets.prefabs as unknown as PrefabBucket3D;
         this.clipResync = new GltfClipResyncCoordinator(bucket);
+
+        // Upload textures from the asset's texture bucket
+        for (const prefab of assets.textures.entries()) {
+            if (prefab.type === 'texture') {
+                this.uploadTexturePrefab(prefab as TexturePrefab);
+            }
+        }
 
         for (const prefab of bucket.entries()) {
             if (prefab.type === 'gltf') {
@@ -723,8 +738,27 @@ export class WebGPU3DRenderer extends Base3DRenderer {
             } else if (prefab.type === 'cube') {
                 const model = this.createCube({ size: prefab.size });
                 prefabHandles.set(prefab, model);
+            } else if (prefab.type === 'plane') {
+                const plane = prefab as PlanePrefab;
+                const model = this.createPlane({
+                    width: plane.width,
+                    height: plane.height,
+                    textureId: plane.texture,
+                });
+                prefabHandles.set(prefab, model);
             }
         }
+    }
+    private async uploadTexturePrefab(prefab: TexturePrefab): Promise<void> {
+        const bitmap = await createImageBitmap(prefab.parsed);
+        const { view } = createTextureFromBitmap(this.device, bitmap);
+        bitmap.close();
+        const sampler = this.device.createSampler({
+            magFilter: 'linear',
+            minFilter: 'linear',
+            mipmapFilter: 'linear',
+        });
+        this.gpuTextures.set(prefab.id, { view, sampler });
     }
 
     private setupResizeObserver(): void {
@@ -947,6 +981,55 @@ export class WebGPU3DRenderer extends Base3DRenderer {
         ]);
 
         return this.loadModel({ positions, normals });
+    }
+    /**
+     * Create a textured 3D quad (plane) mesh centered at the origin on the XY plane.
+     * Normals face +Z. Width and height default to 1. When `textureId` is provided
+     * and matches a previously uploaded TexturePrefab, the model is flagged as textured
+     * with the appropriate bind group.
+     */
+    createPlane(opts: { width?: number; height?: number; textureId?: string } = {}): ModelHandle {
+        const w = (opts.width ?? 1) / 2;
+        const h = (opts.height ?? 1) / 2;
+
+        // 6 vertices (2 triangles), each: pos(3f) + normal(3f) + uv(2f)
+        const positions = new Float32Array([
+            -w, -h, 0,   w, -h, 0,   w,  h, 0,
+            -w, -h, 0,   w,  h, 0,  -w,  h, 0,
+        ]);
+        const normals = new Float32Array([
+            0, 0, 1,  0, 0, 1,  0, 0, 1,
+            0, 0, 1,  0, 0, 1,  0, 0, 1,
+        ]);
+        const uvs = new Float32Array([
+            0, 1,  1, 1,  1, 0,
+            0, 1,  1, 0,  0, 0,
+        ]);
+
+        const textureId = opts.textureId;
+        const hasTexture = textureId ? this.gpuTextures.has(textureId) : false;
+        let textureBindGroup: GPUBindGroup | null = null;
+
+        if (hasTexture && textureId) {
+            const gpuTex = this.gpuTextures.get(textureId)!;
+            textureBindGroup = this.device.createBindGroup({
+                layout: this.rawTexturedPipeline.getBindGroupLayout(1),
+                entries: [
+                    { binding: 0, resource: gpuTex.view },
+                    { binding: 1, resource: gpuTex.sampler },
+                ],
+            });
+        }
+
+        // Reuse loadModel for interleaved vertex buffer + index handling
+        const handle = this.loadModel({ positions, normals, uvs });
+
+        // Override hasTexture and bind group on the stored model
+        const model = this.models[handle.id];
+        model.hasTexture = hasTexture;
+        model.textureBindGroup = textureBindGroup;
+
+        return handle;
     }
 
     /**
@@ -2042,20 +2125,16 @@ export class WebGPU3DRenderer extends Base3DRenderer {
 
         if (count > 0) {
             if (this.animComputeKernel) {
-                // Write uniforms (offsets are static, instanceCount changes per frame)
+                // GPU compute path
                 this.animComputeKernel.write('uniforms', {
                     instanceCount: count,
                     clipTableOffset: this.animClipTableOffset,
                     channelTableOffset: this.animChannelTableOffset,
                     jointLookupOffset: this.animJointLookupOffset,
                 });
-
-                // Write instance states via raw buffer (TypeGPU write expects full array)
                 const instBuf = this.animComputeKernel.getBuffer('instances');
                 const rawInstBuf = this.root.unwrap(instBuf) as GPUBuffer;
                 this.device.queue.writeBuffer(rawInstBuf, 0, this.gpuInstData.buffer, 0, count * 32);
-
-                // Dispatch
                 this.animComputeKernel.dispatch(count);
             } else {
                 // CPU fallback

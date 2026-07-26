@@ -8,6 +8,7 @@
  */
 import { tgpu, d, std } from '../shaders/typegpu';
 import { DynamicSprite, StaticSprite, SpriteUniforms } from '../core/types';
+import { attachShaderMetadata } from '../shaders/runtime-transpile';
 
 // --- Bind group layouts ---
 
@@ -36,18 +37,7 @@ export function createSpriteVertex(
     spriteLayout: SpriteDataLayout,
     _textureLayout: SpriteTextureLayout,
 ) {
-    return tgpu.vertexFn({
-        in: {
-            vertexIndex: d.builtin.vertexIndex,
-            instanceIndex: d.builtin.instanceIndex,
-        },
-        out: {
-            pos: d.builtin.position,
-            vUv: d.vec2f,
-            vTint: d.vec4f,
-            vOpacity: d.f32,
-        },
-    })(function(input) {
+    const fn = function(input: any) {
         const vertexIndex = input.vertexIndex;
         const instanceIndex = input.instanceIndex;
 
@@ -65,37 +55,7 @@ export function createSpriteVertex(
         const rotation = std.mix(dyn.prevRotation, dyn.currRotation, alpha);
 
         // Generate quad from vertexIndex (6 vertices, 2 triangles)
-        // Vertices: 0=BL, 1=BR, 2=TR, 3=BL, 4=TR, 5=TL
-        // Use step() to produce f32 0.0/1.0 instead of select() which returns i32
-        const vi = std.add(std.mul(vertexIndex, 1.0), 0.0); // cast to f32
-
-        // isRight: vertices 1, 4, 5 → use step tricks
-        // isTop: vertices 2, 3, 5
-        // Simpler: use a lookup via step/abs math
-        // For a 6-vertex quad, encode corners as a float lookup
-        // v0(-0.5,-0.5) v1(0.5,-0.5) v2(0.5,0.5) v3(-0.5,-0.5) v4(0.5,0.5) v5(-0.5,0.5)
-        // x: [-0.5, 0.5, 0.5, -0.5, 0.5, -0.5]
-        // y: [-0.5, -0.5, 0.5, -0.5, 0.5, 0.5]
-        // rightF: [0, 1, 1, 0, 1, 0]
-        // topF:   [0, 0, 1, 0, 1, 1]
-
-        // Bit trick: for indices 0-5, isRight = (index==1)||(index==2)||(index==4)
-        // Using step: rightF = step(0.5, index) * step(index, 2.5) + step(3.5, index) * step(index, 4.5)
-        // Simpler approach: just use vertexIndex % 3 and vertexIndex / 3 patterns
-
-        // Triangle 0 (indices 0,1,2): BL, BR, TR
-        // Triangle 1 (indices 3,4,5): BL, TR, TL
-        // For each triangle, local index = vertexIndex % 3
-        // tri0: localIdx 0=BL, 1=BR, 2=TR
-        // tri1: localIdx 0=BL, 1=TR, 2=TL
-
-        // rightF for tri0: step(0.5, localIdx) → 1 for idx 1,2
-        // rightF for tri1: step(0.5, localIdx) * step(localIdx, 1.5) → 1 for idx 1 only
-        // topF for tri0: step(1.5, localIdx) → 1 for idx 2 only
-        // topF for tri1: step(0.5, localIdx) → 1 for idx 1,2
-
-        // Actually this is getting complex. Let me use the simplest f32-safe approach:
-        // Precompute x,y,u,v per vertex using step chains
+        const vi = d.f32(vertexIndex); // explicit u32 → f32
 
         // rightF: 1.0 for vertices 1,2,4
         const r1 = std.step(0.5, vi) * std.step(vi, 1.5);
@@ -103,9 +63,7 @@ export function createSpriteVertex(
         const r4 = std.step(3.5, vi) * std.step(vi, 4.5);
         const rightF = std.clamp(std.add(std.add(r1, r2), r4), 0.0, 1.0);
 
-        // topF: 1.0 for vertices 2,3,5  wait no — for our quad:
-        // v0=BL v1=BR v2=TR v3=BL v4=TR v5=TL
-        // topF: [0, 0, 1, 0, 1, 1] → vertices 2,4,5
+        // topF: 1.0 for vertices 2,4,5
         const t2 = std.step(1.5, vi) * std.step(vi, 2.5);
         const t4 = std.step(3.5, vi) * std.step(vi, 4.5);
         const t5 = std.step(4.5, vi) * std.step(vi, 5.5);
@@ -118,7 +76,7 @@ export function createSpriteVertex(
         const scaledX = std.mul(quadX, stat.scaleX);
         const scaledY = std.mul(quadY, stat.scaleY);
 
-        // Flip: step + math to stay in f32
+        // Flip
         const flipXGt = std.step(0.5, stat.flipX);
         const fxMul = std.sub(1.0, std.mul(2.0, flipXGt));
         const flipYGt = std.step(0.5, stat.flipY);
@@ -146,21 +104,27 @@ export function createSpriteVertex(
             vTint: d.vec4f(stat.tintR, stat.tintG, stat.tintB, stat.tintA),
             vOpacity: stat.opacity,
         };
-    });
+    };
+    attachShaderMetadata(fn, () => ({ d, std, spriteLayout }), true, { d, std });
+    return tgpu.vertexFn({
+        in: {
+            vertexIndex: d.builtin.vertexIndex,
+            instanceIndex: d.builtin.instanceIndex,
+        },
+        out: {
+            pos: d.builtin.position,
+            vUv: d.vec2f,
+            vTint: d.vec4f,
+            vOpacity: d.f32,
+        },
+    })(fn);
 }
 
 export function createSpriteFragment(
     _spriteLayout: SpriteDataLayout,
     textureLayout: SpriteTextureLayout,
 ) {
-    return tgpu.fragmentFn({
-        in: {
-            vUv: d.vec2f,
-            vTint: d.vec4f,
-            vOpacity: d.f32,
-        },
-        out: d.vec4f,
-    })(function(input) {
+    const fn = function(input: any) {
         const texColor = std.textureSample(
             textureLayout.$.spriteTex,
             textureLayout.$.spriteSampler,
@@ -168,5 +132,14 @@ export function createSpriteFragment(
         );
         const tinted = std.mul(texColor, input.vTint);
         return d.vec4f(tinted.x, tinted.y, tinted.z, std.mul(tinted.w, input.vOpacity));
-    });
+    };
+    attachShaderMetadata(fn, () => ({ d, std, textureLayout }), true, { d, std });
+    return tgpu.fragmentFn({
+        in: {
+            vUv: d.vec2f,
+            vTint: d.vec4f,
+            vOpacity: d.f32,
+        },
+        out: d.vec4f,
+    })(fn);
 }
