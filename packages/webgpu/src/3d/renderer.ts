@@ -163,6 +163,7 @@ const prefabHandles = new WeakMap<Prefab3D, ModelHandle | GltfModel>();
 
 /** True iff value is a Prefab3D (returned from `bucket.get(...)`). */
 function isPrefab3D(value: ModelHandle | GltfModel | Prefab3D | string): value is Prefab3D {
+    if (typeof value === 'string' || value === undefined) return false;
     const t = (value as Prefab3D).type;
     return t === 'gltf' || t === 'grid' || t === 'cube' || t === 'composite' || t === 'plane';
 }
@@ -245,26 +246,14 @@ type PrefabsIdsOf<A> =
     A extends AssetBucket<any, any, infer PrefabSpecs extends Record<string, Prefab3DSpec>>
         ? keyof PrefabSpecs
         : string;
-/** Accepts known IDs with autocomplete, or any string at runtime. */
 type StringOr<T extends string> = T | (string & {});
 
 interface MeshInstance<A extends AssetBucket<any, any, any>> {
-  /**
-   * The model to instance. Either a renderer-internal handle (from `loadGltf`,
-   * `loadModel`, `createGrid`) or a prefab fetched from a `PrefabBucket3D` —
-   * `bucket.get('my-id')`.
-   */
     model: StringOr<PrefabsIdsOf<A>> | ModelHandle | GltfModel | Prefab3D;
-
-    /**
-     * Per-instance texture. When provided, overrides the model's default texture
-     * bind group. The texture must have been uploaded to the renderer via the
-     * asset bucket's texture bucket before calling addInstance.
-     */
     texture?: StringOr<TextureIdsOf<A>> | TexturePrefab;
 }
 
-export interface MeshInstanceOptions<A extends AssetBucket<any, any, any>> extends MeshInstance<A> {
+export interface MeshInstanceOptions<A extends AssetBucket<any, any, any> = AssetBucket<any, any, any>> extends MeshInstance<A> {
     /** World position. Defaults to `[0, 0, 0]`. */
     position?: readonly [x: number, y: number, z: number];
     /** Euler rotation in radians. Defaults to `[0, 0, 0]`. */
@@ -370,7 +359,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
     }[] = [];
 
     // GPU textures uploaded from TexturePrefab references, keyed by prefab id.
-    private gpuTextures: Map<string, { view: GPUTextureView; sampler: GPUSampler }> = new Map();
+    // Includes a pre-created bind group for the textured pipeline (binding 1).
+    private gpuTextures: Map<string, { view: GPUTextureView; sampler: GPUSampler; bindGroup: GPUBindGroup }> = new Map();
     private nextModelId = 0;
 
     // Skinned model data
@@ -803,7 +793,14 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             minFilter: 'linear',
             mipmapFilter: 'linear',
         });
-        this.gpuTextures.set(prefab.id, { view, sampler });
+        const bindGroup = this.device.createBindGroup({
+            layout: this.rawTexturedPipeline.getBindGroupLayout(1),
+            entries: [
+                { binding: 0, resource: view },
+                { binding: 1, resource: sampler },
+            ],
+        });
+        this.gpuTextures.set(prefab.id, { view, sampler, bindGroup });
     }
 
     private setupResizeObserver(): void {
@@ -1056,14 +1053,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         let textureBindGroup: GPUBindGroup | null = null;
 
         if (hasTexture && textureId) {
-            const gpuTex = this.gpuTextures.get(textureId)!;
-            textureBindGroup = this.device.createBindGroup({
-                layout: this.rawTexturedPipeline.getBindGroupLayout(1),
-                entries: [
-                    { binding: 0, resource: gpuTex.view },
-                    { binding: 1, resource: gpuTex.sampler },
-                ],
-            });
+            textureBindGroup = this.gpuTextures.get(textureId)!.bindGroup;
         }
 
         // Reuse loadModel for interleaved vertex buffer + index handling
@@ -1467,24 +1457,29 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
      * with another instance (e.g., when spawning all parts of a character).
      */
     addInstance(opts: MeshInstanceOptions<A>): InstanceHandle {
+        // First-class the model to a simpler union type so narrowing works.
+        const rawModel: ModelHandle | GltfModel | Prefab3D | string = opts.model as any;
+
         // Resolve string model ID to a Prefab3D via the asset bucket.
         let prefab: Prefab3D | undefined;
-        if (typeof opts.model === 'string') {
-            prefab = this._prefabs?.get(opts.model) as unknown as Prefab3D | undefined;
-            if (!prefab) throw new Error(`addInstance: prefab '${prefab}' not found`);
+        if (typeof rawModel === 'string') {
+            prefab = this._prefabs?.get(rawModel) as unknown as Prefab3D | undefined;
+            if (!prefab) throw new Error(`addInstance: prefab '${rawModel}' not found`);
             opts = { ...opts, model: prefab };
+        } else if (isPrefab3D(rawModel)) {
+            prefab = rawModel;
         }
 
-        const userPrefabId = isPrefab3D(prefab) ? prefab.id : null;
+        const userPrefabId = prefab ? prefab.id : null;
 
         // Composite prefab: spawn each part with its baked offset composed
         // onto the instance transform.
-        if (isPrefab3D(prefab) && prefab.type === 'composite') {
+        if (prefab?.type === 'composite') {
             return this.addCompositeInstance(opts, prefab);
         }
 
         // Resolve prefab -> renderer handle if needed.
-        const resolved = isPrefab3D(prefab) ? resolvePrefabHandle(prefab) : opts.model;
+        const resolved = prefab ? resolvePrefabHandle(prefab) : opts.model;
 
         // GltfModel: spawn all parts as a linked group
         if ('parts' in (resolved as ModelHandle | GltfModel)) {
@@ -1606,19 +1601,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         this.instanceHandles[slot] = handle;
 
         // Per-instance texture override (string ID or TexturePrefab)
+        // Reuses the bind group cached in gpuTextures — created once per texture.
         if (opts.texture) {
             const texId = typeof opts.texture === 'string' ? opts.texture : (opts.texture as TexturePrefab).id;
             const gpuTex = this.gpuTextures.get(texId);
-            if (gpuTex) {
-                const bindGroup = this.device.createBindGroup({
-                    layout: this.rawTexturedPipeline.getBindGroupLayout(1),
-                    entries: [
-                        { binding: 0, resource: gpuTex.view },
-                        { binding: 1, resource: gpuTex.sampler },
-                    ],
-                });
-                this.instanceTextureBGs.set(id, bindGroup);
-            }
+            if (gpuTex) this.instanceTextureBGs.set(id, gpuTex.bindGroup);
         }
 
         return handle;
@@ -2588,71 +2575,22 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
                 continue;
             }
 
-            // Textured — check for per-instance texture overrides
-            let hasCustom = false;
+            // Textured — per-instance bind group (custom texture override or default)
+            pass.setVertexBuffer(0, model.rawVertexBuffer);
+            if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
             for (let i = 0; i < batch.count; i++) {
                 const slot = this.slotIndexData[batch.offset + i];
                 const handle = this.instanceHandles[slot];
-                if (handle && this.instanceTextureBGs.has(handle.id)) {
-                    hasCustom = true;
-                    break;
+                const customBG = handle ? this.instanceTextureBGs.get(handle.id) : undefined;
+                if (customBG) {
+                    pass.setBindGroup(1, customBG);
+                } else if (model.textureBindGroup) {
+                    pass.setBindGroup(1, model.textureBindGroup);
                 }
-            }
-
-            if (!hasCustom) {
-                // No per-instance overrides — batch draw with model's default texture
-                if (model.textureBindGroup) pass.setBindGroup(1, model.textureBindGroup);
-                pass.setVertexBuffer(0, model.rawVertexBuffer);
                 if (model.rawIndexBuffer) {
-                    pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                    pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
+                    pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
                 } else {
-                    pass.draw(model.vertexCount, batch.count, 0, batch.offset);
-                }
-            } else {
-                // Per-instance — draw each custom-textured instance individually;
-                // batch the rest under the model's default texture.
-                pass.setVertexBuffer(0, model.rawVertexBuffer);
-                if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-
-                // First pass: draw default-textured instances as a mini-batch
-                let defaultStart = -1, defaultCount = 0;
-                for (let i = 0; i < batch.count; i++) {
-                    const slot = this.slotIndexData[batch.offset + i];
-                    const handle = this.instanceHandles[slot];
-                    const custom = handle && this.instanceTextureBGs.has(handle.id);
-
-                    if (!custom) {
-                        if (defaultStart === -1) defaultStart = batch.offset + i;
-                        defaultCount++;
-                    } else {
-                        // Flush default batch before drawing custom instance
-                        if (defaultCount > 0) {
-                            if (model.textureBindGroup) pass.setBindGroup(1, model.textureBindGroup);
-                            if (model.rawIndexBuffer) {
-                                pass.drawIndexed(model.indexCount, defaultCount, 0, 0, defaultStart);
-                            } else {
-                                pass.draw(model.vertexCount, defaultCount, 0, defaultStart);
-                            }
-                            defaultStart = -1; defaultCount = 0;
-                        }
-                        // Draw custom-textured instance individually
-                        pass.setBindGroup(1, this.instanceTextureBGs.get(handle!.id)!);
-                        if (model.rawIndexBuffer) {
-                            pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
-                        } else {
-                            pass.draw(model.vertexCount, 1, 0, batch.offset + i);
-                        }
-                    }
-                }
-                // Flush remaining default batch
-                if (defaultCount > 0) {
-                    if (model.textureBindGroup) pass.setBindGroup(1, model.textureBindGroup);
-                    if (model.rawIndexBuffer) {
-                        pass.drawIndexed(model.indexCount, defaultCount, 0, 0, defaultStart);
-                    } else {
-                        pass.draw(model.vertexCount, defaultCount, 0, defaultStart);
-                    }
+                    pass.draw(model.vertexCount, 1, 0, batch.offset + i);
                 }
             }
         }
