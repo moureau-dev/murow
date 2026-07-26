@@ -1,10 +1,9 @@
 import { defineConfig } from 'vite';
 import path from 'path';
 import basicSsl from '@vitejs/plugin-basic-ssl';
-import typegpu from 'unplugin-typegpu/vite';
 
 export default defineConfig({
-    plugins: [basicSsl(), typegpu({})],
+    plugins: [basicSsl()],
     resolve: {
         alias: {
             "murow/webgpu": path.resolve(__dirname, "../../packages/webgpu/src/index.ts"),

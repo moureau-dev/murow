@@ -6,7 +6,7 @@
         "build:murow:js": "cd packages/murow && npm run build:js",
         "build:webgpu:js": "cd packages/webgpu && npm run build:js",
         "build:netcode:js": "cd packages/netcode && npm run build:js",
-        "build:js": "concurrently --kill-others-on-fail \"npm run build:murow:js\" \"npm run build:webgpu:js\" \"npm run build:netcode:js\"",
+        "build:js": "npm run build:murow:js && concurrently --kill-others-on-fail \"npm run build:webgpu:js\" \"npm run build:netcode:js\"",
         "test:murow": "cd packages/murow && npm run test",
         "test:webgpu": "cd packages/webgpu && npm run test",
         "test:netcode": "cd packages/netcode && npm run test",
