@@ -144,6 +144,7 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             type: 'cube',
             id: spec.id,
             size: spec.size ?? 1,
+            texture: spec.texture,
             metadata: (spec.metadata ?? {}) as any,
             hitbox: spec.hitbox,
         };

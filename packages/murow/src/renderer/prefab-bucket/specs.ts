@@ -69,6 +69,8 @@ export interface CubeSpec {
     readonly id: string;
     /** Edge length. Defaults to 1. */
     readonly size?: number;
+    /** Texture id from the asset bucket's texture bucket. */
+    readonly texture?: string;
     readonly metadata?: Record<string, unknown>;
     readonly hitbox?: string;
 }
@@ -215,6 +217,7 @@ export interface CubePrefab<S extends CubeSpec = CubeSpec> {
     readonly type: 'cube';
     readonly id: S['id'];
     readonly size: number;
+    readonly texture?: string;
     readonly metadata: MetadataOf<S>;
     readonly hitbox?: string;
 }

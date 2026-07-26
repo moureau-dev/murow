@@ -27,6 +27,7 @@
  */
 
 import type {
+    CubeSpec,
     PlaneSpec,
     Prefab2DSpec,
     Prefab3DSpec,
@@ -43,11 +44,11 @@ type SpecForMode<M extends '2d' | '3d'> =
 
 /** A spec from the union whose `texture` field is narrowed to known texture ids. */
 type TextureAwareSpec<TexId extends string> =
-    Omit<PlaneSpec, 'texture'> & { readonly texture?: StringOr<TexId> };
+    (Omit<PlaneSpec, 'texture'> & { readonly texture?: StringOr<TexId> })
+    | (Omit<CubeSpec, 'texture'> & { readonly texture?: StringOr<TexId> });
 
-/** The full prefab spec union with relevant specs narrowed by `TexId`. */
 type PrefabSpecWithTexIds<M extends '2d' | '3d', TexId extends string> =
-    Exclude<SpecForMode<M>, PlaneSpec> | TextureAwareSpec<TexId>;
+    Exclude<SpecForMode<M>, PlaneSpec | CubeSpec> | TextureAwareSpec<TexId>;
 
 /** Callable accessor signature for `asset.textures`. */
 type TexturesCallable<TexSpecs extends Record<string, TextureSpec>, M extends '2d' | '3d', PrefabSpecs extends Record<string, SpecForMode<M>>> = {
