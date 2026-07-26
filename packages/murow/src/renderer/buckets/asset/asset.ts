@@ -27,11 +27,14 @@
  */
 
 import type {
+    ConeSpec,
     CubeSpec,
+    CylinderSpec,
     MeshSpec,
     PlaneSpec,
     Prefab2DSpec,
     Prefab3DSpec,
+    SphereSpec,
     TextureSpec,
 } from '../../prefab-bucket/specs';
 import { PrefabBucket } from '../prefab/prefab';
@@ -47,10 +50,13 @@ type SpecForMode<M extends '2d' | '3d'> =
 type TextureAwareSpec<TexId extends string> =
     (Omit<PlaneSpec, 'texture'> & { readonly texture?: StringOr<TexId> })
     | (Omit<CubeSpec, 'texture'> & { readonly texture?: StringOr<TexId> })
+    | (Omit<SphereSpec, 'texture'> & { readonly texture?: StringOr<TexId> })
+    | (Omit<CylinderSpec, 'texture'> & { readonly texture?: StringOr<TexId> })
+    | (Omit<ConeSpec, 'texture'> & { readonly texture?: StringOr<TexId> })
     | (Omit<MeshSpec, 'texture'> & { readonly texture?: StringOr<TexId> });
 
 type PrefabSpecWithTexIds<M extends '2d' | '3d', TexId extends string> =
-    Exclude<SpecForMode<M>, PlaneSpec | CubeSpec | MeshSpec> | TextureAwareSpec<TexId>;
+    Exclude<SpecForMode<M>, PlaneSpec | CubeSpec | SphereSpec | CylinderSpec | ConeSpec | MeshSpec> | TextureAwareSpec<TexId>;
 
 /** Callable accessor signature for `asset.textures`. */
 type TexturesCallable<TexSpecs extends Record<string, TextureSpec>, M extends '2d' | '3d', PrefabSpecs extends Record<string, SpecForMode<M>>> = {

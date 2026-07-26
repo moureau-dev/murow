@@ -57,9 +57,12 @@ import {
     type PrefabBucket3D,
     type Prefab3D,
     type CompositePrefab,
+    type ConePrefab,
     type CubePrefab,
+    type CylinderPrefab,
     type MeshPrefab,
     type PlanePrefab,
+    type SpherePrefab,
     type TexturePrefab,
     type SkeletalAnimState,
     type PlayOptions,
@@ -81,7 +84,15 @@ import { HitboxDebugRenderer } from './hitbox';
 import type { Ray3D } from 'murow/core/ray';
 import type { CubeUvMode, TextureSpec, Prefab3DSpec } from 'murow/renderer';
 import type { ComputeKernel } from '../compute/compute-builder';
-import { createCube as builtInCube, createPlane as builtInPlane, createGrid as builtInGrid, deinterleaveGeometry } from '../geometry/built-in';
+import {
+    createCube as builtInCube,
+    createPlane as builtInPlane,
+    createGrid as builtInGrid,
+    createSphere as builtInSphere,
+    createCylinder as builtInCylinder,
+    createCone as builtInCone,
+    deinterleaveGeometry,
+} from '../geometry/built-in';
 
 // --- Dynamic offset constants ---
 const DYN_PREV_PX = 0, DYN_PREV_PY = 1, DYN_PREV_PZ = 2;
@@ -821,14 +832,19 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
                     textureId: plane.texture,
                 });
                 prefabHandles.set(prefab, model);
-            } else if (prefab.type === 'composite') {
-                // Composites are resolved at addInstance time, not uploaded as GPU resources.
-                continue;
-            }
-
-            // MeshPrefab — bypass stale discriminant narrowing
-            // (LS cache may not have updated Prefab3D union yet).
-            if ((prefab as { type: string }).type === 'mesh') {
+            } else if (prefab.type === 'sphere') {
+                const sphere = prefab as unknown as SpherePrefab;
+                const model = this.createSphere({ segments: sphere.segments, textureId: (sphere as any).texture });
+                prefabHandles.set(prefab, model);
+            } else if (prefab.type === 'cylinder') {
+                const cyl = prefab as unknown as CylinderPrefab;
+                const model = this.createCylinder({ segments: cyl.segments, textureId: (cyl as any).texture });
+                prefabHandles.set(prefab, model);
+            } else if (prefab.type === 'cone') {
+                const cone = prefab as unknown as ConePrefab;
+                const model = this.createCone({ segments: cone.segments, textureId: (cone as any).texture });
+                prefabHandles.set(prefab, model);
+            } else if (prefab.type === 'mesh') {
                 const meshPrefab = prefab as unknown as MeshPrefab;
                 const model = this.createMesh({
                     positions: meshPrefab.positions,
@@ -1051,6 +1067,24 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         const { positions, normals, uvs } = deinterleaveGeometry(geometry);
         return this.createMesh({ positions, normals, uvs, textureId: opts.textureId });
     }
+    createSphere(opts: { segments?: number; textureId?: string } = {}): ModelHandle {
+        const geometry = builtInSphere(opts.segments ?? 16, opts.segments ?? 16);
+        const { positions, normals, uvs } = deinterleaveGeometry(geometry);
+        return this.createMesh({ positions, normals, uvs, textureId: opts.textureId });
+    }
+
+    createCylinder(opts: { segments?: number; textureId?: string } = {}): ModelHandle {
+        const geometry = builtInCylinder(opts.segments ?? 32);
+        const { positions, normals, uvs } = deinterleaveGeometry(geometry);
+        return this.createMesh({ positions, normals, uvs, textureId: opts.textureId });
+    }
+
+    createCone(opts: { segments?: number; textureId?: string } = {}): ModelHandle {
+        const geometry = builtInCone(opts.segments ?? 32);
+        const { positions, normals, uvs } = deinterleaveGeometry(geometry);
+        return this.createMesh({ positions, normals, uvs, textureId: opts.textureId });
+    }
+
     /**
      * Create a textured 3D quad (plane) mesh centered at the origin on the XY plane.
      * Normals face +Z. Width and height default to 1.

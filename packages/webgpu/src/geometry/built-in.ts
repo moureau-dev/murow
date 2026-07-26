@@ -428,12 +428,12 @@ export function createCone(segments: number = 32): GeometryData {
  * position / normal / uv arrays. Useful when bridging built-in geometry
  * into renderers that expect flat arrays instead of the interleaved format.
  */
-export function deinterleaveGeometry(geo: GeometryData): {
+export function deinterleaveGeometry(geometry: GeometryData): {
     positions: Float32Array;
     normals: Float32Array;
     uvs: Float32Array;
 } {
-    const { vertices, vertexCount, floatsPerVertex } = geo;
+    const { vertices, vertexCount, floatsPerVertex } = geometry;
     const positions = new Float32Array(vertexCount * 3);
     const normals = new Float32Array(vertexCount * 3);
     const uvs = new Float32Array(vertexCount * 2);

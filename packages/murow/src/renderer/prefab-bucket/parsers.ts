@@ -172,6 +172,39 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             hitbox: spec.hitbox,
         };
     },
+    sphere: (spec) => {
+        if (spec.type !== 'sphere') throw new Error('sphere parser given non-sphere spec');
+        return {
+            type: 'sphere',
+            id: spec.id,
+            segments: spec.segments ?? 16,
+            texture: spec.texture,
+            metadata: (spec.metadata ?? {}) as any,
+            hitbox: spec.hitbox,
+        };
+    },
+    cylinder: (spec) => {
+        if (spec.type !== 'cylinder') throw new Error('cylinder parser given non-cylinder spec');
+        return {
+            type: 'cylinder',
+            id: spec.id,
+            segments: spec.segments ?? 32,
+            texture: spec.texture,
+            metadata: (spec.metadata ?? {}) as any,
+            hitbox: spec.hitbox,
+        };
+    },
+    cone: (spec) => {
+        if (spec.type !== 'cone') throw new Error('cone parser given non-cone spec');
+        return {
+            type: 'cone',
+            id: spec.id,
+            segments: spec.segments ?? 32,
+            texture: spec.texture,
+            metadata: (spec.metadata ?? {}) as any,
+            hitbox: spec.hitbox,
+        };
+    },
     mesh: (spec) => {
         if (spec.type !== 'mesh') throw new Error('mesh parser given non-mesh spec');
         return {

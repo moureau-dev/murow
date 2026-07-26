@@ -132,6 +132,33 @@ export interface PlaneSpec {
  * Mesh prefab — inline geometry data. Useful for programmatically generated
  * meshes or models too simple to warrant a full glTF file.
  */
+export interface SphereSpec {
+    readonly type: 'sphere';
+    readonly id: string;
+    readonly segments?: number;
+    readonly texture?: string;
+    readonly metadata?: Record<string, unknown>;
+    readonly hitbox?: string;
+}
+
+export interface CylinderSpec {
+    readonly type: 'cylinder';
+    readonly id: string;
+    readonly segments?: number;
+    readonly texture?: string;
+    readonly metadata?: Record<string, unknown>;
+    readonly hitbox?: string;
+}
+
+export interface ConeSpec {
+    readonly type: 'cone';
+    readonly id: string;
+    readonly segments?: number;
+    readonly texture?: string;
+    readonly metadata?: Record<string, unknown>;
+    readonly hitbox?: string;
+}
+
 export interface MeshSpec {
     readonly type: 'mesh';
     readonly id: string;
@@ -145,7 +172,7 @@ export interface MeshSpec {
     readonly hitbox?: string;
 }
 
-export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec | CompositeSpec | PlaneSpec | MeshSpec;
+export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec | CompositeSpec | PlaneSpec | SphereSpec | CylinderSpec | ConeSpec | MeshSpec;
 
 /**
  * Map a spec's `animations` tuple to a record-keyed-by-name. Used to type
@@ -285,6 +312,33 @@ export interface TexturePrefab<S extends TextureSpec = TextureSpec> {
     readonly hitbox?: string;
 }
 
+export interface SpherePrefab<S extends SphereSpec = SphereSpec> {
+    readonly type: 'sphere';
+    readonly id: S['id'];
+    readonly segments: number;
+    readonly texture?: string;
+    readonly metadata: MetadataOf<S>;
+    readonly hitbox?: string;
+}
+
+export interface CylinderPrefab<S extends CylinderSpec = CylinderSpec> {
+    readonly type: 'cylinder';
+    readonly id: S['id'];
+    readonly segments: number;
+    readonly texture?: string;
+    readonly metadata: MetadataOf<S>;
+    readonly hitbox?: string;
+}
+
+export interface ConePrefab<S extends ConeSpec = ConeSpec> {
+    readonly type: 'cone';
+    readonly id: S['id'];
+    readonly segments: number;
+    readonly texture?: string;
+    readonly metadata: MetadataOf<S>;
+    readonly hitbox?: string;
+}
+
 export interface PlanePrefab<S extends PlaneSpec = PlaneSpec> {
     readonly type: 'plane';
     readonly id: S['id'];
@@ -295,7 +349,7 @@ export interface PlanePrefab<S extends PlaneSpec = PlaneSpec> {
     readonly hitbox?: string;
 }
 
-export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab | MeshPrefab;
+export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab | SpherePrefab | CylinderPrefab | ConePrefab | MeshPrefab;
 
 // ============================================================================
 // 2D
@@ -344,6 +398,9 @@ export type PrefabFor<S> =
     S extends CubeSpec ? CubePrefab<S> :
     S extends CompositeSpec ? CompositePrefab<S> :
     S extends PlaneSpec ? PlanePrefab<S> :
+    S extends SphereSpec ? SpherePrefab<S> :
+    S extends CylinderSpec ? CylinderPrefab<S> :
+    S extends ConeSpec ? ConePrefab<S> :
     S extends MeshSpec ? MeshPrefab<S> :
     S extends TextureSpec ? TexturePrefab<S> :
     S extends SpritesheetSpec ? SpritesheetPrefab<S> :
