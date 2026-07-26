@@ -875,15 +875,19 @@ export class GeometryBuilder<
             // to their runtime values. Called lazily by TypeGPU during pipeline resolution
             // (inside GPU context, so layout.$ is valid).
             const resolveExternals = (knownExternals: Record<string, unknown>) => () => {
-                // Provide layout accessors + typegpu data module
-                return {
-                    dynamic: layout.$.dynamic,
-                    statics: layout.$.statics,
-                    uniforms: layout.$.uniforms,
-                    d,
-                    std,
-                    ...knownExternals,
-                };
+                // Try layout accessors first (works inside shader context).
+                // Fall back to placeholders when called eagerly (e.g. for minification detection).
+                const base: Record<string, unknown> = { d, std, ...knownExternals };
+                for (const key of ['dynamic', 'statics', 'uniforms'] as const) {
+                    try {
+                        base[key] = (layout.$ as Record<string, unknown>)[key];
+                    } catch {
+                        // Outside shader context — placeholder is fine, eager call only
+                        // checks for bundler-renamed names, never accesses buffer values.
+                        base[key] = {};
+                    }
+                }
+                return base;
             };
 
             // Attach runtime metadata — parses function source with Acorn + tinyest-for-wgsl.

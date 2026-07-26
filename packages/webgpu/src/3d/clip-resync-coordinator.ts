@@ -31,10 +31,9 @@ export class GltfClipResyncCoordinator {
         this._pending.clear();
     }
 
-    /** Unsubscribe from the bucket and reset its animation clip sets. */
+    /** Unsubscribe from the bucket and clear internal state. */
     dispose(): void {
         this.bucket.events.clear('clips-changed');
-        this.bucket.resetAnimations();
         this.skinIndexByPrefabId.clear();
         this._pending.clear();
     }

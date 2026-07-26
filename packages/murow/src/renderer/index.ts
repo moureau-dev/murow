@@ -25,5 +25,14 @@ export * from "./prefab-bucket/specs";
 export { PrefabBucket } from "./prefab-bucket/concrete";
 export type { PrefabBucket2D, PrefabBucket3D } from "./prefab-bucket/concrete";
 
+// Buckets — typed registries (Bucket, PrefabBucket, TextureBucket, AssetBucket)
+export {
+    Bucket,
+    AssetBucket,
+    TextureBucket,
+    type BucketSpecBase,
+    type BucketPrefabBase,
+} from "./buckets";
+
 // Raycast — abstract pick / ray-test contract
 export * from "./raycast";

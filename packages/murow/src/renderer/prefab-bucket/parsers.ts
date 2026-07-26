@@ -158,6 +158,18 @@ export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
             hitbox: spec.hitbox,
         };
     },
+    plane: (spec) => {
+        if (spec.type !== 'plane') throw new Error('plane parser given non-plane spec');
+        return {
+            type: 'plane',
+            id: spec.id,
+            texture: spec.texture,
+            width: spec.width ?? 1,
+            height: spec.height ?? 1,
+            metadata: (spec.metadata ?? {}) as any,
+            hitbox: spec.hitbox,
+        };
+    }
 };
 
 export const parsers2d: PrefabParserMap<Prefab2DSpec, Prefab2D> = {
