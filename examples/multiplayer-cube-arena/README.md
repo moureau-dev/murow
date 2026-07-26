@@ -10,7 +10,7 @@ the measured RTT. The camera orbits your cube in third person —
 purely local state, never networked.
 
 The game is 2D in logic (no jumping, no Y-axis movement) but rendered in
-3D using cube and grid prefabs from `PrefabBucket`.
+3D using cube and grid prefabs from `AssetBucket`.
 
 ## Run
 
