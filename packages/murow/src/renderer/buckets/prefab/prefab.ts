@@ -15,16 +15,16 @@
  */
 
 import { Bucket, type BucketBaseEvents, type BucketSpecBase } from '../bucket/bucket';
-import { parsers2d, parsers3d } from '../../prefab-bucket/parsers';
+import { parsers2d, parsers3d } from './utility/parsers';
 import { EventSystem } from '../../../core/events';
-import type { PrefabBucketEvents } from '../../prefab-bucket/index';
+import type { PrefabBucketEvents } from './utility/index';
 import type { HitboxLibrary } from '../../../core/hitbox/hitbox-library';
 import type {
     Prefab2D,
     Prefab2DSpec,
     Prefab3D,
     Prefab3DSpec,
-} from '../../prefab-bucket/specs';
+} from './utility/specs';
 
 // ——— Helpers ———
 

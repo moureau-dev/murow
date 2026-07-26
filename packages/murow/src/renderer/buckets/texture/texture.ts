@@ -16,7 +16,7 @@
  */
 
 import { Bucket } from '../bucket/bucket';
-import type { TexturePrefab, TextureSpec } from '../../prefab-bucket/specs';
+import type { TexturePrefab, TextureSpec } from '../prefab/utility/specs';
 
 const textureParser = async (spec: TextureSpec): Promise<TexturePrefab> => {
     const img = new Image();

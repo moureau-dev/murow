@@ -36,7 +36,7 @@ import type {
     Prefab3DSpec,
     SphereSpec,
     TextureSpec,
-} from '../../prefab-bucket/specs';
+} from '../prefab/utility/specs';
 import { PrefabBucket } from '../prefab/prefab';
 import { TextureBucket } from '../texture/texture';
 import { type StringOr } from '../bucket/bucket';

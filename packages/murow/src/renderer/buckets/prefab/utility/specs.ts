@@ -10,8 +10,8 @@
  * specific backends (e.g. `@murow/webgpu`).
  */
 
-import type { ParsedGltf } from '../gltf/parser';
-import type { ParsedSpritesheet } from '../spritesheet/parser';
+import type { ParsedGltf } from '../../../gltf/parser';
+import type { ParsedSpritesheet } from '../../../spritesheet/parser';
 
 /**
  * Extracts the spec's `metadata` literal type for the parsed prefab.

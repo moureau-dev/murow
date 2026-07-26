@@ -4,8 +4,8 @@
  */
 
 import type { PrefabParserMap } from './index';
-import { parseGltf } from '../gltf/parser';
-import { parseSpritesheet } from '../spritesheet/parser';
+import { parseGltf } from '../../../gltf/parser';
+import { parseSpritesheet } from '../../../spritesheet/parser';
 import type {
     Prefab2D,
     Prefab2DSpec,

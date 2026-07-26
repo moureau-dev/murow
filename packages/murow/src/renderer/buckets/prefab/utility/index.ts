@@ -15,7 +15,7 @@
  * to the specific prefab variant for that id (not just the union).
  */
 
-import { EventSystem } from '../../core/events';
+import { EventSystem } from '../../../../core/events';
 
 export type PrefabMode = '2d' | '3d';
 

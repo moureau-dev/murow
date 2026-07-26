@@ -1,7 +1,7 @@
 import { test, expect } from 'bun:test';
 import { PrefabBucket } from './concrete';
-import { Hitbox } from '../../core/hitbox/hitbox';
-import { HitboxLibrary } from '../../core/hitbox/hitbox-library';
+import { Hitbox } from '../../../../core/hitbox/hitbox';
+import { HitboxLibrary } from '../../../../core/hitbox/hitbox-library';
 
 test('hitboxes() registers the library on the bucket', () => {
     const lib = new HitboxLibrary('3d').add('humanoid', new Hitbox('3d').add('body', { shape: 'sphere', radius: 1 }));

@@ -20,10 +20,10 @@ export * from "./spritesheet/helpers";
 export * from "./spritesheet/parser";
 
 // PrefabBucket — generic base + concrete (2D/3D) subclass with prewired parsers
-export * from "./prefab-bucket";
-export * from "./prefab-bucket/specs";
-export { PrefabBucket } from "./prefab-bucket/concrete";
-export type { PrefabBucket2D, PrefabBucket3D } from "./prefab-bucket/concrete";
+export * from "./buckets/prefab/utility";
+export * from "./buckets/prefab/utility/specs";
+export { PrefabBucket } from "./buckets/prefab/utility/concrete";
+export type { PrefabBucket2D, PrefabBucket3D } from "./buckets/prefab/utility/concrete";
 
 // Buckets — typed registries (Bucket, PrefabBucket, TextureBucket, AssetBucket)
 export {

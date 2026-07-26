@@ -19,8 +19,8 @@
 
 import { BasePrefabBucket, type SpecWithHitbox, type StringOr } from './index';
 import { parsers2d, parsers3d } from './parsers';
-import { generateId } from '../../core/generate-id';
-import type { HitboxLibrary } from '../../core/hitbox/hitbox-library';
+import { generateId } from '../../../../core/generate-id';
+import type { HitboxLibrary } from '../../../../core/hitbox/hitbox-library';
 import type {
     CompositePrefab,
     PartOffset,
