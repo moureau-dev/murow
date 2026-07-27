@@ -273,7 +273,19 @@ type PrefabsIdsOf<A> =
 type StringOr<T extends string> = T | (string & {});
 
 interface MeshInstance<A extends AssetBucket<any, any, any>> {
-    model: StringOr<PrefabsIdsOf<A>> | ModelHandle | GltfModel | Prefab3D;
+    /**
+     * Prefab (ID or from bucket) or raw model handle to spawn. If a prefab, the renderer
+     * will look up the GPU handle for it and spawn all its parts. If a raw model handle, the
+     * renderer will spawn just that single part.
+     */
+    prefab: StringOr<PrefabsIdsOf<A>> | ModelHandle | GltfModel | Prefab3D;
+
+    /**
+     * Optional texture override. If a prefab, the renderer will look up the GPU handle for
+     * it and use that texture for all parts of the prefab. If a raw model handle, the
+     * renderer will use that texture for that single part. If omitted, the prefab's default
+     * texture is used.
+     */
     texture?: StringOr<TextureIdsOf<A>> | TexturePrefab;
 }
 
@@ -1487,14 +1499,14 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
      */
     addInstance(opts: MeshInstanceOptions<A>): InstanceHandle {
         // First-class the model to a simpler union type so narrowing works.
-        const rawModel: ModelHandle | GltfModel | Prefab3D | string = opts.model as any;
+        const rawModel: ModelHandle | GltfModel | Prefab3D | string = opts.prefab as any;
 
         // Resolve string model ID to a Prefab3D via the asset bucket.
         let prefab: Prefab3D | undefined;
         if (typeof rawModel === 'string') {
             prefab = this._prefabs?.get(rawModel) as unknown as Prefab3D | undefined;
             if (!prefab) throw new Error(`addInstance: prefab '${rawModel}' not found`);
-            opts = { ...opts, model: prefab };
+            opts = { ...opts, prefab: prefab };
         } else if (isPrefab3D(rawModel)) {
             prefab = rawModel;
         }
@@ -1508,7 +1520,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
         }
 
         // Resolve prefab -> renderer handle if needed.
-        const resolved = prefab ? resolvePrefabHandle(prefab) : opts.model;
+        const resolved = prefab ? resolvePrefabHandle(prefab) : opts.prefab;
 
         // GltfModel: spawn all parts as a linked group
         if ('parts' in (resolved as ModelHandle | GltfModel)) {
@@ -1764,7 +1776,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
             const partPrefab = bucket.get(part.partId) as unknown as Prefab3D;
             const partOpts: MeshInstanceOptions<A> = {
                 ...opts,
-                model: partPrefab,
+                prefab: partPrefab,
                 position: [basePos[0] + off.px, basePos[1] + off.py, basePos[2] + off.pz],
                 rotation: [baseRot[0] + off.rx, baseRot[1] + off.ry, baseRot[2] + off.rz],
             };
