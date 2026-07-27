@@ -44,7 +44,7 @@ const SECTIONS = [
     title: "WebGPU renderer (2D + 3D)",
     paragraphs: [
       "murow/webgpu is the reference backend, powered by TypeGPU. It handles GPU-side frame interpolation (your low tick-rate simulation looks smooth at 144 Hz), frustum culling, distance-based animation culling for crowds, sparse-batched draw calls, glTF skeletal animation with crossfade, and instance recycling: none of which you write yourself.",
-      "The engine itself is renderer-agnostic: the abstract renderer contracts, asset pipeline (PrefabBucket, glTF and spritesheet parsing, skeletal animation), and CPU hitbox/raycasting are pure CPU. Subclass the base renderer to target Three.js, Pixi, or anything else.",
+      "The engine itself is renderer-agnostic: the abstract renderer contracts, asset pipeline (AssetBucket, glTF and spritesheet parsing, skeletal animation), and CPU hitbox/raycasting are pure CPU. Subclass the base renderer to target Three.js, Pixi, or anything else.",
     ],
   },
   {
