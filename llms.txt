@@ -3081,30 +3081,13 @@ export class Arena<T extends DriverType = 'client'> {
 
 (Components can be grouped however you like — a `namespace Components { export const Position = ... }` reads well and gives `Object.values(Components)` straight to the `World` config.)
 
-### The client MUST be bundled with Vite + `unplugin-typegpu`
+### Build tooling: no special plugin required
 
-The WebGPU renderer authors shaders with TypeGPU, which needs a build-time transform to embed shader metadata. **Bun's bundler does not run it** — using `murow/webgpu` through `bun build` throws `Missing metadata for tgpu.fn` at runtime. So:
+The WebGPU renderer includes a **runtime transpiler** (`attachShaderMetadata`) that parses shader function source via `Function.toString()` and embeds the metadata TypeGPU needs — no build plugin necessary. This works in any bundler (Vite, esbuild, Webpack, Bun, even plain `<script type="module">` with an import map) and any framework (React, Vue, Svelte, Solid, vanilla HTML).
 
-- **Client → Vite** with the `unplugin-typegpu` plugin.
-- **Server → Bun directly** (`bun run server/index.ts`) — the server never imports the renderer, so it has no TypeGPU dependency.
+The old `unplugin-typegpu` Vite plugin is no longer required. The runtime transpiler is the default — just `import { WebGPU3DRenderer } from 'murow/webgpu'` and it works.
 
-```ts
-// vite.config.ts
-import { defineConfig } from 'vite';
-import typegpu from 'unplugin-typegpu/vite';
-
-export default defineConfig({
-  root: 'client',
-  plugins: [typegpu({})],                         // ← the part you cannot skip
-  build: { outDir: 'client/dist', target: ['chrome95', 'firefox92', 'safari15', 'es2022'] },
-  server: {
-    port: 5173,
-    proxy: { '/ws': { target: 'ws://localhost:3010', ws: true, changeOrigin: true } },  // dev: Vite page talks to Bun server
-  },
-});
-```
-
-`target` must allow top-level `await` (the example uses `await renderer.init()` at module top level). WebGPU already requires modern browsers, so this costs nothing.
+The server side (`bun run server/index.ts`) never imports the renderer, so it has no WebGPU dependency at all.
 
 ### One port for HTTP + WebSocket (server)
 
