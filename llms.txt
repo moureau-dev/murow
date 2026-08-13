@@ -21,6 +21,81 @@ Before writing anything, internalize these — they are the patterns agents wron
 - **Server is authority.** Handlers are server-only. Gameplay decisions (hits, awards) live in `defineHandlers`, never on the client.
 - The full, specific list is the "Common Mistakes" table near the end — consult it before finalizing code.
 
+## Architecture
+
+Murow is modular.
+
+The core runtime does not require a particular renderer. Rendering integrations are separate modules that plug into the core's abstract renderer contracts (`Base2DRenderer` / `Base3DRenderer`).
+
+You can use Murow with:
+- **Murow's WebGPU renderer** (`murow/webgpu`) — the reference backend: 2D/3D, GPU frame interpolation, glTF skinning
+- **Three.js** — via a custom `Base3DRenderer` backend
+- **PixiJS** — via a custom `Base2DRenderer` backend
+- **custom rendering systems** — the core is pure CPU and runs headless
+
+**Do not assume that `murow` implies use of `WebGPU3DRenderer`.** The ECS, game loop, input, asset pipeline, netcode, and server side are all renderer-independent and run without any GPU (servers, tests, simulation-only processes). Pick a renderer only when you actually draw — and if you draw with something other than WebGPU, subclass the matching `Base*Renderer` instead of reaching for a `WebGPU*Renderer`.
+
+## AI GENERATION RULES
+
+These are the rules LLMs most often get wrong. Internalize them before writing code.
+
+### Critical Murow conventions
+
+- Game input is provided by `GameLoop` tick events: `loop.events.on('tick', ({ input }) => ...)`.
+- Do not use DOM `addEventListener` for ordinary game keyboard/mouse input — the loop snapshots input and hands it to each tick.
+- `input.keys[code].down` = held; `.hit` = pressed during the current tick. Mouse buttons expose the same `.down` / `.hit`.
+- Assets are registered through `AssetBucket`; prefabs go through the `.prefabs()` callback — which MUST return the bucket.
+- After `await assets.load()`, consume registered prefabs via `assets.prefabs.get(id)` and pass them to `renderer.addInstance({ model: ... })` — the option key is `prefab`, NOT `model`.
+- Declare every reusable model as an `AssetBucket` prefab. `renderer.createCube()` / `createGrid()` / `loadModel()` / `loadGltf()` are one-off/debug conveniences — not the way to declare game models.
+- Do not invent a separate prefab loading/registration mechanism.
+- Simulation (movement, AI, input reads) belongs in `tick`; drawing belongs in `render`.
+- Use `pre-tick` + `renderer.storePreviousState()` before simulation when interpolation is desired; draw with `renderer.render(alpha)`.
+
+### Quick decision guide
+
+Building a simple browser game?
+→ `GameLoop` + `WebGPU3DRenderer`
+→ No ECS required — drive renderer instance handles directly
+→ No netcode
+→ Use GameLoop's built-in `input` (no manual listeners)
+→ 20–30 Hz simulation is recommended
+→ `storePreviousState()` + `render(alpha)` for interpolation
+
+Building multiplayer?
+→ `GameServer` / `GameClient` + `murow/netcode`
+→ ECS + `networked()` components
+→ `defineIntents` / `definePredictions` / `defineHandlers`
+→ Add `LagCompensation` for hitscan, `AoiGrid` for large worlds
+
+### IMPORTANT: Browser input
+
+When using `new GameLoop({ type: 'client' })`, DO NOT manually add `keydown`, `keyup`, `mousemove`, etc. listeners for normal game input.
+
+GameLoop automatically provides an `InputSnapshot` through:
+
+```ts
+loop.events.on('tick', ({ input }) => {
+  input.keys['KeyW']?.down;        // held this tick
+  input.keys['Space']?.hit;        // pressed this tick (edge)
+  input.keys['Space']?.released;   // released this tick (edge)
+});
+```
+
+Only use `InputManager` / `BrowserInputSource` directly when NOT using `GameLoop`.
+
+### Do NOT — anti-pattern list
+
+Do NOT:
+- create keyboard/mouse listeners when using `GameLoop` (read `input` from the tick payload)
+- create a `requestAnimationFrame` simulation loop (`GameLoop` fixed ticks own simulation)
+- manually lerp renderer transforms (the renderer interpolates on the GPU)
+- create `Object3D` / scene-graph objects, `scene.add(...)`, or entity classes
+- use `new Vector3()` / `new Vec3()` or invent vector math (plain arrays and `{ x, y }` literals)
+- invent `setColor()` / `setTint()` on 3D handles (3D `color` is set once at spawn; 2D `setTint` is real)
+- mutate renderer transforms every render frame (mutate in `tick`, `render(alpha)` just draws)
+- omit `storePreviousState()` when you want GPU interpolation
+- forget to RETURN the bucket from `prefabs()` / `textures()` callbacks
+
 The engine has **two layers of networking** stacked on each other. Pick the one that matches your needs:
 
 1. **Low-level (`murow/net` + `murow/protocol`)** — `ServerNetwork` / `ClientNetwork` + `IntentRegistry` / `SnapshotRegistry` / `RpcRegistry`. You wire your own game loop, prediction, interpolation. Use when the netcode opinions don't fit.
@@ -54,7 +129,7 @@ Many entities / want systems & SoA speed?
 Minimal single-player skeleton (no ECS, no netcode):
 
 ```ts
-import { GameLoop, AssetBucket } from 'murow';
+import { GameLoop, AssetBucket, type InputSnapshot } from 'murow';
 import { WebGPU3DRenderer } from 'murow/webgpu';
 
 const assets = new AssetBucket('3d').prefabs(({ bucket }) => bucket.add({ type: 'cube', id: 'box', size: 1 }));
@@ -65,16 +140,90 @@ await renderer.init();
 const boxes = Array.from({ length: 200 }, (_, i) =>
   renderer.addInstance({ model: assets.prefabs.get('box'), position: [i % 20, 0, (i / 20) | 0] }));
 
-const loop = new GameLoop({ type: 'client', tickRate: 30 });
+// `tickRate` is the SIMULATION rate, not the rendering rate. 'client' still
+// renders through requestAnimationFrame; WebGPU3DRenderer interpolates between
+// simulation states on the GPU (storePreviousState in pre-tick, render(alpha)).
+const loop = new GameLoop({ type: 'client', tickRate: 20 });
 loop.events.on('pre-tick', () => renderer.storePreviousState());
-loop.events.on('tick', ({ deltaTime }) => {
-  for (const b of boxes) b.setPosition(b.position[0], b.position[1] + deltaTime, b.position[2]);
-});
+loop.events.on('tick', ({ deltaTime, input }) => update(deltaTime, input));
 loop.events.on('render', ({ alpha }) => renderer.render(alpha));
 loop.start();
+
+// GameLoop wires up input automatically — `input` is an InputSnapshot. Do NOT
+// add window keydown/keyup listeners; read the snapshot inside the tick.
+function update(deltaTime: number, input: InputSnapshot) {
+  for (const b of boxes) b.setPosition(b.position[0], b.position[1] + deltaTime, b.position[2]);
+
+  if (input.keys['KeyW']?.down) {
+    // held this tick — move forward
+  }
+
+  if (input.keys['Space']?.hit) {
+    // pressed this tick (edge) — jump
+  }
+
+  if (input.keys['Space']?.released) {
+    // released this tick (edge)
+  }
+}
 ```
 
+`tickRate` is the **simulation** rate, not the rendering rate. `type: 'client'` renders through `requestAnimationFrame` at display refresh, and the WebGPU renderer interpolates between simulation states on the GPU — so 15–30 Hz simulation is perfectly smooth. Do not set 60 Hz just to make rendering smooth; it costs CPU and (in multiplayer) bandwidth for no visual gain.
+
 For the full multiplayer stack, see "Full Multiplayer Game (End to End)" at the end.
+
+## Browser CDN / zero-build usage
+
+No bundler, no npm — one HTML file. The core resolves through the jsDelivr ESM endpoint; the WebGPU renderer ships a dedicated single-file bundle (all deps inlined) at `dist/webgpu/esm/murow.webgpu.bundle.js` inside the `murow` package:
+
+```js
+import { GameLoop, AssetBucket } from "https://cdn.jsdelivr.net/npm/murow/+esm";
+import { WebGPU3DRenderer } from "https://cdn.jsdelivr.net/npm/murow/dist/webgpu/esm/murow.webgpu.bundle.js";
+```
+
+Pin a version for reproducibility: `https://cdn.jsdelivr.net/npm/murow@0.1.8/+esm` and `https://cdn.jsdelivr.net/npm/murow@0.1.8/dist/webgpu/esm/murow.webgpu.bundle.js`.
+
+**Use exactly these two URLs.** Do NOT import the renderer from `esm.sh` / `unpkg` / a generic `/murow/webgpu` ESM proxy — the webgpu subpath is a multi-file build with external `murow` imports, not a self-contained browser entry point. `murow.webgpu.bundle.js` exists specifically for direct browser use (all deps inlined so TypeGPU's `$internal` symbol crosses a single module boundary):
+
+```js
+// ❌ Not a supported browser entry point
+import { WebGPU3DRenderer } from "https://esm.sh/murow/webgpu";
+
+// ✅ Documented browser entry point
+import { WebGPU3DRenderer } from "https://cdn.jsdelivr.net/npm/murow/dist/webgpu/esm/murow.webgpu.bundle.js";
+```
+
+Minimal HTML:
+
+```html
+<canvas id="game"></canvas>
+<script type="module">
+  import { GameLoop, AssetBucket } from "https://cdn.jsdelivr.net/npm/murow/+esm";
+  import { WebGPU3DRenderer } from "https://cdn.jsdelivr.net/npm/murow/dist/webgpu/esm/murow.webgpu.bundle.js";
+
+  const canvas = document.getElementById('game');
+
+  const assets = new AssetBucket('3d')
+    .prefabs(({ bucket }) => bucket.add({ type: 'cube', id: 'box', size: 1 })); // MUST return the bucket
+  await assets.load();
+
+  const renderer = new WebGPU3DRenderer(canvas, { assets, maxInstances: 500, autoResize: true });
+  await renderer.init();
+  renderer.addInstance({ model: assets.prefabs.get('box') });
+
+  const loop = new GameLoop({ type: 'client', tickRate: 20 });
+  loop.events.on('pre-tick', () => renderer.storePreviousState());
+  loop.events.on('tick', ({ deltaTime, input }) => {
+    // GameLoop owns browser input — no keydown/keyup listeners.
+    if (input.keys['KeyW']?.down) { /* move */ }
+    if (input.keys['Space']?.hit)  { /* jump */ }
+  });
+  loop.events.on('render', ({ alpha }) => renderer.render(alpha));
+  loop.start();
+</script>
+```
+
+This covers single-player. For the multiplayer stack, the supported path is the npm/Vite setup shown in "Imports" — the netcode layer is not distributed as a browser-friendly single-file bundle.
 
 ---
 
@@ -150,6 +299,21 @@ import {
 `f32`, `u8`, ... are top-level re-exports of `BinaryCodec.f32` etc. — both forms work. Prefer the short ones in schemas.
 
 **What does NOT ship.** There is no `Vec2` / `Vec3` type or vector math (dot, cross, normalize on CPU), no quaternion helpers, no easing functions, no `clamp` / `min` / `max` helpers. The only math exports are `lerp`, `SimpleRNG`, the `Ray2D` / `Ray3D` intersection tests, and the `mat4*` helpers above (used by the glTF/skin path; column-major `Float32Array` with explicit offsets). For 2D points the codebase uses plain `{ x: number; y: number }` literals (the type `Vector2` is exported from `murow/core/input`, but most APIs just take the literal). Use `std.*` for vector math *inside* WGSL shader closures only (see WebGPU section) — those do not run on the CPU.
+
+## APIs that DO NOT EXIST
+
+Do not invent these — they will not type-check or will silently do nothing:
+
+- `renderer.setColor(...)` / `renderer.setTint(...)` — tint is set at spawn (3D `color: [r, g, b]`) or via the 2D `SpriteHandle.setTint(...)` method; there is no renderer-level setter
+- `renderer.camera.lookAt(...)` — not part of the Camera2D / Camera3D API (see the Camera sections for what exists)
+- `renderer.addMesh(...)` — models come from `AssetBucket` prefabs (preferred) or the renderer's `create*` / `load*` factories, then `addInstance`
+- `entity.position = ...` / `entity.setPosition(...)` — entities are plain numbers; position lives in components or on renderer instance handles
+- `scene.add(...)` / `scene.remove(...)` / `new Scene()` — there is no scene graph
+- `new Vector3()` / `new Vector2()` / `new Quaternion()` — no vector/quaternion classes (see "What does NOT ship" above)
+- `clamp(...)` / `normalize(...)` / `dot(...)` / `cross(...)` as standalone helpers — not exported; write them inline, or use `std.*` inside WGSL shader closures only
+- `handle.position = [...]` — transforms are set with `setPosition` / `setRotation` / `setScale` / `teleport`; `handle.position` is a read-only reference
+
+If you find yourself reaching for one of these, the real API for that job is documented in the matching section above.
 
 ---
 
@@ -560,6 +724,29 @@ loop.ticker.rate;
 
 `render` (and its `alpha`) only exists on `'client'` / `'manual-client'` loops; server loops never emit it. Watch `'skip'` to detect when the simulation can't keep up with the tick rate (the loop drops ticks rather than spiralling).
 
+### Canonical tick patterns
+
+```ts
+// Pattern 1 — input + deltaTime. Movement is speed × deltaTime, and input
+// comes from the loop, not from DOM listeners.
+loop.events.on('tick', ({ input, deltaTime }) => {
+  const speed = MOVE_SPEED * deltaTime;
+
+  if (input.keys['KeyW']?.down) forward += speed;
+  if (input.keys['KeyD']?.down) strafe  += speed;
+});
+
+// Pattern 2 — deterministic time. `tick` counts fixed simulation steps; use
+// it instead of Date.now() / performance.now() (which break replays and
+// prediction). `tick / loop.ticker.rate` converts to seconds since start.
+loop.events.on('tick', ({ tick }) => {
+  const t = (tick / loop.ticker.rate) * FIG8_SPEED;
+  handle.setPosition(Math.sin(t) * 2, 0, Math.cos(t) * 2);
+});
+```
+
+`deltaTime` is supplied by the loop (always `1 / tickRate` seconds on tick events) — do not build your own clock.
+
 ### Driver types
 
 - `'client'` — `requestAnimationFrame` driver. Renders at display refresh rate; supplies `alpha` (0..1) for frame interpolation.
@@ -694,6 +881,25 @@ loop.events.on('tick', ({ input }) => {
 - `.down` = held; `.hit` = pressed *this* tick only (edge); `.released` = released this tick.
 - Mouse Y is screen-space (top = 0). Flip it if you need world-Y-up: `worldY = canvas.height - input.mouse.position.y`.
 - Use DOM `code` strings — `KeyW`, never `'w'`.
+
+**Wrong → right.** An LLM's first instinct is DOM listeners; the loop already does this — no listener cleanup needed:
+
+```ts
+// ❌ Don't:
+window.addEventListener('keydown', ...)
+window.addEventListener('keyup', ...)
+
+// ❌ Don't (manual key tracking):
+const keys = new Set<string>();
+window.addEventListener('keydown', (e) => keys.add(e.code));
+window.addEventListener('keyup',   (e) => keys.delete(e.code));
+
+// ✅ Do:
+loop.events.on('tick', ({ input }) => {
+  if (input.keys['KeyW']?.down) { /* held */ }
+  if (input.keys['KeyR']?.hit)  { /* pressed this tick */ }
+});
+```
 
 ### Standalone `InputManager`
 
@@ -2029,6 +2235,42 @@ assets.prefabs.get('crate');  // CubePrefab — narrowed by id
 assets.textures.get('brick'); // TexturePrefab
 ```
 
+**IMPORTANT: `textures()` and `prefabs()` callbacks must RETURN the bucket.** Use an expression body or an explicit `return`. A `{ ... }` block that only calls `bucket.add(...)` returns `undefined` and registers nothing.
+
+```js
+// CORRECT — expression body
+.prefabs(({ bucket }) => bucket
+  .add({ type: 'cube', id: 'box', size: 1 })
+)
+
+// ALSO CORRECT — explicit return
+.prefabs(({ bucket }) => {
+  return bucket.add({ type: 'cube', id: 'box', size: 1 });
+})
+
+// WRONG — returns undefined; the add is ignored
+.prefabs(({ bucket }) => {
+  bucket.add({ type: 'cube', id: 'box', size: 1 });
+})
+```
+
+**Register, then consume.** The bucket is the single asset registry — don't invent a separate prefab loading/registration mechanism:
+
+```ts
+// ✅ Register everything before load():
+const assets = new AssetBucket('3d')
+  .prefabs(({ bucket }) => bucket
+    .add({ type: 'gltf', id: 'player', src: '/player.glb' })
+  );
+await assets.load();
+
+// ✅ Consume after load(), pass the prefab to the renderer:
+renderer.addInstance({ model: assets.prefabs.get('player') });
+
+// ❌ Don't register prefabs after load(), and don't parse/upload the glTF
+//    yourself — the bucket owns uploads and GPU buffer sizing.
+```
+
 Because textures are declared first, every prefab spec with a `texture` field autocompletes to the registered texture ids. Both inner buckets emit `loading` / `load-complete` events; the prefab bucket also emits `clips-changed` when animations are loaded/unloaded at runtime.
 
 ### `PrefabBucket` — typed asset registry (internal, accessed via `assets.prefabs`)
@@ -2519,12 +2761,14 @@ interface WebGPU3DRendererOptions {
 }
 
 interface MeshInstanceOptions {
-  model: ModelHandle | GltfModel | Prefab3D;
+  model: ModelHandle | GltfModel | Prefab3D | string;   // prefab from assets.prefabs.get(id), or a registered prefab id string
   position?: readonly [x: number, y: number, z: number];
   rotation?: readonly [x: number, y: number, z: number];
   scale?: number | readonly [x: number, y: number, z: number];
-  color?: readonly [r: number, g: number, b: number];   // flat tint, SET-AT-SPAWN ONLY — there is no setColor on the handle
+  color?: readonly [r: number, g: number, b: number];   // flat RGB tint, SET-AT-SPAWN ONLY — there is no setColor on the handle
 }
+
+**Version note (0.1.8): `color` vs `tint`.** The 3D instance option is `color: [r, g, b]` — 3 components, RGB, set at spawn only. `tint` is the **2D sprite** option: `addSprite({ tint: [r, g, b, a] })` (4 components), plus the live `SpriteHandle.setTint(r, g, b, a)` method. Do not mix them — `addInstance({ tint: [...] })` and `addSprite({ color: [...] })` do not exist in 0.1.8. If you see 4-component `tint` passed to a 3D `addInstance`, that code is mixing the 2D API into 3D and the tint will be silently ignored (and won't type-check in TS).
 
 const renderer = new WebGPU3DRenderer(canvas, {
   assets,
@@ -2541,7 +2785,7 @@ const handle = renderer.addInstance({
   position: [0, 0, 0],
   rotation: [0, 0, 0],
   scale: [1, 1, 1],                       // or a single number
-  color:  [1, 0.5, 0.2],                  // tint, optional
+  color:  [1, 0.5, 0.2],                  // RGB tint, optional — option name is `color`, NOT `tint` (tint is the 2D option)
 });
 
 handle.setPosition(x, y, z);
@@ -2565,7 +2809,9 @@ renderer.raycast.update(input);           // cursor picking — see "Hitboxes & 
 renderer.raycast.hit({ filter });
 renderer.debug.hitboxes = true;           // draw hitbox wireframes (green = hovered, magenta = idle)
 
-// Primitive + model factories (return a ModelHandle / GltfModel you pass to addInstance):
+// One-off / debug conveniences — return a ModelHandle / GltfModel for addInstance.
+// For anything you spawn more than once, declare a prefab in AssetBucket instead
+// (parallel load, typed ids, GPU sizing — see the AssetBucket section):
 const grid  = renderer.createGrid({ size: 50, step: 1, lineWidth: 0.01 });
 const cube  = renderer.createCube({ size: 1 });
 const model = renderer.loadModel(rawModelData);          // raw geometry (ModelData), no bucket
@@ -2578,7 +2824,7 @@ const k     = renderer.createCompute('name', { workgroupSize: 256 });   // compu
 
 `addInstance` returns an `InstanceHandle`. For single-mesh prefabs it's also a `MeshInstanceHandle` at runtime — both names work; cast when calling `removeInstance`.
 
-**Per-instance color is immutable after spawn.** Set it once via `addInstance({ color: [r, g, b] })`. There is no `setColor` / `setTint` on the 3D handle — to recolor, `destroy()` the instance and re-add it. (2D sprites differ: `SpriteHandle.setTint(...)` is live — see the 2D section.)
+**Per-instance color is immutable after spawn.** Set it once via `addInstance({ color: [r, g, b] })`. There is no `setColor` / `setTint` on the 3D handle — to recolor, `destroy()` the instance and re-add it. (2D sprites differ: `SpriteHandle.setTint(...)` is live — see the 2D section.) In 0.1.8 the 3D option is named `color` — any example showing `tint` on a 3D `addInstance` is using the 2D sprite API by mistake.
 
 ### Camera (2D)
 
@@ -2613,7 +2859,7 @@ class Camera3D {
   position: [number, number, number];
   target:   [number, number, number];
   up:       [number, number, number];
-  fov: number;
+  fov: number;   // DEGREES in 0.1.8 (default 60) — pass `60`, NOT `Math.PI / 3` (radians)
   near: number;
   far: number;
   aspect: number;
@@ -3007,7 +3253,9 @@ inverseLerp(min: number, max: number, value: number): number;
 | Reading `input.mouse.position.y` as world Y in a 2D game | Mouse Y is screen-space (top = 0). Flip: `worldY = canvas.height - input.mouse.position.y` |
 | Calling `mouseLook.lock(canvas)` without a click handler | Pointer Lock requires a user gesture. Bind it inside `canvas.addEventListener('click', ...)` |
 | `renderer.camera.position[0] = 5` | Tuple property is a shared reference; use `renderer.camera.setPosition(5, y, z)` |
-| `addInstance({ model: 'hero' })` (string id) | Pass the prefab object: `addInstance({ model: prefabs.get('hero') })` |
+| `renderer.camera.fov = Math.PI / 3` (radians) | `fov` is DEGREES in 0.1.8 (default 60): `renderer.camera.fov = 60`. Radians give a ~1° view — effectively black |
+| `import { WebGPU3DRenderer } from "https://esm.sh/murow/webgpu"` (browser) | Not a supported browser entry point. Use the documented pair: jsDelivr `+esm` for core + `murow/dist/webgpu/esm/murow.webgpu.bundle.js` for the renderer |
+| `addInstance({ model: 'hero' })` relying on the string id | Pass the prefab object: `addInstance({ model: prefabs.get('hero') })` — type-safe and avoids a runtime bucket lookup |
 | Calling `prefabs.add(...)` after `bucket.load()` | All prefabs must be registered before `load()` |
 | `client.sendIntent('move', dx, dz)` (positional args) | `client.sendIntent('move', { dx, dz })` - intents are objects keyed by schema field names |
 | Calling `client.sendIntent(...)` before the server has assigned an entity | Returns `false` and emits an `'error'` event - the engine drops the call rather than running prediction against entity 0. Either listen for `'assigned'` first or check `client.assignedEntity !== null` |
@@ -3021,6 +3269,7 @@ inverseLerp(min: number, max: number, value: number): number;
 | Mutating `ctx.world.get(ctx.entity, C)` inside a prediction | Use `ctx.fields(C)` for hot paths, or `ctx.world.update(ctx.entity, C, { ... })` for clarity |
 | `client.use(predictions); client.use(predictions);` | Apply each prediction/handler/plugin bundle once |
 | Setting `tickRate: 60` because "more is better" | Higher tick rate = more bandwidth + CPU. 15-30 Hz is typical for multiplayer; render interpolates the rest |
+| `loop.ticker.tick * 0.08` — reading a counter off the ticker | `ticker.tick(dt)` is the advance METHOD, not a counter — `method * 0.08` is NaN and silently breaks rendering. Use the `tick` from the tick payload (`({ tick }) => ...`) or `loop.ticker.tickCount` |
 | Server tickRate != client tickRate when predictions are in use | Predictions assume both sides advance at the same `deltaTime` - match the rates |
 | Custom transport that queues internally without copying buffers in `send()` | Network layer reuses memory - your transport MUST copy if it queues |
 | Using `Math.random()` in a procgen system you also want as a replay | Seed a `SimpleRNG` instead - `new SimpleRNG(seed)` is deterministic and ~5x faster |
@@ -3028,6 +3277,11 @@ inverseLerp(min: number, max: number, value: number): number;
 | Casting `world.fields(C)` results to specific typed arrays | Don't - the return type is precisely inferred from the schema (`f32 -> Float32Array`, `u8 -> Uint8Array`, etc.). Casts only mask bugs |
 | Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `addInstance({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
 | Expecting shadows, a skybox, or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, but no shadows, skybox, or material API. Write a custom `Base3DRenderer` backend if you need more |
+| `addInstance({ model: ... })` | The option key is `prefab`, not `model` — `model:` is ignored and the call throws. Use `addInstance({ model: prefabs.get(id) })` |
+| `renderer.createCube({ size: 1 })` for the player / obstacles / ground | Declare reusable models as `AssetBucket` prefabs (`assets.prefabs.get('id')`) — the renderer `create*` / `load*` factories are one-off/debug conveniences: no parallel load, no typed ids, no bucket GPU sizing |
+| `.prefabs(({ bucket }) => { bucket.add(...); })` — block body doesn't return the bucket | `textures()` / `prefabs()` callbacks MUST return the bucket: expression body (`({ bucket }) => bucket.add(...)`) or explicit `return bucket.add(...)`. A block that only calls `.add(...)` returns `undefined` and registers nothing |
+| `addInstance({ tint: [r, g, b, a] })` (3D) | 3D uses `color: [r, g, b]` (3 components, set at spawn). `tint: [r, g, b, a]` is the 2D sprite option (`addSprite` / `SpriteHandle.setTint`) |
+| `window.addEventListener('keydown', ...)` while using `GameLoop` | `GameLoop` owns browser input — read `input.keys['KeyW']?.down` etc. from the tick payload. `InputManager` is only for loop-less setups |
 | `import { type Vec2 } from 'murow'` | Not exported. Use a `{ x: number; y: number }` literal (NavMesh, etc. accept it). `Vector2` exists at `murow/core/input` if you want a named type |
 | Treating `world.query(...)` as a fresh array you can keep | It's a reused, cached buffer rebuilt on any structural change. Iterate it now; re-query after spawn/despawn/add/remove. Same for `getEntities()` / `getDespawned()` |
 | Assuming `world.getDespawned()` is an `Entity[]` | It's a reused `Uint32Array` subarray - valid until `flushDespawned()`; don't retain it |
