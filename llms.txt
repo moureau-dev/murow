@@ -45,7 +45,7 @@ These are the rules LLMs most often get wrong. Internalize them before writing c
 - Do not use DOM `addEventListener` for ordinary game keyboard/mouse input — the loop snapshots input and hands it to each tick.
 - `input.keys[code].down` = held; `.hit` = pressed during the current tick. Mouse buttons expose the same `.down` / `.hit`.
 - Assets are registered through `AssetBucket`; prefabs go through the `.prefabs()` callback — which MUST return the bucket.
-- After `await assets.load()`, consume registered prefabs via `assets.prefabs.get(id)` and pass them to `renderer.addInstance({ model: ... })` — the option key is `prefab`, NOT `model`.
+- After `await assets.load()`, consume registered prefabs via `assets.prefabs.get(id)` and pass them to `renderer.addInstance({ model: ... })` — the option key is `model`, NOT `prefab`.
 - Declare every reusable model as an `AssetBucket` prefab. `renderer.createCube()` / `createGrid()` / `loadModel()` / `loadGltf()` are one-off/debug conveniences — not the way to declare game models.
 - Do not invent a separate prefab loading/registration mechanism.
 - Simulation (movement, AI, input reads) belongs in `tick`; drawing belongs in `render`.
@@ -298,6 +298,27 @@ import {
 
 `f32`, `u8`, ... are top-level re-exports of `BinaryCodec.f32` etc. — both forms work. Prefer the short ones in schemas.
 
+All binary primitives: `u8`, `u16`, `u32`, `i8`, `i16`, `i32`, `f16`, `f32`, `f64`, `bool`, `string`, `vec2`, `vec3`, `color`, `vec2_le`, `vec3_le`, `vec4_le`.
+
+**Additional subpath imports** — real APIs LLMs commonly hallucinate under wrong names:
+
+| You might try | Use instead |
+|---|---|
+| `SmoothClock` / `NetworkClock` | `SlewClock` from `murow/core/clock` — smooths server/client time deltas |
+| `ReplayLog` / `EventLog` | `Timeline` from `murow/core/timeline` — ordered event log for replays/rollback |
+| `SlotAllocator` | `SlotMap` / `SlotStore` from `murow/core/slot-map` — typed slot allocator |
+| `IntentTracker` / `Reconciliator` | These exist — exported from `murow` directly. Docs above. |
+| `SmoothTimer` / `IntervalLoop` | `loop.every(N).seconds(...)` on GameLoop — docs above. |
+| `validateIntent` / `sanitizeInput` | `validateRange`, `combineValidators`, etc. from `murow/net/validators` |
+| `VirtualNetwork` / `TestTransport` | `VirtualNetwork` / `VirtualServerTransport` from `murow/net/adapters/virtual-network` — test-only |
+
+```ts
+import { SlewClock } from 'murow/core/clock';
+import { Timeline } from 'murow/core/timeline';
+import { SlotMap, SlotStore } from 'murow/core/slot-map';
+import { VirtualNetwork, VirtualPeerTransport, VirtualServerTransport } from 'murow/net/adapters/virtual-network';
+```
+
 **What does NOT ship.** There is no `Vec2` / `Vec3` type or vector math (dot, cross, normalize on CPU), no quaternion helpers, no easing functions, no `clamp` / `min` / `max` helpers. The only math exports are `lerp`, `SimpleRNG`, the `Ray2D` / `Ray3D` intersection tests, and the `mat4*` helpers above (used by the glTF/skin path; column-major `Float32Array` with explicit offsets). For 2D points the codebase uses plain `{ x: number; y: number }` literals (the type `Vector2` is exported from `murow/core/input`, but most APIs just take the literal). Use `std.*` for vector math *inside* WGSL shader closures only (see WebGPU section) — those do not run on the CPU.
 
 ## APIs that DO NOT EXIST
@@ -312,6 +333,9 @@ Do not invent these — they will not type-check or will silently do nothing:
 - `new Vector3()` / `new Vector2()` / `new Quaternion()` — no vector/quaternion classes (see "What does NOT ship" above)
 - `clamp(...)` / `normalize(...)` / `dot(...)` / `cross(...)` as standalone helpers — not exported; write them inline, or use `std.*` inside WGSL shader closures only
 - `handle.position = [...]` — transforms are set with `setPosition` / `setRotation` / `setScale` / `teleport`; `handle.position` is a read-only reference
+- `SmoothClock` / `NetworkClock` — doesn't exist; use `SlewClock` from `murow/core/clock`
+- `ReplayLog` / `EventLog` — doesn't exist; use `Timeline` from `murow/core/timeline`
+- `SlotAllocator` — doesn't exist; use `SlotMap` from `murow/core/slot-map`
 
 If you find yourself reaching for one of these, the real API for that job is documented in the matching section above.
 
@@ -3292,7 +3316,7 @@ inverseLerp(min: number, max: number, value: number): number;
 | Casting `world.fields(C)` results to specific typed arrays | Don't - the return type is precisely inferred from the schema (`f32 -> Float32Array`, `u8 -> Uint8Array`, etc.). Casts only mask bugs |
 | Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `addInstance({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
 | Expecting shadows, a skybox, or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, but no shadows, skybox, or material API. Write a custom `Base3DRenderer` backend if you need more |
-| `addInstance({ model: ... })` | The option key is `prefab`, not `model` — `model:` is ignored and the call throws. Use `addInstance({ model: prefabs.get(id) })` |
+| `addInstance({ model: ... })` | The option key is `model`, not `prefab`. Use `addInstance({ model: prefabs.get(id) })` |
 | `renderer.createCube({ size: 1 })` for the player / obstacles / ground | Declare reusable models as `AssetBucket` prefabs (`assets.prefabs.get('id')`) — the renderer `create*` / `load*` factories are one-off/debug conveniences: no parallel load, no typed ids, no bucket GPU sizing |
 | `.prefabs(({ bucket }) => { bucket.add(...); })` — block body doesn't return the bucket | `textures()` / `prefabs()` callbacks MUST return the bucket: expression body (`({ bucket }) => bucket.add(...)`) or explicit `return bucket.add(...)`. A block that only calls `.add(...)` returns `undefined` and registers nothing |
 | `addInstance({ tint: [r, g, b, a] })` (3D) | 3D uses `color: [r, g, b]` (3 components, set at spawn). `tint: [r, g, b, a]` is the 2D sprite option (`addSprite` / `SpriteHandle.setTint`) |
