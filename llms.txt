@@ -747,6 +747,21 @@ loop.events.on('tick', ({ tick }) => {
 
 `deltaTime` is supplied by the loop (always `1 / tickRate` seconds on tick events) — do not build your own clock.
 
+### Scheduled callbacks
+
+Replace `setInterval` with loop-bound schedules that pause/resume with the game and fire on fixed ticks:
+
+```ts
+const id = loop.every(2).seconds(spawnWave);       // every 2 wall-clock seconds
+loop.every(500).milliseconds(() => client.ping());  // every 500 ms
+loop.every(3).ticks(applyStatusEffect);             // every 3rd tick
+
+loop.clearSchedule(id);         // cancel one
+loop.clearSchedules();          // cancel all
+```
+
+The unit resolves to tick count (`count * tickRate`), so schedules fire deterministically — same tick count always runs the same callbacks. `maxSchedules` option (default 32) caps the pool at construction.
+
 ### Driver types
 
 - `'client'` — `requestAnimationFrame` driver. Renders at display refresh rate; supplies `alpha` (0..1) for frame interpolation.
