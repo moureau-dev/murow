@@ -29,7 +29,9 @@ import { WebGPU2DRenderer } from 'murow/webgpu';
 - [`lerp`](./src/core/lerp) — Linear interpolation utility
 - [`NavMesh`](./src/core/navmesh) — Pathfinding with dynamic obstacles
 - [`IntentTracker` & `Reconciliator`](./src/core/prediction) — Client-side prediction
-- [`InputTracker`](./src/core/input) — Cross-platform input state tracking
+- [`InputManager`](./src/core/input) — Cross-platform input state tracking
+- [`AudioManager`](./src/core/audio) — Spatial audio over a swappable `AudioOutput` (Web Audio / null), with category buses and fades
+- [`Bucket`](./src/core/bucket) — Generic typed registry for loadable resources (renderer assets, audio clips)
 - [`FreeList`](./src/core/free-list) — Slot allocator for reusable handles
 - [`SparseBatcher`](./src/core/sparse-batcher) — Layer/sheet bucketing for batched rendering
 - [`SimpleRNG`](./src/core/simple-rng) — Seedable deterministic random number generator

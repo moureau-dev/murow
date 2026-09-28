@@ -1,4 +1,5 @@
 export * from './binary-codec';
+export * from './bucket';
 export * from './events';
 export * from './fixed-ticker';
 export * from './generate-id';
@@ -10,6 +11,7 @@ export * from './prediction';
 export * from './clock';
 export * from './timeline';
 export * from './input';
+export * from './audio';
 export * from './free-list';
 export * from './sparse-batcher';
 export * from './slot-map';

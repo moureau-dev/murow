@@ -2,7 +2,7 @@
 
 Murow is a TypeScript game engine for **server-authoritative multiplayer** games. It ships three packages from a single npm install (`murow`):
 
-- `murow` — core: ECS, game loop, input, math, binary codecs, protocol primitives, transport-agnostic networking, renderer abstractions
+- `murow` — core: ECS, game loop, input, audio, math, binary codecs, protocol primitives, transport-agnostic networking, renderer abstractions
 - `murow/webgpu` — concrete WebGPU 2D/3D renderer with compute shaders and a typed shader DSL (TypeGPU)
 - `murow/netcode` — opinionated multiplayer layer (snapshots, prediction with rollback, interest plugins, lag compensation) built on top of the protocol + net primitives
 
@@ -1065,6 +1065,55 @@ zoom.value;    // public mutable
 ```
 
 There's no bundled `FpsCamera` or `TpsCamera` — compose `MouseLook` + `ScrollZoom` + the renderer camera in your own code. The boilerplate is 2-3 lines per tick and games want different mixes (idle rotation, screen shake, wall collision).
+
+---
+
+## Audio
+
+`murow/core/audio` — a pure `AudioManager` over a swappable `AudioOutput` (`WebAudioOutput` in the browser, `NullAudioOutput` on the server/tests), the same manager+adapter split as input. Dimensionality follows the **simulation**, not the renderer: `dimension: '2d' | '3d'` (a 2D game rendered in 3D uses 2D audio). Spatial tuning is explicit, not hardcoded: `panRange` (2D pan width — set to half the viewport's world width) and per-source `distance: { reference, rolloff, max }` (also settable as a manager-wide default). 2D panning is listener-relative (feed `forwardX`/`forwardY` so a rotating camera pans correctly); 2D and 3D share the same inverse distance model.
+
+```ts
+import { AudioManager } from 'murow/core/audio';
+
+const audio = new AudioManager({ clips: assets.audio }); // web output by default; null on server
+
+const waterfall = audio.play({
+  clip: 'waterfall',
+  position: [40, 0, 12], loop: true,
+  distance: { reference: 4, rolloff: 1.5, max: 40 },
+});
+
+loop.events.on('tick', () => {
+  audio.setListenerPosition(x, y, z);        // zero-allocation; usually the camera
+  audio.setListenerOrientation(fx, fy, fz);
+  waterfall.setPosition(40, 0, 12);
+  audio.update(1 / 20);                      // distance culling + fade-out completion
+});
+waterfall.stop();
+```
+
+- `play({ clip, position, ... })` → `SourceHandle` (`setPosition`, `setDistance`, `setDirection`, `setVolume`, `setPaused`, `fade`, `stop`). `clip` = id or `AudioClip`; `position` = `[x, y]` or `[x, y, z]`; `direction` = `[x, y, z]` (3D cone). `z`/`direction` are ignored in 2D. `loop: true` keeps it until `stop()`.
+- `destroy()` stops everything (idempotent); afterwards `play` throws and other mutators no-op.
+- `playOnce({ clip, position, ... })` — fire-and-forget, freed when it ends.
+- `setListenerPosition(x, y, z?)` / `setListenerOrientation(fx, fy, fz?)` — zero-allocation per-tick pose; `setListener(state)` copies a pose object.
+- `update(deltaTime)` — distance culling + fade-out completion; `setVolume({ category?, volume, seconds? })` (`category` defaults to `'master'`; `setVolume(volume)` is master shorthand), `getVolume(category?)`.
+- Fades: `handle.fade({ to, seconds, stopAfter? })` subsumes fade-in/out/to. Fades from the current volume and **runs on the audio clock** (real-time) — never step it on the tick. Live spatial updates (pan/attenuation/position) are smoothed (`setTargetAtTime`); spawn writes directly.
+- Categories: `'master' | 'music' | 'sfx' | 'ambient' | 'voice' | 'ui'` (`master` is the final output bus). A source's bus is `opts.category ?? clip.category ?? 'sfx'`. Volumes are non-negative linear multipliers that multiply: `source.volume × category.volume × master.volume` (× distance attenuation), each defaulting to 1; `> 1` amplifies, negatives clamp to 0.
+- Events: `audio.events` → `source-started`, `source-ended` (clip finished), `source-stopped` (`stop()`), `source-evicted` (budget steal).
+- `maxSources` (default 64): past it, the farthest non-`music` source is stolen.
+
+**Clips are assets.** `AudioBucket` builds on the generic `Bucket` and surfaces them as `assets.audio`. A spec can carry playback defaults (`category`, `volume`, `distance: { reference, rolloff, max }`); `play` options override them, else the manager default (`distance`) or `1`. The parser only fetches bytes; decoding is the output's job, so loading needs no audio device:
+
+```ts
+const clips = new AudioBucket({ decode: (data, spec) => output.decode(data, spec) })
+  .add({ type: 'audio', id: 'theme', src: '/music/theme.ogg', category: 'music' });
+await clips.load();
+clips.get('theme'); // AudioClip
+```
+
+**Formats & failure.** There is no extension check — `decode` calls the browser's `AudioContext.decodeAudioData` (WAV/MP3/AAC/M4A/Ogg/FLAC, browser-dependent; Safari does not decode Ogg/Opus). A fetch error or an unsupported/corrupt file rejects the **whole** `assets.load()` (the generic `Bucket` uses `Promise.all`), so don't mix required and optional clips in one bucket.
+
+**Do not** attach audio to the renderer or reach for `renderer.audio`. `AudioManager` is a client-side sibling of the renderer — pass the same `assets` to both. On the server, omit `output` (or pass `NullAudioOutput`); the manager is a safe no-op.
 
 ---
 
