@@ -67,7 +67,7 @@ import { testHitbox2D, pointInQuad2D, type Hitbox } from 'murow/core/hitbox';
 export interface WebGPU2DRendererOptions extends Renderer2DOptions {
     /**
      * Pre-loaded prefab bucket. When provided, the renderer uploads each prefab
-     * to the GPU during `init()`, and `addSprite({ prefab: bucket.get('id') })`
+     * to the GPU during `init()`, and `addSprite({ sheet: bucket.get('id') })`
      * resolves to the right spritesheet handle. The bucket must have `load()`
      * resolved before being passed in.
      */

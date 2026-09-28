@@ -11,7 +11,7 @@ npm install murow
 ## Usage
 
 ```typescript
-import { FixedTicker, EventSystem, BinaryCodec, generateId, lerp, PrefabBucket } from 'murow';
+import { FixedTicker, EventSystem, BinaryCodec, generateId, lerp, AssetBucket } from 'murow';
 // or
 import { FixedTicker } from 'murow/core';
 import { WebGPU2DRenderer } from 'murow/webgpu';
@@ -67,7 +67,7 @@ Key features:
 ### [Renderer](./src/renderer) — Abstract renderer interfaces + asset pipeline
 Renderer-agnostic primitives consumed by any backend (`@murow/webgpu`, future PixiJS, Three.js, …).
 - `BaseRenderer` / `Base2DRenderer` / `Base3DRenderer` — abstract contracts
-- [`PrefabBucket`](./src/renderer/prefab-bucket) — typed registry for spawnable assets. Declare → load → typed lookup; the renderer self-sizes from the bucket
+- [`AssetBucket`](./src/renderer/buckets/asset) — typed registry for textures + spawnable assets. Declare → load → typed lookup; the renderer self-sizes from the bucket (`PrefabBucket` is the underlying prefab registry, exposed as `assets.prefabs`)
 - `parseGltf` / `parseSpritesheet` — pure CPU parsers (no GPU, no canvas)
 - `SkeletalAnimation` — CPU-side bone evaluation for skinned meshes
 

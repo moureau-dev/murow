@@ -17,7 +17,7 @@ npm install murow
 The WebGPU renderer and netcode layer are **included by default**:
 
 ```typescript
-import { GameLoop, PrefabBucket, World, defineComponent } from 'murow';
+import { GameLoop, AssetBucket, World, defineComponent } from 'murow';
 import { WebGPU2DRenderer, WebGPU3DRenderer, d } from 'murow/webgpu';
 import { GameServer, GameClient, defineIntents } from 'murow/netcode';
 ```
@@ -28,28 +28,28 @@ import { GameServer, GameClient, defineIntents } from 'murow/netcode';
 <summary><strong>3D glTF Models with Animation</strong></summary>
 
 ```typescript
-import { GameLoop, PrefabBucket } from 'murow';
+import { GameLoop, AssetBucket } from 'murow';
 import { WebGPU3DRenderer } from 'murow/webgpu';
 
 // Declare every spawnable thing up-front. Typed ids, parallel load.
-const prefabs = new PrefabBucket('3d')
-  .add({
+const assets = new AssetBucket('3d')
+  .prefabs(({ bucket }) => bucket.add({
     type: 'gltf',
     id: 'hero',
     src: '/character.glb',
     animations: ['Idle', 'Run'],
     metadata: { scale: 0.01 },
-  });
+  }));
 
-await prefabs.load();
+await assets.load();
 
 // Renderer self-sizes from the bucket — no magic numbers.
-const renderer = new WebGPU3DRenderer(canvas, { prefabs, maxInstances: 100 });
+const renderer = new WebGPU3DRenderer(canvas, { assets, maxInstances: 100 });
 await renderer.init();
 
-const hero = prefabs.get('hero');           // typed as GltfPrefab
+const hero = assets.prefabs.get('hero');    // typed as GltfPrefab
 const instance = renderer.addInstance({
-  model: hero,
+  prefab: hero,
   position: [0, 0, 0],
   scale: hero.metadata.scale,
 });

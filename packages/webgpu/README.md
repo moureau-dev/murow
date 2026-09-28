@@ -23,7 +23,7 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **Zero-GC data path** — `Float32Array` buffers, `FreeList` slot allocation, no per-frame objects
 - **GPU-side interpolation** — `mix(prev, curr, alpha)` runs in shaders, not on CPU
 - **Sparse batching** — Minimal draw calls via layer/sheet sorting (`SparseBatcher`)
-- **PrefabBucket** — declare assets up front, parallel load, typed-id lookups; the renderer self-sizes from the bucket. Lives in [`murow`](../murow/src/renderer) and is consumed by any backend.
+- **AssetBucket** — declare textures + prefabs up front, parallel load, typed-id lookups; the renderer self-sizes from the bucket. Lives in [`murow`](../murow/src/renderer) and is consumed by any backend.
 
 ### 2D Rendering
 - **Sprite rendering** — 1 draw call per spritesheet, regardless of sprite count
@@ -32,7 +32,7 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **Particle emitter** — CPU-driven particles with gravity, fade, lifetime
 
 ### 3D Rendering
-- **glTF loading** — `.glb` meshes with textures and skinned animation (via `PrefabBucket`)
+- **glTF loading** — `.glb` meshes with textures and skinned animation (via `AssetBucket`)
 - **Skeletal animation** — Crossfading, looping, event callbacks; typed animation names
 - **Frustum culling** — Automatic per-instance visibility checks
 - **Distance-based animation culling** — Skip compute-shader skinning for instances outside `animationCullDistance`
@@ -77,27 +77,27 @@ renderer.render(alpha);
 <summary><strong>3D Models (glTF)</strong></summary>
 
 ```typescript
-import { PrefabBucket } from 'murow';
+import { AssetBucket } from 'murow';
 import { WebGPU3DRenderer } from 'murow/webgpu';
 
-const prefabs = new PrefabBucket('3d')
-  .add({
+const assets = new AssetBucket('3d')
+  .prefabs(({ bucket }) => bucket.add({
     type: 'gltf',
     id: 'hero',
     src: '/character.glb',
     animations: ['Idle', 'Run', 'Attack'],
     metadata: { scale: 0.01 },
-  });
+  }));
 
-await prefabs.load();
+await assets.load();
 
 // Renderer sizes its skinned + bone buffers from the bucket — no magic numbers.
-const renderer = new WebGPU3DRenderer(canvas, { prefabs, maxInstances: 100 });
+const renderer = new WebGPU3DRenderer(canvas, { assets, maxInstances: 100 });
 await renderer.init();
 
-const hero = prefabs.get('hero');                 // typed as GltfPrefab
+const hero = assets.prefabs.get('hero');          // typed as GltfPrefab
 const instance = renderer.addInstance({
-  model: hero,
+  prefab: hero,
   position: [0, 0, 0],
   scale: hero.metadata.scale,
 });
