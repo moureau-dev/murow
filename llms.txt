@@ -2099,6 +2099,8 @@ ctx.lagCompensated(() => {
 });
 ```
 
+Register **one** `LagCompensation` per server at setup. Its history is a preallocated ring sized from `maxEntities × ((historyMs / 1000 × tickRate) + 1)` frames; steady-state ticks and rewinds allocate nothing. Do not construct it per match or per peer.
+
 **Writing your own plugin:**
 
 ```ts

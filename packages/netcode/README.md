@@ -484,6 +484,12 @@ server.use(new LagCompensation({
 }));
 ```
 
+History is a ring of preallocated binary frames (one per tick), so
+steady-state ticks and rewinds allocate nothing. Memory scales with
+`maxEntities × ringSize × bytesPerEntity`, where
+`ringSize = ceil(historyMs / 1000 × tickRate) + 1`. Register one instance
+at server setup - not per match or per peer.
+
 <details>
 <summary><b>Writing your own plugin</b></summary>
 
