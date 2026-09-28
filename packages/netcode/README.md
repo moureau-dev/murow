@@ -301,7 +301,7 @@ packaged into outgoing snapshots and unpacked on receive.
 
 > Without `sync`, the component stays local to the environment.
 
-> Snapshots only include entities the server wrote to since last tick - for each, every synced component's current value ships.
+> Snapshots only include entities the server wrote to since last tick; for each, the synced components it has ship according to their `rate`.
 
 ```ts
 import { defineComponent, f32, u8 } from 'murow';
@@ -319,8 +319,11 @@ export const Ammo = defineComponent('Ammo', {
 ```
 
 Options:
-- `rate` - how often it ships (`'every-tick'`, `'on-change'`, `{ every: N }`)
-- `interest` - which peers receive it (`'global'` or a plugin name)
+- `rate` - how often the component ships: `'every-tick'` whenever the
+  entity is dirty, `'on-change'` only when this component changed since
+  the last snapshot, `{ every: N }` on change or every Nth snapshot tick.
+- `interest` - which peers receive it (`'global'` or a plugin name).
+  Currently unread - see "Not wired up yet" below.
 - `interp` - how the receiver smooths between packets (`'lerp'`, `'slerp'`, `'step'`, `'none'`)
 - `snapThreshold` - distance beyond which the receiver snaps instead of smoothing
 
@@ -393,13 +396,14 @@ Defaults: `snapshot.rate = min(20, tickRate)`, `kick.ackTimeout = 2000`.
 new GameClient({
   world, loop, transport,
   protocol: { intents, rpcs },
-  strategy: { kind: 'snapshot-interpolation', delay: 100, staleWindow: 300 },
+  strategy: { kind: 'snapshot-interpolation', delay: 100, staleWindow: 300, maxDesync: 500, maxBridgeGap: 250 },
   prediction: { bufferSize: 64 },
 });
 ```
 
 Defaults: `strategy = { kind: 'snapshot-interpolation', delay: 100 }`,
-`staleWindow = delay * 2 + 100`, `prediction.bufferSize = 64`.
+`staleWindow = delay * 2 + 100`, `maxDesync = 500`, `maxBridgeGap = 250`,
+`prediction.bufferSize = 64`.
 
 - `strategy.kind`: peer-rendering strategy. Only
   `'snapshot-interpolation'` ships today; extrapolation and rollback
@@ -408,7 +412,16 @@ Defaults: `strategy = { kind: 'snapshot-interpolation', delay: 100 }`,
   strategy only).
 - `staleWindow`: max ms gap between snapshots before history is dropped
   as stale. Tuned for the normal cadence + jitter slop.
+- `maxDesync`: desync past which the play-out clock hard-snaps instead of
+  warping, ms. Scaled by tick rate internally.
+- `maxBridgeGap`: largest data gap a peer may have before its value is
+  held instead of interpolated across, ms. Smaller gaps are bridged.
 - `bufferSize`: max buffered unacked predictions kept for rollback.
+
+`delay`, `staleWindow`, `maxDesync`, and `maxBridgeGap` are all tunable
+at runtime via `client.setInterpolationDelay(ms)`,
+`client.setMaxDesync(ms)`, `client.setMaxBridgeGap(ms)`, and
+`client.interpBuffer.setStaleWindow(ms)`.
 </details>
 
 <details>
@@ -424,9 +437,10 @@ networked({
 ```
 
 - `rate`: snapshot eligibility cadence.
-- `interest`: visibility filter; matches a plugin's `name`, or
-  `'global'` for "every peer sees this".
-- `interp`: per-field interpolation mode.
+- `interest`: visibility filter; declares a plugin's `name`, or
+  `'global'` for "every peer sees this". Currently unread - see
+  "Not wired up yet" below.
+- `interp`: interpolation mode, dispatched per-component (not per-field).
 - `snapThreshold`: per-component override of the reconciliation
   snap-vs-smooth threshold.
 </details>
@@ -451,7 +465,10 @@ server.use(new AoiGrid({
 }));
 ```
 
-The plugin's `name` matches the `interest` string on components.
+`AoiGrid` filters every dirty entity by radius, regardless of each
+component's `interest` value - `interest` is currently unread (see
+"Not wired up yet"). Entities without the `positionComponent` pass
+through unfiltered.
 
 ### `LagCompensation`
 
@@ -561,9 +578,6 @@ Some `networked()` fields are in the type but not honored at runtime
 yet. Setting them compiles; the component still syncs with default
 behavior.
 
-- `rate: 'on-change'` and `rate: { every: N }` behave as `'every-tick'`.
-  To approximate `'on-change'`, only mutate the component when the
-  value actually changed.
 - `interest` is not read. Server plugins (`AoiGrid`, etc.) run their
   `filterSnapshot` against every dirty entity regardless of what each
   component says. To limit a component to a subset of peers today,
