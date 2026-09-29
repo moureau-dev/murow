@@ -87,6 +87,7 @@ export function attachShaderMetadata(
         }
     }
 
+    let strippedFirstParam = '';
     if (stripFirstParam) {
         // Remove the first parameter from the source.
         // `function({ dynamic, statics, uniforms }, input) { ... }`
@@ -106,6 +107,7 @@ export function attachShaderMetadata(
                 }
             }
             if (commaPos !== -1) {
+                strippedFirstParam = source.slice(openParen + 1, commaPos);
                 // Remove everything from after '(' to after ','
                 source = source.slice(0, openParen + 1) + source.slice(commaPos + 1);
             }
@@ -117,7 +119,7 @@ export function attachShaderMetadata(
 
     // Rename single `_` identifiers — WGSL rejects them, but minifiers
     // produce `_` as a short variable name.
-    source = source.replace(/(?<=^|[\s,;=([\]{}!+\-*/%&|^~<>?:.])_(?=[\s,;=\]\[{}!+\-*/%&|^~<>?:.,]|$)/g, 'v_');
+    source = source.replace(/(?<![\w$])_(?![\w$])/g, 'v_');
 
     // Parse the function source into an AST.
     // If this fails (e.g. Bun's toString() returns optimized source), silently
@@ -244,6 +246,8 @@ export function attachShaderMetadata(
     // and provide them as individual externals.
     // Also handles bundler-renamed names like `mul2` by stripping trailing digits.
     const resolvedMembers: Record<string, unknown> = {};
+    /** Minified binding name → the externals key it destructures. */
+    const destructuredAliases: Record<string, string> = {};
     for (const name of effectiveExternalNames) {
         if (resolvedAliases[name]) continue;
         let found = false;
@@ -271,6 +275,20 @@ export function attachShaderMetadata(
 
     // Call the externals getter eagerly to detect bundler-renamed names.
     const baseExternals = getExternals();
+
+    // Recover externals destructured out of the stripped first parameter.
+    // Minifiers rewrite `{ uniforms }` to `{ uniforms: a }`, so map each
+    // renamed binding back to the externals entry it destructures. The alias
+    // resolves against the live getter (below), not this eager snapshot.
+    if (strippedFirstParam) {
+        for (const match of strippedFirstParam.matchAll(/([\w$]+)\s*:\s*([\w$]+)/g)) {
+            const propName = match[1];
+            const minifiedName = match[2];
+            if (propName !== minifiedName && propName in baseExternals) {
+                destructuredAliases[minifiedName] = propName;
+            }
+        }
+    }
 
     // Check if unresolved external names correspond to minified variable
     // names in the externals getter. Minifiers rename `lightContribution` to
@@ -313,9 +331,28 @@ export function attachShaderMetadata(
         }
     }
 
+    // A non-destructured first parameter (e.g. `(buffers, input)`) becomes a
+    // free identifier after stripping. Expose the live externals under it so
+    // member access like `buffers.particles` resolves.
+    const trimmedFirstParam = strippedFirstParam.trim();
+    const containerAlias = /^[A-Za-z_$][\w$]*$/.test(trimmedFirstParam) ? trimmedFirstParam : '';
+
     // Wrap the caller's externals provider with resolved members,
-    // resolved aliases, and the caller's own externals.
-    const wrappedExternals = () => ({ ...resolvedMembers, ...resolvedAliases, ...getExternals() });
+    // resolved aliases, and the caller's own externals. Destructured aliases
+    // are resolved from the live getter so they pick up shader-context values
+    // (e.g. typed layout accessors) rather than the eager snapshot.
+    const wrappedExternals = () => {
+        const live = getExternals();
+        const externals: Record<string, unknown> = { ...resolvedMembers, ...resolvedAliases, ...live };
+        for (const minifiedName of Object.keys(destructuredAliases)) {
+            const propName = destructuredAliases[minifiedName];
+            if (propName in live) externals[minifiedName] = live[propName];
+        }
+        if (containerAlias && !(containerAlias in externals)) {
+            externals[containerAlias] = live;
+        }
+        return externals;
+    };
 
     // Attach metadata via TypeGPU's global WeakMap
     globalThis.__TYPEGPU_META__ ??= new WeakMap();

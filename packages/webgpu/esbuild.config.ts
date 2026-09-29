@@ -1,5 +1,6 @@
 import { build } from 'esbuild'
 import { Glob } from 'bun';
+import { cdnBundleOptions } from './src/cdn-bundle-options';
 
 const exclude = [
     '.test.ts',
@@ -42,18 +43,10 @@ async function main() {
         // Single-file bundle for CDN use — all deps inlined so TypeGPU's
         // $internal Symbol is shared across a single module boundary.
         build({
-            entryPoints: ['./src/index.ts'],
-            outbase: 'src',
+            ...cdnBundleOptions,
             outfile: 'dist/esm/murow.webgpu.bundle.js',
-            format: 'esm',
-            platform: 'browser',
-            bundle: true,
-            // Keep minifySyntax off: it emits SequenceExpressions, which
-            // tinyest-for-wgsl cannot transpile at runtime.
-            minifyWhitespace: true,
-            minifyIdentifiers: true,
         }),
     ]);
 }
 
-main();
+if (import.meta.main) main();
