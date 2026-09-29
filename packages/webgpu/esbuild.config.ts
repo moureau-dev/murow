@@ -48,7 +48,10 @@ async function main() {
             format: 'esm',
             platform: 'browser',
             bundle: true,
-            minify: true,
+            // Keep minifySyntax off: it emits SequenceExpressions, which
+            // tinyest-for-wgsl cannot transpile at runtime.
+            minifyWhitespace: true,
+            minifyIdentifiers: true,
         }),
     ]);
 }
