@@ -8,7 +8,7 @@
  * directional/ambient/count block of its uniform array).
  */
 import { SlotMap } from 'murow/core/slot-map';
-import { LIGHT_FLOATS, LIGHT_KIND_POINT, LIGHT_KIND_SPOT } from '../core/types';
+import { LIGHT_FLOATS, LIGHT_KIND_POINT, LIGHT_KIND_SPOT } from '../../../core/types';
 
 /**
  * A dynamic point or spot light. Directional/ambient terms are global and set

@@ -1,6 +1,6 @@
 import { test, expect, describe } from 'bun:test';
 import { LightSystem } from './lights';
-import { LIGHT_FLOATS, MESH_UNIFORM_FLOATS, MESH_UNIFORM_LIGHT_OFFSET } from '../core/types';
+import { LIGHT_FLOATS, MESH_UNIFORM_FLOATS, MESH_UNIFORM_LIGHT_OFFSET } from '../../../core/types';
 
 const L = MESH_UNIFORM_LIGHT_OFFSET;
 

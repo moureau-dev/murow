@@ -7,7 +7,8 @@ import {
     type RaycastOptions,
 } from 'murow/renderer';
 
-import type { MeshInstanceHandle, WebGPU3DRenderer } from './renderer';
+import type { MeshInstanceHandle } from '../types';
+import type { WebGPU3DRenderer } from '../renderer';
 
 type Point = [number, number, number];
 type Hit = RaycastHit<MeshInstanceHandle, Point>;

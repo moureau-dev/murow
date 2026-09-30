@@ -30,7 +30,8 @@ export type {
     MeshInstanceHandle,
     MeshInstanceOptions,
 } from './3d/renderer';
-export type { LightSpec, LightHandle } from './3d/lights';
+export type { LightSpec, LightHandle } from './3d/renderer/lights';
+export type { Handles } from './3d/renderer';
 export { MorphAnimation } from './3d/morph-animation';
 export type { MorphClip, MorphState, MorphClipConfig } from './3d/morph-animation';
 
