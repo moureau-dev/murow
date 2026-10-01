@@ -6,17 +6,18 @@ interface Schedule {
     interval: number;
     next: number;
     cb: () => void;
+    repeat: boolean;
     cancelled: boolean;
 }
 
 /**
- * Fixed-capacity, zero-GC scheduler of tick-interval callbacks for the game loop.
+ * Fixed-capacity, zero-GC scheduler of tick-timed callbacks for the game loop.
  *
  * Schedules are stored in a pre-allocated object pool indexed by a {@link SlotMap}
  * slot, so registering and cancelling reuse objects instead of producing garbage.
- * Ids returned by {@link every} pack the slot with a generation counter, so an id
- * left over from a cancelled schedule can never cancel the schedule that later
- * reuses its slot.
+ * Ids returned by {@link every} and {@link in} pack the slot with a generation
+ * counter, so an id left over from a finished schedule can never cancel the
+ * schedule that later reuses its slot.
  */
 export class TickerSchedule {
     private readonly _capacity: number;
@@ -32,7 +33,7 @@ export class TickerSchedule {
         this._generations = new Uint32Array(this._capacity);
         this._pool = new Array<Schedule>(this._capacity);
         for (let i = 0; i < this._capacity; i++) {
-            this._pool[i] = { interval: 0, next: 0, cb: NOOP, cancelled: false };
+            this._pool[i] = { interval: 0, next: 0, cb: NOOP, repeat: true, cancelled: false };
         }
     }
 
@@ -65,6 +66,28 @@ export class TickerSchedule {
         schedule.interval = Math.max(1, Math.round(intervalTicks));
         schedule.next = currentTick + schedule.interval;
         schedule.cb = cb;
+        schedule.repeat = true;
+        schedule.cancelled = false;
+
+        return slot + this._generations[slot] * this._capacity;
+    }
+
+    /**
+     * Registers a callback to fire once, `delayTicks` after `currentTick`. The
+     * schedule removes itself after firing and its id becomes stale. Returns an
+     * id for {@link clear}, or `-1` if the scheduler is at capacity.
+     */
+    in(delayTicks: number, cb: () => void, currentTick: number): number {
+        if (this._dirty && !this._running) this._compact();
+
+        const slot = this._slots.add();
+        if (slot === -1) return -1;
+
+        const schedule = this._pool[slot];
+        schedule.interval = Math.max(1, Math.round(delayTicks));
+        schedule.next = currentTick + schedule.interval;
+        schedule.cb = cb;
+        schedule.repeat = false;
         schedule.cancelled = false;
 
         return slot + this._generations[slot] * this._capacity;
@@ -102,8 +125,9 @@ export class TickerSchedule {
     }
 
     /**
-     * Fires every schedule whose interval has elapsed at `currentTick`, then
-     * realigns it relative to `currentTick` (a long frame fires once, not a burst).
+     * Fires every schedule due at `currentTick`. Repeating schedules realign
+     * relative to `currentTick` (a long frame fires once, not a burst); one-shot
+     * schedules are removed after firing.
      */
     run(currentTick: number): void {
         if (this._dirty) this._compact();
@@ -112,10 +136,17 @@ export class TickerSchedule {
         const active = this._slots.activeSlots;
         const count = this._slots.size;
         for (let i = 0; i < count; i++) {
-            const schedule = this._pool[active[i]];
+            const slot = active[i];
+            const schedule = this._pool[slot];
             if (schedule.cancelled) continue;
             if (currentTick >= schedule.next) {
-                schedule.next = currentTick + schedule.interval;
+                if (schedule.repeat) {
+                    schedule.next = currentTick + schedule.interval;
+                } else {
+                    schedule.cancelled = true;
+                    this._generations[slot]++;
+                    this._dirty = true;
+                }
                 schedule.cb();
             }
         }

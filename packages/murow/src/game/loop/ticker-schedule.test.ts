@@ -120,3 +120,95 @@ describe('TickerSchedule', () => {
         expect(added).toBeGreaterThan(0);
     });
 });
+
+describe('TickerSchedule.in', () => {
+    test('fires once after the delay', () => {
+        const s = new TickerSchedule(8);
+        let fired = 0;
+        s.in(3, () => { fired++; }, 0); // next = 3
+
+        advance(s, 0, 3); // ticks 0..2
+        expect(fired).toBe(0);
+        s.run(3);
+        expect(fired).toBe(1);
+    });
+
+    test('does not fire again and frees its slot after firing', () => {
+        const s = new TickerSchedule(8);
+        let fired = 0;
+        s.in(3, () => { fired++; }, 0);
+
+        advance(s, 0, 10); // ticks 0..9
+        expect(fired).toBe(1);
+        expect(s.size).toBe(0);
+    });
+
+    test('clear cancels a pending one-shot', () => {
+        const s = new TickerSchedule(8);
+        let fired = 0;
+        const id = s.in(2, () => { fired++; }, 0);
+
+        expect(s.clear(id)).toBe(true);
+        advance(s, 0, 10);
+        expect(fired).toBe(0);
+    });
+
+    test('the id is stale after firing and cannot cancel a recycled slot', () => {
+        const s = new TickerSchedule(1); // force slot reuse
+        const oldId = s.in(2, () => {}, 0);
+        s.run(2); // fires and frees the only slot
+
+        let fired = 0;
+        const newId = s.in(2, () => { fired++; }, 2); // reuses the only slot
+
+        expect(oldId).not.toBe(newId);
+        expect(s.clear(oldId)).toBe(false); // stale id is rejected
+        s.run(4);
+        expect(fired).toBe(1); // new one-shot survived
+    });
+
+    test('a long gap fires once, not a burst', () => {
+        const s = new TickerSchedule(8);
+        let fired = 0;
+        s.in(3, () => { fired++; }, 0);
+
+        s.run(100);
+        expect(fired).toBe(1);
+    });
+
+    test('returns -1 when at capacity', () => {
+        const s = new TickerSchedule(2);
+        expect(s.in(1, () => {}, 0)).not.toBe(-1);
+        expect(s.in(1, () => {}, 0)).not.toBe(-1);
+        expect(s.in(1, () => {}, 0)).toBe(-1);
+    });
+
+    test('rebase re-anchors a pending one-shot to a new origin', () => {
+        const s = new TickerSchedule(8);
+        let fired = 0;
+        s.in(3, () => { fired++; }, 0);
+
+        advance(s, 0, 2); // ticks 0..1, not yet
+        expect(fired).toBe(0);
+
+        s.rebase(0); // tick count reset to 0
+        advance(s, 0, 4); // fires once at 3
+        expect(fired).toBe(1);
+    });
+
+    test('a callback may register a one-shot mid-run', () => {
+        const s = new TickerSchedule(4);
+        let added = 0;
+        let registered = false;
+        s.in(2, () => {
+            if (!registered) {
+                registered = true;
+                s.in(2, () => { added++; }, 2);
+            }
+        }, 0);
+
+        advance(s, 0, 6);
+        expect(registered).toBe(true);
+        expect(added).toBe(1);
+    });
+});

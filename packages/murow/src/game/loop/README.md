@@ -36,22 +36,30 @@ loop.resume();
 
 ## Schedules
 
-Run a callback on a fixed interval with `every`. Units are sugar: `seconds` and
-`milliseconds` are converted to a tick count from the loop's `tickRate`, so a
-schedule fires in lockstep with the simulation no matter which unit you pick.
+Run a callback on a fixed interval with `every` (a `setInterval` replacement), or
+run it once after a delay with `in` (a `setTimeout` replacement). Units are sugar:
+`seconds` and `milliseconds` are converted to a tick count from the loop's
+`tickRate`, so a schedule fires in lockstep with the simulation no matter which
+unit you pick.
 
 ```typescript
 const waveId = loop.every(2).seconds(spawnWave);
 loop.every(4).ticks(stepAi);
 loop.every(500).milliseconds(pollServer);
 
+// Fire once after a delay.
+const gateId = loop.in(3).seconds(closeGate);
+loop.in(250).milliseconds(flashBanner);
+loop.in(10).ticks(applyOnce);
+
 // Cancel one schedule, or all of them.
 loop.clearSchedule(waveId);
+loop.clearSchedule(gateId);
 loop.clearSchedules();
 ```
 
-- `every(...)` returns a numeric id for `clearSchedule`, or `-1` if the pool is full.
-- They fire after `post-tick` and realign from the current tick, so a long frame fires once, not a burst.
+- `every(...)` and `in(...)` return a numeric id for `clearSchedule`, or `-1` if the pool is full.
+- They fire after `post-tick`. `every` realigns from the current tick, so a long frame fires once, not a burst; `in` removes itself after firing and its id becomes stale.
 - They survive `stop()` and re-anchor on the next `start()` — no need to re-register.
 
 The pool is fixed-capacity and zero-GC (default 32 concurrent schedules). Raise it with `maxSchedules`:

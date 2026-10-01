@@ -261,7 +261,28 @@ export class GameLoop<T extends GameLoopType = DriverType> {
     }
 
     /**
-     * Cancels a single schedule by the id returned from `every`.
+     * Registers a callback to run once after a delay.
+     *
+     * The unit methods resolve to a tick count from the loop's `tickRate`, so the
+     * timeout fires in lockstep with the simulation regardless of unit. The
+     * schedule removes itself after firing and its id becomes stale.
+     *
+     * @example
+     * const id = loop.in(2).seconds(closeGate);
+     * loop.clearSchedule(id);
+     */
+    in(count: number): ScheduleBuilder {
+        const rate = this.ticker.rate;
+        const tick = this.ticker.tickCount;
+        return {
+            ticks: (cb) => this._scheduler.in(count, cb, tick),
+            seconds: (cb) => this._scheduler.in(count * rate, cb, tick),
+            milliseconds: (cb) => this._scheduler.in((count / 1000) * rate, cb, tick),
+        };
+    }
+
+    /**
+     * Cancels a single schedule by the id returned from `every` or `in`.
      */
     clearSchedule(id: number): boolean {
         return this._scheduler.clear(id);
@@ -285,8 +306,8 @@ interface GameLoopOptions<T extends GameLoopType> {
     tickRate: number;
     type: T;
     /**
-     * Maximum number of simultaneously live schedules registered via `every`.
-     * Defaults to 32.
+     * Maximum number of simultaneously live schedules registered via `every` or
+     * `in`. Defaults to 32.
      */
     maxSchedules?: number;
     onTick?: (

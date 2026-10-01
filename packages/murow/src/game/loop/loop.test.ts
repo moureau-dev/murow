@@ -119,4 +119,50 @@ describe('GameLoop schedules', () => {
     loop.step(4 / 60 + 0.001); // fires once more at tick 3
     expect(fired).toBe(2);
   });
+
+  test('in(n).ticks fires once after the delay', () => {
+    const loop = new GameLoop({ tickRate: 60, type: 'manual-server' });
+    let fired = 0;
+    loop.in(3).ticks(() => { fired++; });
+
+    loop.step(2 / 60 + 0.001); // not yet
+    expect(fired).toBe(0);
+
+    loop.step(10 / 60 + 0.001); // fires once, never repeats
+    expect(fired).toBe(1);
+  });
+
+  test('seconds and milliseconds resolve to ticks for in', () => {
+    const loop = new GameLoop({ tickRate: 20, type: 'manual-server' });
+    let seconds = 0;
+    let millis = 0;
+    loop.in(1).seconds(() => { seconds++; });        // 20 ticks
+    loop.in(500).milliseconds(() => { millis++; });  // 10 ticks
+
+    for (let i = 0; i < 21; i++) loop.step(1 / 20 + 0.0001);
+    expect(seconds).toBe(1);
+    expect(millis).toBe(1);
+  });
+
+  test('clearSchedule cancels a pending in', () => {
+    const loop = new GameLoop({ tickRate: 60, type: 'manual-server' });
+    let fired = 0;
+    const id = loop.in(2).ticks(() => { fired++; });
+
+    loop.clearSchedule(id);
+    loop.step(10 / 60 + 0.001);
+    expect(fired).toBe(0);
+  });
+
+  test('an in schedule firing does not skip repeating siblings', () => {
+    const loop = new GameLoop({ tickRate: 60, type: 'manual-server' });
+    let self = 0;
+    let other = 0;
+    loop.in(2).ticks(() => { self++; });
+    loop.every(2).ticks(() => { other++; });
+
+    loop.step(6 / 60 + 0.001);
+    expect(self).toBe(1);        // fired once
+    expect(other).toBeGreaterThan(1); // sibling kept firing
+  });
 });
