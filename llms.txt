@@ -2620,16 +2620,19 @@ bucket.getGroup('campfire').asComposite();      // spawn the whole group as one 
 bucket.entries();                               // iterable [id, prefab] pairs — for renderer self-sizing
 ```
 
-For 2D:
+For 2D, declare the bucket through `AssetBucket('2d')` (same wrapper the 3D renderer takes):
 
 ```ts
-const bucket = new PrefabBucket('2d').add({
+const assets = new AssetBucket('2d').prefabs(({ bucket }) => bucket.add({
   type: 'spritesheet',
   id: 'characters',
   src: '/characters.png',
   frameWidth: 32,
   frameHeight: 32,
-});
+}));
+
+await assets.load();
+assets.prefabs.get('characters');
 ```
 
 #### Loading animations on demand
@@ -2796,7 +2799,7 @@ The 3D renderer is **not a PBR/material engine** — there are no shadows, no sk
 
 ```ts
 interface WebGPU2DRendererOptions {
-  prefabs?: PrefabBucket2D;
+  assets?: AssetBucket;           // AssetBucket<'2d'>
   maxInstances?: number;          // also accepts `maxSprites` as an alias
   maxSprites?: number;
   clearColor?: [number, number, number, number];
@@ -2804,7 +2807,7 @@ interface WebGPU2DRendererOptions {
 }
 
 const renderer = new WebGPU2DRenderer(canvas, {
-  prefabs,
+  assets,
   maxSprites: 60_000,
   clearColor: [0.2, 0.05, 0.15, 1],
   autoResize: true,
@@ -2816,8 +2819,8 @@ renderer.camera.y = 400;
 renderer.camera.zoom = 1;
 renderer.camera.screenToWorld(sx, sy);   // [wx, wy]
 
-// Sprite-sheet from PrefabBucket:
-const sheet = prefabs.get('characters');
+// Sprite-sheet from the AssetBucket:
+const sheet = assets.prefabs.get('characters');
 // Or directly (no bucket):
 const sheet2 = await renderer.loadSpritesheet({ image: '/sprites.png', frameWidth: 32, frameHeight: 32 });
 
@@ -3315,7 +3318,7 @@ class MorphAnimation {
 
 ### Other WebGPU exports
 
-- `Spritesheet`, `createTextureFromBitmap` — manual GPU texture/atlas building if you're not going through `PrefabBucket`.
+- `Spritesheet`, `createTextureFromBitmap` — manual GPU texture/atlas building if you're not going through `AssetBucket`.
 - `GeometryData`, `BuiltInGeometry`, `resolveBuiltInGeometry` — for plugging custom vertex layouts into `createGeometry`.
 - `createCube`, `createPlane`, `createGrid`, `createSphere`, `createCylinder`, `createCone` — individual geometry factory functions (e.g. `createCube({ size: 2, uv: 'cross' })`).
 - `DynamicSprite`, `StaticSprite`, `SpriteUniforms`, `DynamicInstance3D`, `StaticInstance3D`, `DynamicMesh`, `StaticMesh`, `SkinnedStaticMesh`, `MeshUniforms` — exported `d.struct` shapes the renderer uses internally. Use these if you want to pack data into the same format the renderer reads.

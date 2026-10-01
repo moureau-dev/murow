@@ -108,7 +108,7 @@ function computeBucketStats(bucket: PrefabBucket3D): { maxSkinnedParts: number; 
 }
 
 
-export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket<any, any, any>> extends Base3DRenderer {
+export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Base3DRenderer {
     private root!: TgpuRoot;
     private device!: GPUDevice;
     private context!: GPUCanvasContext;
@@ -151,7 +151,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
     private uniformData = new Float32Array(MESH_UNIFORM_FLOATS);
     private lastRenderTime = 0;
 
-    private readonly _assets: AssetBucket<any, any, any> | null;
+    private readonly _assets: AssetBucket<'3d', any, any> | null;
     private readonly _prefabs: PrefabBucket3D | null;
 
     debug: { hitboxes: boolean } = { hitboxes: false };
@@ -301,7 +301,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<any, any, any> = AssetBucket
      * subscribes the resync coordinator to the bucket's `clips-changed`
      * channel for lazy load/unload.
      */
-    private async uploadPrefabBucket(assets: AssetBucket<any, any, any>): Promise<void> {
+    private async uploadPrefabBucket(assets: AssetBucket<'3d', any, any>): Promise<void> {
         const bucket = assets.prefabs as unknown as PrefabBucket3D;
         this.animation.attachBucket(bucket);
 

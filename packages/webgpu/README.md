@@ -46,25 +46,25 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 <summary><strong>2D Sprites</strong></summary>
 
 ```typescript
-import { PrefabBucket } from 'murow';
+import { AssetBucket } from 'murow';
 import { WebGPU2DRenderer } from 'murow/webgpu';
 
-const prefabs = new PrefabBucket('2d')
-  .add({
+const assets = new AssetBucket('2d')
+  .prefabs(({ bucket }) => bucket.add({
     type: 'spritesheet',
     id: 'characters',
     src: '/assets/characters.png',
     frameWidth: 32,
     frameHeight: 32,
-  });
+  }));
 
-await prefabs.load();
+await assets.load();
 
-const renderer = new WebGPU2DRenderer(canvas, { prefabs, maxInstances: 10000 });
+const renderer = new WebGPU2DRenderer(canvas, { assets, maxInstances: 10000 });
 await renderer.init();
 
 const player = renderer.addSprite({
-  sheet: prefabs.get('characters'),
+  sheet: assets.prefabs.get('characters'),
   sprite: 0,
   position: [400, 300],
 });

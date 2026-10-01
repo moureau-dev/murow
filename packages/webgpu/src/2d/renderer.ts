@@ -61,17 +61,18 @@ import {
 import { parseSpritesheet, type ParsedSpritesheet } from 'murow/renderer';
 import { GeometryBuilder, type GeometryOptions } from '../geometry/geometry-builder';
 import { ComputeBuilder, type ComputeOptions } from '../compute/compute-builder';
-import type { PrefabBucket2D, Prefab2D, SpritesheetPrefab } from 'murow/renderer';
+import type { AssetBucket, PrefabBucket2D, Prefab2D, SpritesheetPrefab } from 'murow/renderer';
 import { testHitbox2D, pointInQuad2D, type Hitbox } from 'murow/core/hitbox';
 
-export interface WebGPU2DRendererOptions extends Renderer2DOptions {
+export interface WebGPU2DRendererOptions<A extends AssetBucket<'2d', any, any> = AssetBucket<'2d', any, any>> extends Renderer2DOptions {
     /**
-     * Pre-loaded prefab bucket. When provided, the renderer uploads each prefab
-     * to the GPU during `init()`, and `addSprite({ sheet: bucket.get('id') })`
-     * resolves to the right spritesheet handle. The bucket must have `load()`
-     * resolved before being passed in.
+     * Pre-loaded asset bucket. When provided, the renderer uploads every
+     * spritesheet prefab to the GPU during `init()`, and
+     * `addSprite({ sheet: assets.prefabs.get('id') })` resolves to the right
+     * spritesheet handle. The bucket must have `load()` resolved before being
+     * passed in.
      */
-    prefabs?: PrefabBucket2D;
+    assets?: A;
     /**
      * How many sprite instances you intend to spawn. Used to size buffers when
      * `maxSprites` is not given explicitly. Defaults to 1024.
@@ -97,7 +98,7 @@ function resolveSpritePrefabHandle(prefab: Prefab2D): SpritesheetHandle {
     return h;
 }
 
-export class WebGPU2DRenderer extends Base2DRenderer {
+export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucket<'2d', any, any>> extends Base2DRenderer {
     private root!: TgpuRoot;
     private _device!: GPUDevice;
     private context!: GPUCanvasContext;
@@ -153,10 +154,10 @@ export class WebGPU2DRenderer extends Base2DRenderer {
 
     private readonly _prefabs: PrefabBucket2D | null;
 
-    constructor(canvas: HTMLCanvasElement, options: WebGPU2DRendererOptions) {
+    constructor(canvas: HTMLCanvasElement, options: WebGPU2DRendererOptions<A>) {
         const resolvedMaxSprites = options.maxSprites ?? options.maxInstances ?? 1024;
         super(canvas, { ...options, maxSprites: resolvedMaxSprites });
-        this._prefabs = options.prefabs ?? null;
+        this._prefabs = (options.assets?.prefabs as unknown as PrefabBucket2D | undefined) ?? null;
         this.camera = new Camera2D(canvas.width || 800, canvas.height || 600);
         this.raycast = new WebGPURaycast2D(this);
         this.freeList = new FreeList(resolvedMaxSprites);

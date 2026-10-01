@@ -29,16 +29,16 @@ export interface ModelData {
 }
 
 type TextureIdsOf<A> =
-    A extends AssetBucket<any, infer TexSpecs extends Record<string, TextureSpec>, any>
+    A extends AssetBucket<'3d', infer TexSpecs extends Record<string, TextureSpec>, any>
         ? keyof TexSpecs
         : string;
 type PrefabsIdsOf<A> =
-    A extends AssetBucket<any, any, infer PrefabSpecs extends Record<string, Prefab3DSpec>>
+    A extends AssetBucket<'3d', any, infer PrefabSpecs extends Record<string, Prefab3DSpec>>
         ? keyof PrefabSpecs
         : string;
 type StringOr<T extends string> = T | (string & {});
 
-interface MeshInstance<A extends AssetBucket<any, any, any>> {
+interface MeshInstance<A extends AssetBucket<'3d', any, any>> {
     /**
      * Prefab (ID or from bucket) or raw model handle to spawn. If a prefab, the renderer
      * will look up the GPU handle for it and spawn all its parts. If a raw model handle, the
@@ -55,7 +55,7 @@ interface MeshInstance<A extends AssetBucket<any, any, any>> {
     texture?: StringOr<TextureIdsOf<A>> | TexturePrefab;
 }
 
-export interface MeshInstanceOptions<A extends AssetBucket<any, any, any> = AssetBucket<any, any, any>> extends MeshInstance<A> {
+export interface MeshInstanceOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends MeshInstance<A> {
     /** World position. Defaults to `[0, 0, 0]`. */
     position?: readonly [x: number, y: number, z: number];
     /** Euler rotation in radians. Defaults to `[0, 0, 0]`. */
@@ -71,7 +71,7 @@ export type RaycastOptions = RaycastOptionsBase<MeshInstanceHandle>;
 export type Raycast = RaycastBase<MeshInstanceHandle, [number, number, number]>;
 export type RaycastMemo = RaycastMemoBase<MeshInstanceHandle, [number, number, number]>;
 
-export interface WebGPU3DRendererOptions<A extends AssetBucket<any, any, any> = AssetBucket<any, any, any>> extends Renderer3DOptions {
+export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Renderer3DOptions {
     maxSkinnedInstances?: number;
     maxBonesPerSkin?: number;
     /**
