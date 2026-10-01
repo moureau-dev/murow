@@ -1,7 +1,7 @@
 /**
  * LagCompensation benchmark — run with:
  *
- *   bun run packages/netcode/bench/lag-compensation.ts
+ *   bun run benchmarks/netcode/lag-compensation.ts
  *
  * Env knobs:
  *   ENTITIES  (default 1000)
@@ -13,8 +13,8 @@
  */
 import { f32 } from 'murow/core/binary-codec';
 import { defineComponent, World, type Entity } from 'murow/ecs';
-import { networked } from '../src/components/sync-spec';
-import { LagCompensation } from '../src/server/plugins/lag-compensation';
+import { networked } from '../../packages/netcode/src/components/sync-spec';
+import { LagCompensation } from '../../packages/netcode/src/server/plugins/lag-compensation';
 
 const ENTITIES = Number(process.env.ENTITIES ?? 1000);
 const TICKS = Number(process.env.TICKS ?? 2000);
@@ -40,7 +40,7 @@ function advance(world: World, ids: Entity[], tick: number): void {
     const p = world.fields(Position);
     const r = world.fields(Rotation);
     for (let i = 0; i < ids.length; i++) {
-        const e = ids[i];
+        const e = ids[i]!;
         p.x[e] = tick;
         p.y[e] = i;
         p.z[e] = tick * 0.5;
@@ -125,6 +125,6 @@ run('rewind', REWINDS, () => {
     plugin.rewind(target, () => {
         // A realistic handler body: touch one entity's rewound state.
         const p = world.fields(Position);
-        return p.x[ids[0]];
+        return p.x[ids[0]!];
     });
 });

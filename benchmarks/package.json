@@ -3,6 +3,9 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "bench:netcode": "bun run netcode/lag-compensation.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
