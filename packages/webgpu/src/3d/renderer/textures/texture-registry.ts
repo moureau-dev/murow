@@ -7,33 +7,40 @@ export interface GpuTexture {
     bindGroup: GPUBindGroup;
 }
 
-/** Key of the 1×1 white fallback (never collides with user texture ids). */
-const WHITE_ID = '';
-
 /**
- * TextureRegistry — owns the uploaded textures and their bind groups. The
- * white fallback is registered so bind group 1 is always valid for instances
- * without a texture override or model default.
+ * TextureRegistry — owns the uploaded textures and their bind groups. Textures
+ * are stored densely and each `TexturePrefab` is stamped with its integer
+ * `gpuIndex` at upload; id lookup resolves through the asset bucket to that
+ * prefab, so the registry itself holds no string table. The white fallback is
+ * kept separately so bind group 1 is always valid.
  */
 export class TextureRegistry {
-    private readonly byId = new Map<string, GpuTexture>();
+    private readonly gpuTextures: GpuTexture[] = [];
+    private whiteTex: GpuTexture | null = null;
+    private resolve: ((id: string) => TexturePrefab | undefined) | null = null;
 
     constructor(
         private readonly device: GPUDevice,
         private readonly layout: GPUBindGroupLayout,
     ) {}
 
+    /** Attach the id to prefab resolver once the asset bucket is available. */
+    setResolver(resolve: (id: string) => TexturePrefab | undefined): void {
+        this.resolve = resolve;
+    }
+
     has(id: string): boolean {
-        return this.byId.has(id);
+        return this.resolve?.(id)?.gpuIndex !== undefined;
     }
 
     get(id: string): GpuTexture | undefined {
-        return this.byId.get(id);
+        const index = this.resolve?.(id)?.gpuIndex;
+        return index === undefined ? undefined : this.gpuTextures[index];
     }
 
     /** Bind group of the white fallback. */
     get white(): GPUBindGroup {
-        return this.byId.get(WHITE_ID)!.bindGroup;
+        return this.whiteTex!.bindGroup;
     }
 
     initWhiteFallback(): void {
@@ -50,8 +57,7 @@ export class TextureRegistry {
         );
         const view = texture.createView();
         const sampler = this.device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-        const bindGroup = this.createBindGroup(view, sampler);
-        this.byId.set(WHITE_ID, { view, sampler, bindGroup });
+        this.whiteTex = { view, sampler, bindGroup: this.createBindGroup(view, sampler) };
     }
 
     async upload(prefab: TexturePrefab): Promise<void> {
@@ -63,7 +69,8 @@ export class TextureRegistry {
             minFilter: 'linear',
             mipmapFilter: 'linear',
         });
-        this.byId.set(prefab.id, { view, sampler, bindGroup: this.createBindGroup(view, sampler) });
+        prefab.gpuIndex = this.gpuTextures.length;
+        this.gpuTextures.push({ view, sampler, bindGroup: this.createBindGroup(view, sampler) });
     }
 
     private createBindGroup(view: GPUTextureView, sampler: GPUSampler): GPUBindGroup {

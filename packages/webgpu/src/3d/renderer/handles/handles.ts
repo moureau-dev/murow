@@ -103,6 +103,33 @@ export declare namespace Handles {
         destroy(): void;
     }
 
-    /** A dynamic light owned by the `LightSystem`. */
-    export type LightHandle = import('../lights/lights').LightHandle;
+    /**
+     * Live handle to a dynamic light. All properties are readable and mutable
+     * every frame, unlike a mesh instance's spawn-frozen color. `destroy()`
+     * frees the slot.
+     *
+     * The `position` / `direction` / `color` getters return a per-handle reused
+     * tuple (mutated on each read), matching `MeshInstanceHandle`. Copy the
+     * values out if you need to retain them past the next read on the same handle.
+     */
+    export interface LightHandle {
+        readonly slot: number;
+        setPosition(x: number, y: number, z: number): void;
+        setDirection(x: number, y: number, z: number): void;
+        /** Snap to a position without interpolating from the previous one (use after a discontinuous move). */
+        teleport(x: number, y: number, z: number): void;
+        setColor(r: number, g: number, b: number): void;
+        readonly position: readonly [number, number, number];
+        readonly direction: readonly [number, number, number];
+        readonly color: readonly [number, number, number];
+        intensity: number;
+        range: number;
+        /** Cone half-angle in radians (spot only; `0` for point lights). Readable + settable. */
+        angle: number;
+        /** Edge softness 0..1 (spot only). `0` = hard edge, `1` = fades from center. Readable + settable. */
+        smoothness: number;
+        /** Whether the light contributes this frame. Toggling does not free the slot. */
+        enabled: boolean;
+        destroy(): void;
+    }
 }

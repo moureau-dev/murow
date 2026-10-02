@@ -6,6 +6,7 @@ export type {
     GltfModel,
     InstanceHandle,
     MeshInstanceHandle,
+    LightHandle,
     MeshInstanceOptions,
     WebGPU3DRendererOptions,
 } from './types';

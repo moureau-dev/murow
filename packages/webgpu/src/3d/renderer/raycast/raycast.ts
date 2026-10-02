@@ -20,14 +20,15 @@ export class WebGPURaycast3D extends Raycast<MeshInstanceHandle, Point> {
     readonly state: RaycastState = new HitBuffer<MeshInstanceHandle, Point>(3);
 
     private resultBuffer: BufferedHit<MeshInstanceHandle, Point>[] = [];
-    private memos = new Set<WebGPURaycastMemo3D>();
+    /** Dense list of live memos; removal is swap-pop, no Set allocation. */
+    private readonly memos: WebGPURaycastMemo3D[] = [];
 
     constructor(private renderer: WebGPU3DRenderer) { super(); }
 
     update(input: InputSnapshot): void {
         this.state.reset();
         this.renderer._collectRaycastHitsInto(input.mouse.position.x, input.mouse.position.y, this.state);
-        for (const m of this.memos) m._invalidate();
+        for (let i = 0; i < this.memos.length; i++) this.memos[i]!._invalidate();
     }
 
     /**
@@ -49,18 +50,32 @@ export class WebGPURaycast3D extends Raycast<MeshInstanceHandle, Point> {
     }
 
     memo(opts: Opts): WebGPURaycastMemo3D {
-        const m = new WebGPURaycastMemo3D(this.state, opts, () => this.memos.delete(m));
-        this.memos.add(m);
+        const m = new WebGPURaycastMemo3D(this.state, opts, () => this.removeMemo(m));
+        m._index = this.memos.length;
+        this.memos.push(m);
         return m;
     }
 
+    private removeMemo(m: WebGPURaycastMemo3D): void {
+        const i = m._index;
+        if (i < 0 || i >= this.memos.length || this.memos[i] !== m) return;
+        const last = this.memos.pop()!;
+        if (last !== m) {
+            this.memos[i] = last;
+            last._index = i;
+        }
+        m._index = -1;
+    }
+
     clearMemos(): void {
-        for (const m of this.memos) m._detach();
-        this.memos.clear();
+        for (let i = 0; i < this.memos.length; i++) this.memos[i]!._detach();
+        this.memos.length = 0;
     }
 }
 
 export class WebGPURaycastMemo3D extends RaycastMemo<MeshInstanceHandle, Point> {
+    /** Position in the renderer's dense memo list, or -1 when not attached. */
+    _index = -1;
     private dirty = true;
     private detached = false;
     private cached: BufferedHit<MeshInstanceHandle, Point>[] = [];

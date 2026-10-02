@@ -23,12 +23,12 @@ describe('TextureRegistry', () => {
         expect(reg.get('brick')).toBeUndefined();
     });
 
-    test('white fallback registers under the empty id', () => {
+    test('white fallback is available by property, not by id', () => {
         const { device } = mockDevice();
         const reg = new TextureRegistry(device, {} as GPUBindGroupLayout);
         reg.initWhiteFallback();
-        expect(reg.has('')).toBe(true);
-        expect(reg.get('')!.bindGroup).toBeDefined();
-        expect(reg.white).toBe(reg.get('')!.bindGroup);
+        expect(reg.white).toBeDefined();
+        expect(reg.has('')).toBe(false);
+        expect(reg.get('')).toBeUndefined();
     });
 });

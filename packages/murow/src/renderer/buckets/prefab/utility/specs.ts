@@ -310,6 +310,8 @@ export interface TexturePrefab<S extends TextureSpec = TextureSpec> {
     readonly parsed: HTMLImageElement;
     readonly metadata: MetadataOf<S>;
     readonly hitbox?: string;
+    /** Dense GPU slot assigned by the renderer's texture registry at upload. */
+    gpuIndex?: number;
 }
 
 export interface SpherePrefab<S extends SphereSpec = SphereSpec> {

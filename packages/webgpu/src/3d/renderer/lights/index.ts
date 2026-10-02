@@ -1,2 +1,2 @@
 export { LightSystem } from './lights';
-export type { LightSpec, LightHandle } from './lights';
+export type { LightSpec } from './lights';

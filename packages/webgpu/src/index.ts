@@ -28,9 +28,10 @@ export type {
     GltfModel,
     InstanceHandle,
     MeshInstanceHandle,
+    LightHandle,
     MeshInstanceOptions,
 } from './3d/renderer';
-export type { LightSpec, LightHandle } from './3d/renderer/lights';
+export type { LightSpec } from './3d/renderer/lights';
 export type { Handles } from './3d/renderer';
 export { MorphAnimation } from './3d/morph-animation';
 export type { MorphClip, MorphState, MorphClipConfig } from './3d/morph-animation';

@@ -136,6 +136,11 @@ export class Bucket<
         return prefab as Extract<Prefab, { type: Specs[K]['type'] }>;
     }
 
+    /** Returns the parsed prefab by id, or `undefined` if unknown or not loaded. */
+    find(id: string): Prefab | undefined {
+        return this.prefabs?.get(id);
+    }
+
     /** True once `load()` has resolved. */
     get loaded(): boolean {
         return this.prefabs !== null;

@@ -34,7 +34,8 @@ export class InstanceStore {
     staticDirty = false;
 
     private readonly freeList: FreeList;
-    private readonly instanceTextureBGs = new Map<number, GPUBindGroup>();
+    /** Per-slot texture override bind group, or null for the model default. */
+    private readonly textureBGs: (GPUBindGroup | null)[];
 
     constructor(private readonly deps: InstanceStoreDeps) {
         const n = deps.maxInstances;
@@ -43,20 +44,21 @@ export class InstanceStore {
         this.slotIndexData = new Uint32Array(n);
         this.instanceModelIds = new Uint8Array(n);
         this.instanceHandles = new Array(n).fill(null);
+        this.textureBGs = new Array(n).fill(null);
         this.freeList = new FreeList(n);
         this.batcher = new SparseBatcher(n);
     }
 
-    textureBindGroup(instanceId: number): GPUBindGroup | undefined {
-        return this.instanceTextureBGs.get(instanceId);
+    textureBindGroup(slot: number): GPUBindGroup | undefined {
+        return this.textureBGs[slot] ?? undefined;
     }
 
-    setTextureBindGroup(instanceId: number, bindGroup: GPUBindGroup): void {
-        this.instanceTextureBGs.set(instanceId, bindGroup);
+    setTextureBindGroup(slot: number, bindGroup: GPUBindGroup): void {
+        this.textureBGs[slot] = bindGroup;
     }
 
-    deleteTextureBindGroup(instanceId: number): void {
-        this.instanceTextureBGs.delete(instanceId);
+    deleteTextureBindGroup(slot: number): void {
+        this.textureBGs[slot] = null;
     }
 
     /** Allocate a slot, write the initial transform, and return a live handle. */
@@ -161,13 +163,13 @@ export class InstanceStore {
             },
             setTexture(tex: string | TexturePrefab | null) {
                 if (tex == null) {
-                    self.instanceTextureBGs.delete(id);
+                    self.textureBGs[slot] = null;
                     currentTexId = null;
                 } else {
                     const texId = typeof tex === 'string' ? tex : tex.id;
                     const bindGroup = self.deps.getTextureBindGroup(texId);
                     if (bindGroup) {
-                        self.instanceTextureBGs.set(id, bindGroup);
+                        self.textureBGs[slot] = bindGroup;
                         currentTexId = texId;
                     }
                 }
@@ -175,7 +177,7 @@ export class InstanceStore {
             destroy() {
                 if (destroyed) return;
                 destroyed = true;
-                self.instanceTextureBGs.delete(id);
+                self.textureBGs[slot] = null;
                 self.batcher.remove(0, modelHandle.id, slot);
                 self.freeList.free(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
@@ -188,7 +190,7 @@ export class InstanceStore {
 
         if (initTexId) {
             const bindGroup = this.deps.getTextureBindGroup(initTexId);
-            if (bindGroup) this.instanceTextureBGs.set(id, bindGroup);
+            if (bindGroup) this.textureBGs[slot] = bindGroup;
         }
 
         return handle;

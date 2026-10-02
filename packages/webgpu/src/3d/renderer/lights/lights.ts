@@ -8,6 +8,7 @@
  * directional/ambient/count block of its uniform array).
  */
 import { SlotMap } from 'murow/core/slot-map';
+import type { Handles } from '../handles';
 import { LIGHT_FLOATS, LIGHT_KIND_POINT, LIGHT_KIND_SPOT } from '../../../core/types';
 
 /**
@@ -44,33 +45,10 @@ export type LightSpec =
     };
 
 /**
- * Live handle to a dynamic light. All properties are readable and mutable every
- * frame — unlike a mesh instance's spawn-frozen color. `destroy()` frees the slot.
- *
- * The `position` / `direction` / `color` getters return a per-handle reused
- * tuple (mutated on each read), matching `MeshInstanceHandle`. Copy the values
- * out if you need to retain them past the next read on the same handle.
+ * Live handle to a dynamic light. Declared in `handles/` alongside the other
+ * renderer handles; local alias keeps the implementation readable.
  */
-export interface LightHandle {
-    readonly slot: number;
-    setPosition(x: number, y: number, z: number): void;
-    setDirection(x: number, y: number, z: number): void;
-    /** Snap to a position without interpolating from the previous one (use after a discontinuous move). */
-    teleport(x: number, y: number, z: number): void;
-    setColor(r: number, g: number, b: number): void;
-    readonly position: readonly [number, number, number];
-    readonly direction: readonly [number, number, number];
-    readonly color: readonly [number, number, number];
-    intensity: number;
-    range: number;
-    /** Cone half-angle in radians (spot only; `0` for point lights). Readable + settable. */
-    angle: number;
-    /** Edge softness 0..1 (spot only). `0` = hard edge, `1` = fades from center. Readable + settable. */
-    smoothness: number;
-    /** Whether the light contributes this frame. Toggling does not free the slot. */
-    enabled: boolean;
-    destroy(): void;
-}
+type LightHandle = Handles.LightHandle;
 
 /** Light field offsets within a record (see the `Light` struct in core/types). */
 const KIND = 0;
@@ -91,6 +69,11 @@ export class LightSystem {
     /** CPU-side spot cone params per slot (the GPU only needs the derived cosines). */
     private readonly angle: Float32Array;
     private readonly smoothness: Float32Array;
+
+    // Cached u32 view over the renderer's uniform buffer, recreated only when the
+    // buffer changes, so `writeUniforms` never allocates during a frame.
+    private uniformU32: Uint32Array | null = null;
+    private uniformU32Buffer: ArrayBufferLike | null = null;
 
     // Global directional + ambient terms (the classic fixed look; now configurable).
     private dirDir: [number, number, number] = [0.3, 0.8, 0.5];
@@ -245,7 +228,11 @@ export class LightSystem {
         uniformData[offset + 7] = this.ambient[0];
         uniformData[offset + 8] = this.ambient[1];
         uniformData[offset + 9] = this.ambient[2];
-        new Uint32Array(uniformData.buffer)[offset + 10] = count;
+        if (this.uniformU32Buffer !== uniformData.buffer) {
+            this.uniformU32Buffer = uniformData.buffer;
+            this.uniformU32 = new Uint32Array(uniformData.buffer);
+        }
+        this.uniformU32![(uniformData.byteOffset >> 2) + offset + 10] = count;
     }
 
     /**

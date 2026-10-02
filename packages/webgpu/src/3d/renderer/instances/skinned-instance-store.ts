@@ -27,11 +27,11 @@ export interface SkinModelLike {
 export interface SkinnedInstanceStoreDeps {
     maxSkinnedInstances: number;
     maxTotalBones: number;
+    /** Upper bound on distinct skin indices; sizes the free-offset table. */
+    maxSkins: number;
     /** Upload the skin's rest pose into the shared bone-matrix buffer at `boneOffset`. */
     uploadRestPose(skinModel: SkinModelLike, boneOffset: number, jointCount: number): void;
     getTextureBindGroup(id: string): GPUBindGroup | undefined;
-    setTextureBindGroup(instanceId: number, bindGroup: GPUBindGroup): void;
-    deleteTextureBindGroup(instanceId: number): void;
 }
 
 /**
@@ -56,11 +56,16 @@ export class SkinnedInstanceStore {
     private readonly boneOffsetRefcount: Uint32Array;
     /** Per-bone-offset skinIndex, so freed blocks return to the right pool. */
     private readonly boneOffsetSkinIndex: Uint32Array;
-    private readonly freedBoneOffsets = new Map<number, number[]>();
+    /** Intrusive free list of bone offsets, one chain per skin (head = offset or -1). */
+    private readonly freeHead: Int32Array;
+    /** Next free offset in the same skin's chain, or -1. */
+    private readonly freeNext: Int32Array;
     private nextBoneOffset = 0;
 
     private readonly freeList: FreeList;
     private readonly staticDV: DataView;
+    /** Per-slot texture override bind group, or null for the model default. */
+    private readonly textureBGs: (GPUBindGroup | null)[];
 
     constructor(private readonly deps: SkinnedInstanceStoreDeps) {
         const n = deps.maxSkinnedInstances;
@@ -72,11 +77,19 @@ export class SkinnedInstanceStore {
         this.instanceBoneOffsets = new Uint32Array(n);
         this.animStates = new Array(n).fill(null);
         this.instanceHandles = new Array(n).fill(null);
+        this.textureBGs = new Array(n).fill(null);
         this.freeList = new FreeList(n);
         this.batcher = new SparseBatcher(n);
 
         this.boneOffsetRefcount = new Uint32Array(deps.maxTotalBones);
         this.boneOffsetSkinIndex = new Uint32Array(deps.maxTotalBones);
+        this.freeHead = new Int32Array(deps.maxSkins).fill(-1);
+        this.freeNext = new Int32Array(deps.maxTotalBones).fill(-1);
+    }
+
+    /** Per-slot texture override bind group, or undefined for the model default. */
+    textureBindGroup(slot: number): GPUBindGroup | undefined {
+        return this.textureBGs[slot] ?? undefined;
     }
 
     spawn(
@@ -100,9 +113,10 @@ export class SkinnedInstanceStore {
             animState = this.animStates[linkedSlot];
             this.boneOffsetRefcount[boneOffset]++;
         } else {
-            const pool = this.freedBoneOffsets.get(skinIndex);
-            if (pool && pool.length > 0) {
-                boneOffset = pool.pop()!;
+            const head = this.freeHead[skinIndex];
+            if (head !== -1) {
+                boneOffset = head;
+                this.freeHead[skinIndex] = this.freeNext[head];
             } else {
                 boneOffset = this.nextBoneOffset + jointCount;
                 this.nextBoneOffset += jointCount * 2;
@@ -224,13 +238,13 @@ export class SkinnedInstanceStore {
             },
             setTexture(tex: string | TexturePrefab | null) {
                 if (tex == null) {
-                    self.deps.deleteTextureBindGroup(id);
+                    self.textureBGs[slot] = null;
                     currentTexId = null;
                 } else {
                     const texId = typeof tex === 'string' ? tex : tex.id;
                     const bindGroup = self.deps.getTextureBindGroup(texId);
                     if (bindGroup) {
-                        self.deps.setTextureBindGroup(id, bindGroup);
+                        self.textureBGs[slot] = bindGroup;
                         currentTexId = texId;
                     }
                 }
@@ -242,17 +256,14 @@ export class SkinnedInstanceStore {
                 self.freeList.free(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 stat.fill(0, statBase, statBase + SKINNED_STATIC_MESH_FLOATS);
+                self.textureBGs[slot] = null;
                 animStates[slot] = null;
                 self.instanceHandles[slot] = null;
                 self.staticDirty = true;
 
                 if (--self.boneOffsetRefcount[capturedBoneOffset] === 0) {
-                    let pool = self.freedBoneOffsets.get(capturedSkinIndex);
-                    if (!pool) {
-                        pool = [];
-                        self.freedBoneOffsets.set(capturedSkinIndex, pool);
-                    }
-                    pool.push(capturedBoneOffset);
+                    self.freeNext[capturedBoneOffset] = self.freeHead[capturedSkinIndex];
+                    self.freeHead[capturedSkinIndex] = capturedBoneOffset;
                 }
             },
         };

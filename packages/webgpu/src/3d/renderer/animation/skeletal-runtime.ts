@@ -28,6 +28,8 @@ export interface SkeletalRuntimeDeps {
     skinCull: SkinCull;
     maxSkinnedInstances: number;
     maxTotalBones: number;
+    /** Upper bound on distinct skin indices, used to size resync tables. */
+    maxSkins: number;
     getModel(modelId: number): { skinIndex: number } | undefined;
     getSkinModel(skinIndex: number): SkinnedModelEntry | undefined;
     skinnedModelCount(): number;
@@ -65,7 +67,7 @@ export class SkeletalRuntime {
 
     /** Create the lazy clip-load coordinator for a prefab bucket. */
     attachBucket(bucket: PrefabBucket3D): void {
-        this.clipResync = new GltfClipResyncCoordinator(bucket);
+        this.clipResync = new GltfClipResyncCoordinator(bucket, this.deps.maxSkins);
     }
 
     /** Register a skinned glTF prefab's skin index with the resync coordinator. */
@@ -269,39 +271,39 @@ export class SkeletalRuntime {
      */
     private syncLazyAnimationChanges(): void {
         const resync = this.clipResync;
-        if (!resync || resync.pending.size === 0) return;
-
-        const remapsBySkin = new Map<number, Int32Array>();
-        for (const skinIndex of resync.pending) {
-            const sm = this.deps.getSkinModel(skinIndex);
-            if (!sm) continue;
-            remapsBySkin.set(skinIndex, sm.animation.replaceClips(sm.parsedSkin.animClips));
-        }
-        resync.clear();
+        if (!resync || resync.pendingCount === 0) return;
 
         const skinned = this.deps.skinned;
-        for (let slot = 0; slot < this.deps.maxSkinnedInstances; slot++) {
-            const animState = skinned.animStates[slot];
-            if (!animState) continue;
-            const modelId = skinned.instanceModelIds[slot];
-            const model = this.deps.getModel(modelId);
-            if (!model || model.skinIndex < 0) continue;
-            const remap = remapsBySkin.get(model.skinIndex);
-            if (!remap) continue;
+        const maxSlots = this.deps.maxSkinnedInstances;
+        const pending = resync.pendingIndices;
 
-            if (animState.clipId >= 0 && animState.clipId < remap.length) {
-                const next = remap[animState.clipId];
-                if (next < 0) {
-                    animState.clipId = -1;
-                    animState.playing = false;
-                } else {
-                    animState.clipId = next;
+        for (let p = 0; p < resync.pendingCount; p++) {
+            const skinIndex = pending[p]!;
+            const sm = this.deps.getSkinModel(skinIndex);
+            if (!sm) continue;
+            const remap = sm.animation.replaceClips(sm.parsedSkin.animClips);
+
+            for (let slot = 0; slot < maxSlots; slot++) {
+                const animState = skinned.animStates[slot];
+                if (!animState) continue;
+                const model = this.deps.getModel(skinned.instanceModelIds[slot]);
+                if (!model || model.skinIndex !== skinIndex) continue;
+
+                if (animState.clipId >= 0 && animState.clipId < remap.length) {
+                    const next = remap[animState.clipId];
+                    if (next < 0) {
+                        animState.clipId = -1;
+                        animState.playing = false;
+                    } else {
+                        animState.clipId = next;
+                    }
+                }
+                if (animState.prevClipId >= 0 && animState.prevClipId < remap.length) {
+                    animState.prevClipId = remap[animState.prevClipId];
                 }
             }
-            if (animState.prevClipId >= 0 && animState.prevClipId < remap.length) {
-                animState.prevClipId = remap[animState.prevClipId];
-            }
         }
+        resync.clear();
 
         this.packedAnimData = createPackedAnimationData();
         const skinCount = this.deps.skinnedModelCount();

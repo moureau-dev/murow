@@ -19,7 +19,7 @@ import {
     MESH_UNIFORM_LIGHT_OFFSET,
     MESH_UNIFORM_FLOATS,
 } from '../../core/types';
-import { LightSystem, type LightSpec, type LightHandle } from './lights';
+import { LightSystem, type LightSpec } from './lights';
 import { Camera3D } from '../../camera/camera-3d';
 import { TextureRegistry } from './textures';
 import { ResizeController } from './resize';
@@ -60,16 +60,17 @@ import type {
     GltfModel,
     MeshInstanceHandle,
     InstanceHandle,
+    LightHandle,
     MeshInstanceOptions,
     WebGPU3DRendererOptions,
 } from './types';
 import type { CubeUvMode } from 'murow/renderer';
 /**
  * Per-prefab GPU handle, populated by the renderer at `init()` time when a
- * PrefabBucket is supplied. Held in a WeakMap so prefab objects stay clean
- * (no symbol-keyed properties leaking into autocomplete / serialization).
+ * PrefabBucket is supplied. Stored under a symbol on the prefab so the mapping
+ * costs no collection; symbols are invisible to JSON and key enumeration.
  */
-const prefabHandles = new WeakMap<Prefab3D, ModelHandle | GltfModel>();
+const GPU_HANDLE = Symbol('murow.gpuHandle');
 
 /** True iff value is a Prefab3D (returned from `bucket.get(...)`). */
 function isPrefab3D(value: ModelHandle | GltfModel | Prefab3D | string): value is Prefab3D {
@@ -78,6 +79,9 @@ function isPrefab3D(value: ModelHandle | GltfModel | Prefab3D | string): value i
     return t === 'gltf' || t === 'grid' || t === 'cube' || t === 'composite' || t === 'plane';
 }
 
+function setPrefabHandle(prefab: Prefab3D, handle: ModelHandle | GltfModel): void {
+    (prefab as unknown as Record<symbol, ModelHandle | GltfModel>)[GPU_HANDLE] = handle;
+}
 
 /**
  * Look up the GPU handle attached to a prefab by its renderer. Used by
@@ -85,7 +89,7 @@ function isPrefab3D(value: ModelHandle | GltfModel | Prefab3D | string): value i
  * the renderer's internal handle. Throws if the prefab hasn't been uploaded yet.
  */
 function resolvePrefabHandle(prefab: Prefab3D): ModelHandle | GltfModel {
-    const h = prefabHandles.get(prefab);
+    const h = (prefab as unknown as Record<symbol, ModelHandle | GltfModel>)[GPU_HANDLE];
     if (!h) {
         throw new Error(
             `Prefab '${prefab.id}' has no GPU handle — has the renderer's init() been called with this bucket?`,
@@ -210,10 +214,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.skinned = new SkinnedInstanceStore({
             maxSkinnedInstances: msi,
             maxTotalBones: this.maxTotalBones,
+            maxSkins: this._prefabs ? this._prefabs.size : 64,
             uploadRestPose: (skinModel, boneOffset, jointCount) => this.animation.writeRestPose(skinModel, boneOffset, jointCount),
             getTextureBindGroup: (id) => this.textures.get(id)?.bindGroup,
-            setTextureBindGroup: (id, bg) => this.instances.setTextureBindGroup(id, bg),
-            deleteTextureBindGroup: (id) => this.instances.deleteTextureBindGroup(id),
         });
     }
 
@@ -263,6 +266,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         this.textures = new TextureRegistry(this.device, this.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
         this.textures.initWhiteFallback();
+        if (this._assets) {
+            // The bucket accessor proxy binds methods per access; capture it once.
+            const findTexture = this._assets.textures.find;
+            this.textures.setResolver((id) => findTexture(id));
+        }
 
         this.animation = new SkeletalRuntime({
             root: this.root,
@@ -273,6 +281,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             skinCull: this.skinCull,
             maxSkinnedInstances: this.maxSkinnedInstances,
             maxTotalBones: this.maxTotalBones,
+            maxSkins: this._prefabs ? this._prefabs.size : 64,
             getModel: (id) => this.models.get(id),
             getSkinModel: (i) => this.models.skinnedModel(i),
             skinnedModelCount: () => this.models.skinnedModelCount(),
@@ -319,7 +328,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             if (prefab.type === 'gltf') {
                 const beforeSkinCount = this.models.skinnedModelCount();
                 const model = this.uploadParsedGltf(prefab.parsed);
-                prefabHandles.set(prefab, model);
+                setPrefabHandle(prefab, model);
                 if (this.models.skinnedModelCount() > beforeSkinCount) {
                     this.animation.registerSkin(prefab.id, beforeSkinCount);
                 }
@@ -329,11 +338,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                     step: prefab.step,
                     lineWidth: prefab.lineWidth,
                 });
-                prefabHandles.set(prefab, model);
+                setPrefabHandle(prefab, model);
             } else if (prefab.type === 'cube') {
                 const cube = prefab as unknown as CubePrefab;
                 const model = this.createCube({ size: cube.size, textureId: (cube as any).texture, uv: cube.uv });
-                prefabHandles.set(prefab, model);
+                setPrefabHandle(prefab, model);
             } else if (prefab.type === 'plane') {
                 const plane = prefab as PlanePrefab;
                 const model = this.createPlane({
@@ -341,19 +350,19 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                     height: plane.height,
                     textureId: plane.texture,
                 });
-                prefabHandles.set(prefab, model);
+                setPrefabHandle(prefab, model);
             } else if (prefab.type === 'sphere') {
                 const sphere = prefab as unknown as SpherePrefab;
                 const model = this.createSphere({ segments: sphere.segments, textureId: (sphere as any).texture });
-                prefabHandles.set(prefab, model);
+                setPrefabHandle(prefab, model);
             } else if (prefab.type === 'cylinder') {
                 const cyl = prefab as unknown as CylinderPrefab;
                 const model = this.createCylinder({ segments: cyl.segments, textureId: (cyl as any).texture });
-                prefabHandles.set(prefab, model);
+                setPrefabHandle(prefab, model);
             } else if (prefab.type === 'cone') {
                 const cone = prefab as unknown as ConePrefab;
                 const model = this.createCone({ segments: cone.segments, textureId: (cone as any).texture });
-                prefabHandles.set(prefab, model);
+                setPrefabHandle(prefab, model);
             } else if (prefab.type === 'mesh') {
                 const meshPrefab = prefab as unknown as MeshPrefab;
                 const model = this.models.createMesh({
@@ -363,7 +372,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                     indices: meshPrefab.indices,
                     textureId: (meshPrefab as any).texture,
                 });
-                prefabHandles.set(prefab, model);
+                setPrefabHandle(prefab, model);
             }
         }
     }
@@ -1009,14 +1018,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
             // Check if any instance in this batch has a per-instance texture override
             let hasCustomTex = false;
-            if (!model.hasTexture || model.hasTexture) {
-                for (let i = 0; i < batch.count; i++) {
-                    const slot = this.instances.slotIndexData[batch.offset + i];
-                    const handle = this.instances.instanceHandles[slot];
-                    if (handle && this.instances.textureBindGroup(handle.id) !== undefined) {
-                        hasCustomTex = true;
-                        break;
-                    }
+            for (let i = 0; i < batch.count; i++) {
+                const slot = this.instances.slotIndexData[batch.offset + i];
+                if (this.instances.textureBindGroup(slot) !== undefined) {
+                    hasCustomTex = true;
+                    break;
                 }
             }
 
@@ -1046,8 +1052,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             const whiteBG = this.textures.white;
             for (let i = 0; i < batch.count; i++) {
                 const slot = this.instances.slotIndexData[batch.offset + i];
-                const handle = this.instances.instanceHandles[slot];
-                const customBG = handle ? this.instances.textureBindGroup(handle.id) : undefined;
+                const customBG = this.instances.textureBindGroup(slot);
                 pass.setBindGroup(1, customBG ?? model.textureBindGroup ?? whiteBG);
                 if (model.rawIndexBuffer) {
                     pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
@@ -1066,14 +1071,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
             // Check for per-instance texture overrides in this batch
             let hasCustomTex = false;
-            if (!model.hasTexture || model.hasTexture) {
-                for (let i = 0; i < batch.count; i++) {
-                    const slot = this.skinned.slotIndexData[batch.offset + i];
-                    const handle = this.skinned.instanceHandles[slot];
-                    if (handle && this.instances.textureBindGroup(handle.id) !== undefined) {
-                        hasCustomTex = true;
-                        break;
-                    }
+            for (let i = 0; i < batch.count; i++) {
+                const slot = this.skinned.slotIndexData[batch.offset + i];
+                if (this.skinned.textureBindGroup(slot) !== undefined) {
+                    hasCustomTex = true;
+                    break;
                 }
             }
 
@@ -1101,8 +1103,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             const whiteBG = this.textures.white;
             for (let i = 0; i < batch.count; i++) {
                 const slot = this.skinned.slotIndexData[batch.offset + i];
-                const handle = this.skinned.instanceHandles[slot];
-                const customBG = handle ? this.instances.textureBindGroup(handle.id) : undefined;
+                const customBG = this.skinned.textureBindGroup(slot);
                 pass.setBindGroup(1, customBG ?? model.textureBindGroup ?? whiteBG);
                 if (model.rawIndexBuffer) {
                     pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);

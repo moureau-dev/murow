@@ -19,6 +19,7 @@ export type ModelHandle = Handles.ModelHandle;
 export type GltfModel = Handles.GltfModel;
 export type MeshInstanceHandle = Handles.MeshInstanceHandle;
 export type InstanceHandle = Handles.InstanceHandle;
+export type LightHandle = Handles.LightHandle;
 
 export interface ModelData {
     positions: Float32Array;
