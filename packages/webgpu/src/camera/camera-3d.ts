@@ -5,7 +5,7 @@
  */
  import { lerp } from "murow/core/lerp";
  import { Ray3D } from "murow/core/ray";
- import type { Camera3DState } from 'murow/renderer';
+ import { mat4Mul, type Camera3DState } from 'murow/renderer';
 
 export class Camera3D implements Camera3DState {
     position: [number, number, number] = [0, 5, -10];
@@ -101,7 +101,7 @@ export class Camera3D implements Camera3DState {
     getViewProjectionMatrix(): Float32Array {
         this.getViewMatrix();
         this.getProjectionMatrix();
-        mat4Multiply(this._vpMatrix, this._projMatrix, this._viewMatrix);
+        mat4Mul(this._projMatrix, 0, this._viewMatrix, 0, this._vpMatrix, 0);
         return this._vpMatrix;
     }
 
@@ -288,14 +288,4 @@ function perspective(out: Float32Array, fovRad: number, aspect: number, near: nu
     out[4] = 0;          out[5] = f; out[6] = 0;  out[7] = 0;
     out[8] = 0;          out[9] = 0; out[10] = (near + far) * rangeInv; out[11] = -1;
     out[12] = 0;         out[13] = 0; out[14] = 2 * near * far * rangeInv; out[15] = 0;
-}
-
-function mat4Multiply(out: Float32Array, a: Float32Array, b: Float32Array): void {
-    for (let i = 0; i < 4; i++) {
-        const ai0 = a[i], ai1 = a[i + 4], ai2 = a[i + 8], ai3 = a[i + 12];
-        out[i]      = ai0 * b[0]  + ai1 * b[1]  + ai2 * b[2]  + ai3 * b[3];
-        out[i + 4]  = ai0 * b[4]  + ai1 * b[5]  + ai2 * b[6]  + ai3 * b[7];
-        out[i + 8]  = ai0 * b[8]  + ai1 * b[9]  + ai2 * b[10] + ai3 * b[11];
-        out[i + 12] = ai0 * b[12] + ai1 * b[13] + ai2 * b[14] + ai3 * b[15];
-    }
 }

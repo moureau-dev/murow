@@ -1,10 +1,11 @@
 /**
  * Bridges the bucket's `clips-changed` events to per-skin resync work in the
  * renderer. The renderer registers `prefabId → skinIndex` at upload time;
- * subsequent events flag affected skins in a dense pending list the renderer
- * drains each frame. No hash tables: registration is a dense array and event
- * lookup is a linear scan (skinned-prefab counts are tiny).
+ * subsequent events flag affected skins in a `SlotSet` the renderer drains each
+ * frame. No hash tables: registration is a dense array and event lookup is a
+ * linear scan (skinned-prefab counts are tiny).
  */
+import { SlotSet } from 'murow/core/slot-map';
 import type { PrefabBucket } from 'murow';
 
 export class GltfClipResyncCoordinator {
@@ -13,10 +14,8 @@ export class GltfClipResyncCoordinator {
     private readonly skinIndices: Int32Array;
     private skinCount = 0;
 
-    /** Dense pending skin indices and dedup flags. */
-    private readonly _pendingIndices: Int32Array;
-    private readonly pendingFlags: Uint8Array;
-    private _pendingCount = 0;
+    /** Skin indices whose clip set changed since the last `clear()`. */
+    private readonly _pending: SlotSet;
 
     constructor(
         private bucket: PrefabBucket,
@@ -24,8 +23,7 @@ export class GltfClipResyncCoordinator {
     ) {
         this.prefabIds = new Array(maxSkins).fill(null);
         this.skinIndices = new Int32Array(maxSkins);
-        this._pendingIndices = new Int32Array(maxSkins);
-        this.pendingFlags = new Uint8Array(maxSkins);
+        this._pending = new SlotSet(maxSkins);
 
         this.bucket.events.on('clips-changed', ({ prefabId }) => this.onClipsChanged(prefabId));
     }
@@ -40,34 +38,23 @@ export class GltfClipResyncCoordinator {
     private onClipsChanged(prefabId: string): void {
         for (let i = 0; i < this.skinCount; i++) {
             if (this.prefabIds[i] !== prefabId) continue;
-            const skinIndex = this.skinIndices[i]!;
-            if (this.pendingFlags[skinIndex] === 0) {
-                this.pendingFlags[skinIndex] = 1;
-                this._pendingIndices[this._pendingCount++] = skinIndex;
-            }
+            this._pending.add(this.skinIndices[i]!);
             return;
         }
     }
 
-    /** Skin indices whose clip set has changed, dense for [0, pendingCount). */
-    get pendingIndices(): Int32Array {
-        return this._pendingIndices;
-    }
-
-    get pendingCount(): number {
-        return this._pendingCount;
+    /** Skin indices whose clip set has changed. */
+    get pending(): SlotSet {
+        return this._pending;
     }
 
     clear(): void {
-        for (let i = 0; i < this._pendingCount; i++) {
-            this.pendingFlags[this._pendingIndices[i]!] = 0;
-        }
-        this._pendingCount = 0;
+        this._pending.clear();
     }
 
     /** Unsubscribe from the bucket and clear internal state. */
     dispose(): void {
         this.bucket.events.clear('clips-changed');
-        this.clear();
+        this._pending.clear();
     }
 }

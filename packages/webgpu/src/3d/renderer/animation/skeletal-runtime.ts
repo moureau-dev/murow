@@ -271,14 +271,16 @@ export class SkeletalRuntime {
      */
     private syncLazyAnimationChanges(): void {
         const resync = this.clipResync;
-        if (!resync || resync.pendingCount === 0) return;
+        if (!resync) return;
+        const pending = resync.pending;
+        if (pending.size === 0) return;
 
         const skinned = this.deps.skinned;
         const maxSlots = this.deps.maxSkinnedInstances;
-        const pending = resync.pendingIndices;
+        const pendingIds = pending.denseBuffer;
 
-        for (let p = 0; p < resync.pendingCount; p++) {
-            const skinIndex = pending[p]!;
+        for (let p = 0; p < pending.size; p++) {
+            const skinIndex = pendingIds[p]!;
             const sm = this.deps.getSkinModel(skinIndex);
             if (!sm) continue;
             const remap = sm.animation.replaceClips(sm.parsedSkin.animClips);
