@@ -1,4 +1,4 @@
-import { FreeList } from 'murow/core/free-list';
+import { SlotMap } from 'murow/core/slot-map';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { SkeletalAnimState, PlayOptions, TexturePrefab } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../../../core/types';
@@ -62,8 +62,9 @@ export class SkinnedInstanceStore {
     private readonly freeNext: Int32Array;
     private nextBoneOffset = 0;
 
-    private readonly freeList: FreeList;
     private readonly staticDV: DataView;
+    /** Dense live-slot set; iterate `activeSlots` over `[0, size)`. */
+    readonly slots: SlotMap;
     /** Per-slot texture override bind group, or null for the model default. */
     private readonly textureBGs: (GPUBindGroup | null)[];
 
@@ -78,7 +79,7 @@ export class SkinnedInstanceStore {
         this.animStates = new Array(n).fill(null);
         this.instanceHandles = new Array(n).fill(null);
         this.textureBGs = new Array(n).fill(null);
-        this.freeList = new FreeList(n);
+        this.slots = new SlotMap(n);
         this.batcher = new SparseBatcher(n);
 
         this.boneOffsetRefcount = new Uint32Array(deps.maxTotalBones);
@@ -101,7 +102,7 @@ export class SkinnedInstanceStore {
         prefabId: string | null,
         id: number,
     ): MeshInstanceHandle {
-        const slot = this.freeList.allocate();
+        const slot = this.slots.add();
         if (slot === -1) throw new Error(`Max skinned instances (${this.deps.maxSkinnedInstances}) reached`);
 
         const jointCount = skinModel.jointCount;
@@ -253,7 +254,7 @@ export class SkinnedInstanceStore {
                 if (destroyed) return;
                 destroyed = true;
                 self.batcher.remove(0, modelHandle.id, slot);
-                self.freeList.free(slot);
+                self.slots.remove(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 stat.fill(0, statBase, statBase + SKINNED_STATIC_MESH_FLOATS);
                 self.textureBGs[slot] = null;

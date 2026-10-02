@@ -154,7 +154,10 @@ export class SkeletalRuntime {
         const camPos = this.deps.camera.position;
         const camX = camPos[0], camY = camPos[1], camZ = camPos[2];
 
-        for (let slot = 0; slot < this.deps.maxSkinnedInstances; slot++) {
+        const liveSlots = skinned.slots;
+        const activeSlots = liveSlots.activeSlots;
+        for (let li = 0; li < liveSlots.size; li++) {
+            const slot = activeSlots[li]!;
             const animState = skinned.animStates[slot];
             if (!animState) continue;
 
@@ -223,7 +226,8 @@ export class SkeletalRuntime {
                 this.kernel.dispatch(count);
             } else {
                 this.updatedBoneOffsets.fill(0);
-                for (let slot = 0; slot < this.deps.maxSkinnedInstances; slot++) {
+                for (let li = 0; li < liveSlots.size; li++) {
+                    const slot = activeSlots[li]!;
                     const animState = skinned.animStates[slot];
                     if (!animState || !animState.playing) continue;
                     const boneOffset = skinned.instanceBoneOffsets[slot];
@@ -276,7 +280,8 @@ export class SkeletalRuntime {
         if (pending.size === 0) return;
 
         const skinned = this.deps.skinned;
-        const maxSlots = this.deps.maxSkinnedInstances;
+        const liveSlots = skinned.slots;
+        const activeSlots = liveSlots.activeSlots;
         const pendingIds = pending.denseBuffer;
 
         for (let p = 0; p < pending.size; p++) {
@@ -285,7 +290,8 @@ export class SkeletalRuntime {
             if (!sm) continue;
             const remap = sm.animation.replaceClips(sm.parsedSkin.animClips);
 
-            for (let slot = 0; slot < maxSlots; slot++) {
+            for (let li = 0; li < liveSlots.size; li++) {
+                const slot = activeSlots[li]!;
                 const animState = skinned.animStates[slot];
                 if (!animState) continue;
                 const model = this.deps.getModel(skinned.instanceModelIds[slot]);

@@ -290,4 +290,83 @@ describe('SparseBatcher', () => {
             expect(batcher.getTotalCount()).toBe(1);
         });
     });
+
+    describe('remove bookkeeping', () => {
+        test('removing a slot that was swapped into a new position still works', () => {
+            const batcher = new SparseBatcher(1000);
+            batcher.add(0, 0, 1);
+            batcher.add(0, 0, 2);
+            batcher.add(0, 0, 3);
+            batcher.remove(0, 0, 1);
+            batcher.remove(0, 0, 3);
+
+            const collected: number[] = [];
+            batcher.each((_sheetId, instances, count) => {
+                for (let i = 0; i < count; i++) collected.push(instances[i]);
+            });
+            expect(collected).toEqual([2]);
+        });
+
+        test('removing the same slot twice is a no-op the second time', () => {
+            const batcher = new SparseBatcher(1000);
+            batcher.add(0, 0, 7);
+            batcher.remove(0, 0, 7);
+            batcher.remove(0, 0, 7);
+            expect(batcher.getTotalCount()).toBe(0);
+            expect(batcher.getActiveCount()).toBe(0);
+        });
+
+        test('a slot can be removed and re-added to a different bucket', () => {
+            const batcher = new SparseBatcher(1000);
+            batcher.add(0, 0, 5);
+            batcher.remove(0, 0, 5);
+            batcher.add(0, 1, 5);
+            batcher.remove(0, 1, 5);
+            expect(batcher.getTotalCount()).toBe(0);
+        });
+
+        test('draining a large bucket one by one keeps counts correct', () => {
+            const batcher = new SparseBatcher(1000);
+            for (let i = 0; i < 500; i++) batcher.add(0, 0, i);
+            for (let i = 0; i < 500; i += 2) batcher.remove(0, 0, i);
+            expect(batcher.getTotalCount()).toBe(250);
+            for (let i = 1; i < 500; i += 2) batcher.remove(0, 0, i);
+            expect(batcher.getTotalCount()).toBe(0);
+            expect(batcher.getActiveCount()).toBe(0);
+        });
+
+        test('churn across buckets keeps each() equal to the reference set', () => {
+            const N = 500;
+            const batcher = new SparseBatcher(N);
+            const where = new Map<number, [number, number]>();
+            const live = new Set<number>();
+            let seed = 12345;
+            const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) / 0xffffffff;
+
+            for (let op = 0; op < 4000; op++) {
+                if (live.size === 0 || (rnd() < 0.6 && live.size < N)) {
+                    const slot = Math.floor(rnd() * N);
+                    if (live.has(slot)) continue;
+                    const layer = Math.floor(rnd() * 4);
+                    const sheet = Math.floor(rnd() * 8);
+                    batcher.add(layer, sheet, slot);
+                    where.set(slot, [layer, sheet]);
+                    live.add(slot);
+                } else {
+                    const slot = [...live][Math.floor(rnd() * live.size)]!;
+                    const [layer, sheet] = where.get(slot)!;
+                    batcher.remove(layer, sheet, slot);
+                    where.delete(slot);
+                    live.delete(slot);
+                }
+                expect(batcher.getTotalCount()).toBe(live.size);
+            }
+
+            const collected: number[] = [];
+            batcher.each((_sheetId, instances, count) => {
+                for (let i = 0; i < count; i++) collected.push(instances[i]);
+            });
+            expect(collected.sort((a, b) => a - b)).toEqual([...live].sort((a, b) => a - b));
+        });
+    });
 });

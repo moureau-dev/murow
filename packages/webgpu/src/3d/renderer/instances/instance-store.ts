@@ -1,4 +1,4 @@
-import { FreeList } from 'murow/core/free-list';
+import { SlotMap } from 'murow/core/slot-map';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { TexturePrefab } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS } from '../../../core/types';
@@ -33,7 +33,8 @@ export class InstanceStore {
 
     staticDirty = false;
 
-    private readonly freeList: FreeList;
+    /** Dense live-slot set; iterate `activeSlots` over `[0, size)`. */
+    readonly slots: SlotMap;
     /** Per-slot texture override bind group, or null for the model default. */
     private readonly textureBGs: (GPUBindGroup | null)[];
 
@@ -45,7 +46,7 @@ export class InstanceStore {
         this.instanceModelIds = new Uint8Array(n);
         this.instanceHandles = new Array(n).fill(null);
         this.textureBGs = new Array(n).fill(null);
-        this.freeList = new FreeList(n);
+        this.slots = new SlotMap(n);
         this.batcher = new SparseBatcher(n);
     }
 
@@ -63,7 +64,7 @@ export class InstanceStore {
 
     /** Allocate a slot, write the initial transform, and return a live handle. */
     spawn(opts: MeshInstanceOptions<any>, modelHandle: ModelHandle, userPrefabId: string | null, id: number): MeshInstanceHandle {
-        const slot = this.freeList.allocate();
+        const slot = this.slots.add();
         if (slot === -1) throw new Error(`Max instances (${this.deps.maxInstances}) reached`);
 
         const dynBase = slot * DYNAMIC_MESH_FLOATS;
@@ -179,7 +180,7 @@ export class InstanceStore {
                 destroyed = true;
                 self.textureBGs[slot] = null;
                 self.batcher.remove(0, modelHandle.id, slot);
-                self.freeList.free(slot);
+                self.slots.remove(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 stat.fill(0, statBase, statBase + STATIC_MESH_FLOATS);
                 self.instanceHandles[slot] = null;

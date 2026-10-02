@@ -47,4 +47,26 @@ describe('InstanceStore', () => {
         s.spawn({ prefab: model }, model, null, ++idc);
         expect(() => s.spawn({ prefab: model }, model, null, ++idc)).toThrow('Max instances');
     });
+
+    test('exposes live slots densely for O(live) iteration', () => {
+        const s = store();
+        const a = s.spawn({ prefab: model }, model, null, ++idc);
+        const b = s.spawn({ prefab: model }, model, null, ++idc);
+        const c = s.spawn({ prefab: model }, model, null, ++idc);
+        b.destroy();
+
+        expect(s.slots.size).toBe(2);
+        const live: number[] = [];
+        for (let i = 0; i < s.slots.size; i++) live.push(s.slots.activeSlots[i]!);
+        expect(live.sort((x, y) => x - y)).toEqual([a.slot, c.slot].sort((x, y) => x - y));
+        expect(s.slots.has(b.slot)).toBe(false);
+    });
+
+    test('clear empties the live set', () => {
+        const s = store();
+        s.spawn({ prefab: model }, model, null, ++idc);
+        s.spawn({ prefab: model }, model, null, ++idc);
+        s.slots.clear();
+        expect(s.slots.size).toBe(0);
+    });
 });

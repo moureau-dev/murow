@@ -24,8 +24,15 @@ export class SparseBatcher {
     private activeCount = 0;
     private readonly capacity: number;
 
+    /** slot -> flat bucket key, or -1 when not batched. */
+    private readonly slotBucket: Int32Array;
+    /** slot -> index within its bucket, or -1 when not batched. */
+    private readonly slotIndex: Int32Array;
+
     constructor(capacity: number) {
         this.capacity = capacity;
+        this.slotBucket = new Int32Array(capacity).fill(-1);
+        this.slotIndex = new Int32Array(capacity).fill(-1);
     }
 
     /**
@@ -49,7 +56,7 @@ export class SparseBatcher {
             this.activeBuckets[this.activeCount++] = key;
         }
 
-        const bucket = this.buckets.get(key)!;
+        let bucket = this.buckets.get(key)!;
         const size = this.bucketSizes[key];
 
         // grow if needed. rare, only on first filling
@@ -57,30 +64,42 @@ export class SparseBatcher {
             const grown = new Uint32Array(bucket.length * 2);
             grown.set(bucket);
             this.buckets.set(key, grown);
+            bucket = grown;
         }
 
-        this.buckets.get(key)![this.bucketSizes[key]++] = slot;
+        bucket[size] = slot;
+        this.bucketSizes[key] = size + 1;
+        this.slotBucket[slot] = key;
+        this.slotIndex[slot] = size;
     }
 
     /**
      * Remove a sprite slot from its (layer, sheet) bucket.
-     * Uses swap-and-pop for O(1) removal within the bucket.
      */
     remove(layer: number, sheetId: number, slot: number): void {
-        const key = this.key(layer, sheetId);
+        if (slot < 0 || slot >= this.capacity) return;
+        const key = this.slotBucket[slot];
+        if (key === -1) return;
         const size = this.bucketSizes[key];
-        if (size === 0) return;
-
-        const bucket = this.buckets.get(key)!;
-        for (let i = 0; i < size; i++) {
-            if (bucket[i] === slot) {
-                bucket[i] = bucket[size - 1];
-                this.bucketSizes[key]--;
-                break;
-            }
+        if (size === 0) {
+            this.slotBucket[slot] = -1;
+            this.slotIndex[slot] = -1;
+            return;
         }
 
-        if (this.bucketSizes[key] === 0) {
+        const bucket = this.buckets.get(key)!;
+        const idx = this.slotIndex[slot];
+        const last = bucket[size - 1]!;
+
+        bucket[idx] = last;
+        this.slotIndex[last] = idx;
+        this.slotBucket[last] = key;
+        this.bucketSizes[key] = size - 1;
+
+        this.slotBucket[slot] = -1;
+        this.slotIndex[slot] = -1;
+
+        if (size - 1 === 0) {
             for (let i = 0; i < this.activeCount; i++) {
                 if (this.activeBuckets[i] === key) {
                     this.activeBuckets[i] = this.activeBuckets[--this.activeCount];
@@ -140,5 +159,7 @@ export class SparseBatcher {
         this.buckets.clear();
         this.bucketSizes.fill(0);
         this.activeCount = 0;
+        this.slotBucket.fill(-1);
+        this.slotIndex.fill(-1);
     }
 }

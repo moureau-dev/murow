@@ -2,8 +2,7 @@
  * ParticleEmitter — CPU-driven particle system using the renderer's instancing.
  *
  * Particles are managed as sprites in the 2D renderer. The emitter handles
- * spawning, lifetime, velocity, gravity, fade, and cleanup. Zero external
- * allocations in the update loop — all state lives in pre-allocated arrays.
+ * spawning, lifetime, velocity, gravity, fade, and cleanup.
  *
  * Usage:
  * ```ts
@@ -23,6 +22,7 @@
  * ```
  */
 import { SimpleRNG } from 'murow/core/simple-rng';
+import { SlotSet } from 'murow/core/slot-map';
 import type { SpriteHandle, SpritesheetHandle } from 'murow/renderer';
 import type { WebGPU2DRenderer } from '../2d/renderer';
 
@@ -55,7 +55,7 @@ export class ParticleEmitter {
     private maxLifetimes: Float32Array;
     private velocitiesX: Float32Array;
     private velocitiesY: Float32Array;
-    private activeCount = 0;
+    private readonly active: SlotSet;
     private head = 0; // ring buffer write head
     private rng: SimpleRNG;
 
@@ -70,6 +70,7 @@ export class ParticleEmitter {
         this.maxLifetimes = new Float32Array(max);
         this.velocitiesX = new Float32Array(max);
         this.velocitiesY = new Float32Array(max);
+        this.active = new SlotSet(max);
     }
 
     emit(x: number, y: number, count: number = 1): void {
@@ -81,6 +82,7 @@ export class ParticleEmitter {
             if (this.sprites[idx] !== null) {
                 this.renderer.removeSprite(this.sprites[idx]!);
                 this.sprites[idx] = null;
+                this.active.remove(idx);
             }
 
             const rng = this.rng;
@@ -107,10 +109,7 @@ export class ParticleEmitter {
                     layer: 255, // particles on top
                 });
                 this.sprites[idx] = sprite;
-            }
-
-            if (this.sprites[idx] === null) {
-                this.activeCount = Math.min(this.activeCount + 1, this.config.max);
+                this.active.add(idx);
             }
         }
     }
@@ -120,45 +119,52 @@ export class ParticleEmitter {
         const gy = this.config.gravity?.[1] ?? 0;
         const fade = this.config.fadeOut ?? false;
 
-        for (let i = 0; i < this.config.max; i++) {
-            const sprite = this.sprites[i];
-            if (sprite === null) continue;
-
-            this.lifetimes[i] -= deltaTime;
-            if (this.lifetimes[i] <= 0) {
-                this.renderer.removeSprite(sprite);
-                this.sprites[i] = null;
-                this.activeCount--;
+        const active = this.active;
+        const dense = active.denseBuffer;
+        for (let i = active.size - 1; i >= 0; i--) {
+            const idx = dense[i]!;
+            const sprite = this.sprites[idx];
+            if (sprite === null) {
+                active.remove(idx);
                 continue;
             }
 
-            // Apply gravity
-            this.velocitiesX[i] += gx * deltaTime;
-            this.velocitiesY[i] += gy * deltaTime;
+            this.lifetimes[idx] -= deltaTime;
+            if (this.lifetimes[idx] <= 0) {
+                this.renderer.removeSprite(sprite);
+                this.sprites[idx] = null;
+                active.remove(idx);
+                continue;
+            }
 
-            // Move
-            sprite.x += this.velocitiesX[i] * deltaTime;
-            sprite.y += this.velocitiesY[i] * deltaTime;
+            this.velocitiesX[idx] += gx * deltaTime;
+            this.velocitiesY[idx] += gy * deltaTime;
 
-            // Fade
+            sprite.x += this.velocitiesX[idx] * deltaTime;
+            sprite.y += this.velocitiesY[idx] * deltaTime;
+
             if (fade) {
-                sprite.opacity = this.lifetimes[i] / this.maxLifetimes[i];
+                sprite.opacity = this.lifetimes[idx] / this.maxLifetimes[idx];
             }
         }
     }
 
     getActiveCount(): number {
-        return this.activeCount;
+        return this.active.size;
     }
 
     clear(): void {
-        for (let i = 0; i < this.config.max; i++) {
-            if (this.sprites[i] !== null) {
-                this.renderer.removeSprite(this.sprites[i]!);
-                this.sprites[i] = null;
+        const active = this.active;
+        const dense = active.denseBuffer;
+        for (let i = 0; i < active.size; i++) {
+            const idx = dense[i]!;
+            const sprite = this.sprites[idx];
+            if (sprite !== null) {
+                this.renderer.removeSprite(sprite);
+                this.sprites[idx] = null;
             }
         }
-        this.activeCount = 0;
+        active.clear();
         this.head = 0;
     }
 }
