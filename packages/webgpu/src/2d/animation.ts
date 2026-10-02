@@ -59,7 +59,7 @@ export interface Animatable {
 
 export class AnimationController {
     private clips: AnimationClip[] = [];
-    private clipsByName: Map<string, number> = new Map();
+    private readonly clipsByName: Record<string, number> = {};
 
     /**
      * Register an animation clip. Returns the clip ID.
@@ -76,7 +76,7 @@ export class AnimationController {
             loop: config.loop,
         };
         this.clips.push(clip);
-        this.clipsByName.set(config.name, id);
+        this.clipsByName[config.name] = id;
         return id;
     }
 
@@ -84,7 +84,7 @@ export class AnimationController {
      * Get a clip by name.
      */
     getClipId(name: string): number {
-        const id = this.clipsByName.get(name);
+        const id = this.clipsByName[name];
         if (id === undefined) throw new Error(`Animation clip "${name}" not found`);
         return id;
     }

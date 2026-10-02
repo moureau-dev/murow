@@ -55,7 +55,7 @@ export interface MorphClipConfig {
 
 export class MorphAnimation {
     private clips: MorphClip[] = [];
-    private clipsByName = new Map<string, number>();
+    private readonly clipsByName: Record<string, number> = {};
 
     loadClip(config: MorphClipConfig): number {
         if (config.keyframes.length < 2) {
@@ -73,12 +73,12 @@ export class MorphAnimation {
             loop: config.loop,
             vertexCount,
         });
-        this.clipsByName.set(config.name, id);
+        this.clipsByName[config.name] = id;
         return id;
     }
 
     getClipId(name: string): number {
-        const id = this.clipsByName.get(name);
+        const id = this.clipsByName[name];
         if (id === undefined) throw new Error(`Morph clip "${name}" not found`);
         return id;
     }

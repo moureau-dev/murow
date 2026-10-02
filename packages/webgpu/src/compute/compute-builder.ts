@@ -94,7 +94,7 @@ export class ComputeKernel<TBuffers extends Record<string, ComputeBufferDef> = R
     private root: TgpuRoot;
     private pipeline: TgpuComputePipeline;
     private bindGroup: TgpuBindGroup;
-    private buffers: Map<string, TgpuBuffer<AnyWgslData>>;
+    private buffers: Record<string, TgpuBuffer<AnyWgslData>>;
     private workgroupSize: [number, number, number];
 
     constructor(
@@ -102,7 +102,7 @@ export class ComputeKernel<TBuffers extends Record<string, ComputeBufferDef> = R
         root: TgpuRoot,
         pipeline: TgpuComputePipeline,
         bindGroup: TgpuBindGroup,
-        buffers: Map<string, TgpuBuffer<AnyWgslData>>,
+        buffers: Record<string, TgpuBuffer<AnyWgslData>>,
         workgroupSize: [number, number, number],
     ) {
         this.name = name;
@@ -117,7 +117,7 @@ export class ComputeKernel<TBuffers extends Record<string, ComputeBufferDef> = R
      * Write data to a uniform or storage buffer by name.
      */
     write<K extends keyof TBuffers & string>(bufferName: K, data: unknown): void {
-        const buffer = this.buffers.get(bufferName);
+        const buffer = this.buffers[bufferName];
         if (!buffer) throw new Error(`Buffer "${bufferName}" not found in compute kernel "${this.name}"`);
         buffer.write(data as never);
     }
@@ -167,7 +167,7 @@ export class ComputeKernel<TBuffers extends Record<string, ComputeBufferDef> = R
      * Warning: this forces a GPU → CPU sync stall. Avoid in hot paths.
      */
     async read(bufferName: keyof TBuffers & string): Promise<unknown> {
-        const buffer = this.buffers.get(bufferName);
+        const buffer = this.buffers[bufferName];
         if (!buffer) throw new Error(`Buffer "${bufferName}" not found in compute kernel "${this.name}"`);
         return buffer.read();
     }
@@ -177,13 +177,13 @@ export class ComputeKernel<TBuffers extends Record<string, ComputeBufferDef> = R
      * Use this to share buffers between compute and render pipelines (zero-copy).
      */
     getBuffer(bufferName: keyof TBuffers & string): TgpuBuffer<AnyWgslData> {
-        const buffer = this.buffers.get(bufferName);
+        const buffer = this.buffers[bufferName];
         if (!buffer) throw new Error(`Buffer "${bufferName}" not found in compute kernel "${this.name}"`);
         return buffer;
     }
 
     destroy(): void {
-        for (const buf of this.buffers.values()) {
+        for (const buf of Object.values(this.buffers)) {
             buf.destroy();
         }
     }
@@ -258,23 +258,19 @@ export class ComputeBuilder<
         const layout = tgpu.bindGroupLayout(layoutEntries as Parameters<typeof tgpu.bindGroupLayout>[0]);
 
         // Create buffers
-        const tgpuBuffers = new Map<string, TgpuBuffer<AnyWgslData>>();
         const bindGroupEntries: Record<string, unknown> = {};
 
         for (const [name, def] of Object.entries(bufferDefs)) {
             if (def.external) {
                 // Use externally provided buffer (for sharing between kernels)
-                tgpuBuffers.set(name, def.external);
                 bindGroupEntries[name] = def.external;
             } else if (def.storage) {
                 const buf = root.createBuffer(def.storage as Parameters<typeof root.createBuffer>[0])
                     .$usage('storage') as TgpuBuffer<AnyWgslData>;
-                tgpuBuffers.set(name, buf);
                 bindGroupEntries[name] = buf;
             } else if (def.uniform) {
                 const buf = root.createBuffer(def.uniform as Parameters<typeof root.createBuffer>[0])
                     .$usage('uniform') as TgpuBuffer<AnyWgslData>;
-                tgpuBuffers.set(name, buf);
                 bindGroupEntries[name] = buf;
             }
         }
@@ -288,11 +284,10 @@ export class ComputeBuilder<
         // The second param (input) maps to compute builtins.
         const bound = {} as Record<string, unknown>;
         for (const name of Object.keys(bufferDefs)) {
-            const buf = tgpuBuffers.get(name)!;
             // Wrap in a proxy that defers to the buffer's shader accessor.
             // We can't use `layout.$[name]` directly — it throws outside a dispatch.
             // The raw buffer provides the same access pattern inside shader functions.
-            bound[name] = buf;
+            bound[name] = bindGroupEntries[name];
         }
 
         attachShaderMetadata(this._shaderFn, () => {
@@ -306,7 +301,7 @@ export class ComputeBuilder<
                     externals[name] = (layout.$ as Record<string, unknown>)[name];
                 } catch {
                     // Outside shader (eager call) — provide raw buffer for minification detection
-                    externals[name] = tgpuBuffers.get(name)!;
+                    externals[name] = bindGroupEntries[name];
                 }
             }
             // Include operator overloads so TypeGPU can resolve __tsover_* names
@@ -335,7 +330,9 @@ export class ComputeBuilder<
         } as Parameters<typeof root.createComputePipeline>[0]);
 
         return new ComputeKernel<TBuffers>(
-            this._name, root, pipeline, bindGroup, tgpuBuffers, this._workgroupSize,
+            this._name, root, pipeline, bindGroup,
+            bindGroupEntries as Record<string, TgpuBuffer<AnyWgslData>>,
+            this._workgroupSize,
         );
     }
 }

@@ -20,7 +20,6 @@ export class WebGPURaycast3D extends Raycast<MeshInstanceHandle, Point> {
     readonly state: RaycastState = new HitBuffer<MeshInstanceHandle, Point>(3);
 
     private resultBuffer: BufferedHit<MeshInstanceHandle, Point>[] = [];
-    /** Dense list of live memos; removal is swap-pop, no Set allocation. */
     private readonly memos: WebGPURaycastMemo3D[] = [];
 
     constructor(private renderer: WebGPU3DRenderer) { super(); }

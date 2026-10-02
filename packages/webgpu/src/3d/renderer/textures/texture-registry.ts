@@ -8,11 +8,9 @@ export interface GpuTexture {
 }
 
 /**
- * TextureRegistry — owns the uploaded textures and their bind groups. Textures
- * are stored densely and each `TexturePrefab` is stamped with its integer
- * `gpuIndex` at upload; id lookup resolves through the asset bucket to that
- * prefab, so the registry itself holds no string table. The white fallback is
- * kept separately so bind group 1 is always valid.
+ * TextureRegistry — owns the uploaded textures and their bind groups. Each
+ * `TexturePrefab` is stamped with its integer `gpuIndex` at upload. The white
+ * fallback is kept separately so bind group 1 is always valid.
  */
 export class TextureRegistry {
     private readonly gpuTextures: GpuTexture[] = [];

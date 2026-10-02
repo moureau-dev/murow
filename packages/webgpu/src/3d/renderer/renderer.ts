@@ -67,8 +67,7 @@ import type {
 import type { CubeUvMode } from 'murow/renderer';
 /**
  * Per-prefab GPU handle, populated by the renderer at `init()` time when a
- * PrefabBucket is supplied. Stored under a symbol on the prefab so the mapping
- * costs no collection; symbols are invisible to JSON and key enumeration.
+ * PrefabBucket is supplied.
  */
 const GPU_HANDLE = Symbol('murow.gpuHandle');
 

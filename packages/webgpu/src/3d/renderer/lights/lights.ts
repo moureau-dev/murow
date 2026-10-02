@@ -44,10 +44,6 @@ export type LightSpec =
         smoothness?: number;
     };
 
-/**
- * Live handle to a dynamic light. Declared in `handles/` alongside the other
- * renderer handles; local alias keeps the implementation readable.
- */
 type LightHandle = Handles.LightHandle;
 
 /** Light field offsets within a record (see the `Light` struct in core/types). */
@@ -69,8 +65,6 @@ export class LightSystem {
     private readonly angle: Float32Array;
     private readonly smoothness: Float32Array;
 
-    // Cached u32 view over the renderer's uniform buffer, recreated only when the
-    // buffer changes, so `writeUniforms` never allocates during a frame.
     private uniformU32: Uint32Array | null = null;
     private uniformU32Buffer: ArrayBufferLike | null = null;
 

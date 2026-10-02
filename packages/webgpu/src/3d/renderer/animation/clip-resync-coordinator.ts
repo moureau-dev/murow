@@ -2,8 +2,7 @@
  * Bridges the bucket's `clips-changed` events to per-skin resync work in the
  * renderer. The renderer registers `prefabId → skinIndex` at upload time;
  * subsequent events flag affected skins in a `SlotSet` the renderer drains each
- * frame. No hash tables: registration is a dense array and event lookup is a
- * linear scan (skinned-prefab counts are tiny).
+ * frame.
  */
 import { SlotSet } from 'murow/core/slot-map';
 import type { PrefabBucket } from 'murow';

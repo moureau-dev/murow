@@ -24,9 +24,7 @@ export type SlotId<Brand extends string = string> = number & { readonly __slot?:
  *
  * Keeps live ids packed in `dense` for zero-allocation iteration, with a
  * sparse id -> dense index (`-1` when absent) and a per-id flag for O(1)
- * membership. It does NOT allocate ids; the caller owns id allocation. This is
- * the shared core of `SlotMap` (which adds a FreeList) and of ECS entity
- * bookkeeping (which uses a FIFO id ring).
+ * membership. It does NOT allocate ids; the caller owns id allocation.
  */
 export class SlotSet {
     private readonly dense: Uint32Array;

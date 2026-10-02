@@ -77,7 +77,7 @@ describe('ComputeKernel', () => {
     test('constructor sets name', () => {
         const kernel = new ComputeKernel(
             'test', null as any, null as any, null as any,
-            new Map(), [64, 1, 1],
+            {}, [64, 1, 1],
         );
         expect(kernel.name).toBe('test');
     });
@@ -85,7 +85,7 @@ describe('ComputeKernel', () => {
     test('write throws for unknown buffer', () => {
         const kernel = new ComputeKernel(
             'test', null as any, null as any, null as any,
-            new Map(), [64, 1, 1],
+            {}, [64, 1, 1],
         );
         expect(() => kernel.write('nonexistent', {})).toThrow('not found');
     });
@@ -93,7 +93,7 @@ describe('ComputeKernel', () => {
     test('read throws for unknown buffer', () => {
         const kernel = new ComputeKernel(
             'test', null as any, null as any, null as any,
-            new Map(), [64, 1, 1],
+            {}, [64, 1, 1],
         );
         expect(() => kernel.read('nonexistent')).toThrow('not found');
     });

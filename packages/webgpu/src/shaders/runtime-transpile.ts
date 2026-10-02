@@ -195,7 +195,7 @@ export function attachShaderMetadata(
 
     // Walk the AST to collect member accesses per identifier: `id.member` → record `member` under `id`.
     // Used to disambiguate bundler-renamed namespace references (e.g. `d10.f32` is the data namespace).
-    const memberAccesses = new Map<string, Set<string>>();
+    const memberAccesses: Record<string, string[]> = {};
     const visit = (node: unknown): void => {
         if (!node || typeof node !== 'object') return;
         const n = node as { type?: string; [k: string]: unknown };
@@ -203,9 +203,9 @@ export function attachShaderMetadata(
             const obj = n.object as { type?: string; name?: string } | undefined;
             const prop = n.property as { type?: string; name?: string } | undefined;
             if (obj?.type === 'Identifier' && obj.name && prop?.type === 'Identifier' && prop.name && !n.computed) {
-                let set = memberAccesses.get(obj.name);
-                if (!set) { set = new Set(); memberAccesses.set(obj.name, set); }
-                set.add(prop.name);
+                const arr = memberAccesses[obj.name];
+                if (arr) arr.push(prop.name);
+                else memberAccesses[obj.name] = [prop.name];
             }
         }
         for (const key of Object.keys(n)) {
@@ -225,8 +225,8 @@ export function attachShaderMetadata(
     const resolvedAliases: Record<string, object> = {};
     const candidateEntries = Object.entries(namespaceAliases);
     for (const name of effectiveExternalNames) {
-        const members = memberAccesses.get(name);
-        if (!members || members.size === 0) continue;
+        const members = memberAccesses[name];
+        if (!members || members.length === 0) continue;
         for (const [, ns] of candidateEntries) {
             let matches = true;
             for (const m of members) {

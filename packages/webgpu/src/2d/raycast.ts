@@ -20,7 +20,6 @@ export class WebGPURaycast2D extends Raycast<SpriteHandle, Point> {
     readonly state: RaycastState2D = new HitBuffer<SpriteHandle, Point>(2);
 
     private resultBuffer: BufferedHit<SpriteHandle, Point>[] = [];
-    /** Dense list of live memos; removal is swap-pop, no Set allocation. */
     private readonly memos: WebGPURaycastMemo2D[] = [];
 
     constructor(private renderer: WebGPU2DRenderer) { super(); }
