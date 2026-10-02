@@ -80,16 +80,20 @@ export interface WebGPU2DRendererOptions<A extends AssetBucket<'2d', any, any> =
     maxInstances?: number;
 }
 
-/** WeakMap of prefab → uploaded GPU handle, populated in init(). */
-const prefab2DHandles = new WeakMap<Prefab2D, SpritesheetHandle>();
+/** Symbol under which the uploaded GPU handle is stamped on a prefab. */
+const PREFAB_GPU_HANDLE = Symbol('murow.prefabGpuHandle');
 
 /** True iff value is a Prefab2D (returned from `bucket.get(...)`). */
 function isPrefab2D(value: SpritesheetHandle | Prefab2D): value is Prefab2D {
     return (value as Prefab2D).type === 'spritesheet';
 }
 
+function setPrefab2DHandle(prefab: Prefab2D, handle: SpritesheetHandle): void {
+    (prefab as unknown as Record<symbol, SpritesheetHandle>)[PREFAB_GPU_HANDLE] = handle;
+}
+
 function resolveSpritePrefabHandle(prefab: Prefab2D): SpritesheetHandle {
-    const h = prefab2DHandles.get(prefab);
+    const h = (prefab as unknown as Record<symbol, SpritesheetHandle>)[PREFAB_GPU_HANDLE];
     if (!h) {
         throw new Error(
             `Prefab '${prefab.id}' has no GPU handle — has the renderer's init() been called with this bucket?`,
@@ -135,9 +139,8 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     private rawUniformBuffer!: GPUBuffer;
     private rawSlotIndexBuffer!: GPUBuffer;
 
-    // Per-sheet bind groups
-    private sheetBindGroups = new Map<number, GPUBindGroup>();
-    private sheets = new Map<number, Spritesheet>();
+    // Per-sheet bind groups, indexed by sheet id (0..SparseBatcher.MAX_SHEETS).
+    private readonly sheetBindGroups: (GPUBindGroup | null)[] = new Array(SparseBatcher.MAX_SHEETS).fill(null);
     private nextSheetId = 0;
 
     readonly camera: Camera2D;
@@ -255,7 +258,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         for (const prefab of bucket.entries()) {
             if (prefab.type === 'spritesheet') {
                 const handle = this.uploadParsedSpritesheet((prefab as SpritesheetPrefab).parsed);
-                prefab2DHandles.set(prefab, handle);
+                setPrefab2DHandle(prefab, handle);
             }
         }
     }
@@ -336,8 +339,10 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         });
 
         const id = this.nextSheetId++;
+        if (id >= SparseBatcher.MAX_SHEETS) {
+            throw new Error(`Max spritesheets (${SparseBatcher.MAX_SHEETS}) reached`);
+        }
         const sheet = new Spritesheet(id, texture, view, sampler, parsed.uvs, parsed.width, parsed.height);
-        this.sheets.set(id, sheet);
 
         const bindGroup = this._device.createBindGroup({
             layout: this.rawTextureLayout,
@@ -346,7 +351,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
                 { binding: 1, resource: sampler },
             ],
         });
-        this.sheetBindGroups.set(id, bindGroup);
+        this.sheetBindGroups[id] = bindGroup;
 
         return sheet;
     }
@@ -551,7 +556,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         // Draw per batch using firstInstance to offset into the index buffer
         let drawOffset = 0;
         this.batcher.each((sheetId, _instances, count) => {
-            const texBindGroup = this.sheetBindGroups.get(sheetId);
+            const texBindGroup = this.sheetBindGroups[sheetId];
             if (!texBindGroup || count === 0) return;
 
             pass.setBindGroup(1, texBindGroup);

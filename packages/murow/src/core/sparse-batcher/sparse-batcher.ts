@@ -12,7 +12,8 @@
  */
 export class SparseBatcher {
     private static readonly MAX_LAYERS = 256;
-    private static readonly MAX_SHEETS = 64;
+    /** Number of sheet slots per layer. Sheet ids must be below this. */
+    static readonly MAX_SHEETS = 64;
     private static readonly MAX_BUCKETS = SparseBatcher.MAX_LAYERS * SparseBatcher.MAX_SHEETS;
     private readonly BUCKET_INITIAL_SIZE = 256;
 
