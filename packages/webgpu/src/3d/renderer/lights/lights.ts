@@ -63,7 +63,6 @@ export class LightSystem {
     private readonly data: Float32Array;
     private readonly slots: SlotMap;
     private readonly enabled: Uint8Array;
-    private readonly handles: (LightHandle | null)[];
     /** Dense scratch buffer of enabled lights, packed each frame for upload. */
     private readonly uploadData: Float32Array;
     /** CPU-side spot cone params per slot (the GPU only needs the derived cosines). */
@@ -85,7 +84,6 @@ export class LightSystem {
         this.data = new Float32Array(maxLights * LIGHT_FLOATS);
         this.slots = new SlotMap(maxLights);
         this.enabled = new Uint8Array(maxLights).fill(1);
-        this.handles = new Array(maxLights).fill(null);
         this.uploadData = new Float32Array(maxLights * LIGHT_FLOATS);
         this.angle = new Float32Array(maxLights);
         this.smoothness = new Float32Array(maxLights);
@@ -102,7 +100,6 @@ export class LightSystem {
         const data = this.data;
         const enabledArr = this.enabled;
         const slots = this.slots;
-        const handles = this.handles;
         const angleArr = this.angle;
         const smoothArr = this.smoothness;
         const base = slot * LIGHT_FLOATS;
@@ -157,11 +154,9 @@ export class LightSystem {
                 if (destroyed) return;
                 destroyed = true;
                 data.fill(0, base, base + LIGHT_FLOATS);
-                handles[slot] = null;
                 slots.remove(slot);
             },
         };
-        this.handles[slot] = handle;
         return handle;
     }
 
