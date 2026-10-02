@@ -8,6 +8,7 @@
  * - Depth testing + back-face culling
  */
 import type { TgpuRoot } from 'typegpu';
+import type { AnyWgslData } from 'typegpu/data';
 import { Base3DRenderer } from 'murow/renderer';
 import { tgpu } from '../../shaders/typegpu';
 import { ComputeBuilder, type ComputeOptions } from '../../compute/compute-builder';
@@ -17,9 +18,13 @@ import {
     SKINNED_STATIC_MESH_FLOATS,
     MESH_UNIFORM_ALPHA_OFFSET,
     MESH_UNIFORM_LIGHT_OFFSET,
+    MESH_UNIFORM_CAMERA_OFFSET,
     MESH_UNIFORM_FLOATS,
 } from '../../core/types';
 import { LightSystem, type LightSpec } from './lights';
+import { SparseBatcher } from 'murow/core/sparse-batcher';
+import { MaterialLibrary, type MaterialHandle } from './materials';
+import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
 import { TextureRegistry } from './textures';
 import { ResizeController } from './resize';
@@ -148,6 +153,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     // Dynamic lights — CPU state (SoA, slots, globals) lives in LightSystem;
     // the renderer owns only the GPU buffer it packs into each frame.
     private lights = new LightSystem(MAX_LIGHTS);
+    private materials!: MaterialLibrary;
 
     readonly camera: Camera3D;
     readonly raycast: WebGPURaycast3D;
@@ -270,6 +276,15 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             const findTexture = this._assets.textures.find;
             this.textures.setResolver((id) => findTexture(id));
         }
+
+        this.materials = new MaterialLibrary({
+            root: this.root,
+            device: this.device,
+            pipelines: this.pipelines,
+            textures: this.textures,
+            meshLayout: this.pipelines.meshLayout,
+            maxMaterials: (this.options as WebGPU3DRendererOptions).maxMaterials ?? 64,
+        });
 
         this.animation = new SkeletalRuntime({
             root: this.root,
@@ -509,6 +524,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         return this.models.loadModel(data);
     }
 
+    /** Create a material (GPU resource) from a declarative spec. */
+    createMaterial<U extends Record<string, AnyWgslData> = {}>(spec: MaterialSpec & { uniforms?: U }): MaterialHandle<U> {
+        return this.materials.createMaterial<U>(spec as MaterialSpec);
+    }
+
     /** Load a glTF/GLB model from a URL. */
     loadGltf(url: string, opts?: { animations?: string[] }): Promise<GltfModel> {
         return this.models.loadGltf(url, opts);
@@ -561,7 +581,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             return this.addSkinnedInstance(opts, modelHandle, model.skinIndex, undefined, userPrefabId);
         }
 
-        return this.instances.spawn(opts, modelHandle, userPrefabId, ++this.nextInstanceId);
+        const materialId = opts.material ? opts.material.slot + 1 : 0;
+        return this.instances.spawn(opts, modelHandle, userPrefabId, ++this.nextInstanceId, materialId);
     }
 
     private addGltfInstance(opts: MeshInstanceOptions<A>, gltf: GltfModel, prefabId: string | null): InstanceHandle {
@@ -861,6 +882,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.uniformData.set(vpMatrix, 0);
         this.uniformData[MESH_UNIFORM_ALPHA_OFFSET] = alpha;
         this.lights.writeUniforms(this.uniformData, MESH_UNIFORM_LIGHT_OFFSET, packed.count);
+        const camPos = this.camera.position;
+        this.uniformData[MESH_UNIFORM_CAMERA_OFFSET] = camPos[0];
+        this.uniformData[MESH_UNIFORM_CAMERA_OFFSET + 1] = camPos[1];
+        this.uniformData[MESH_UNIFORM_CAMERA_OFFSET + 2] = camPos[2];
         this.device.queue.writeBuffer(
             this.pipelines.rawUniformBuffer, 0,
             this.uniformData.buffer, this.uniformData.byteOffset,
@@ -872,11 +897,12 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         // Pack slot indices per model, with frustum culling
         let indexOffset = 0;
-        const batchOffsets: { modelId: number; offset: number; count: number }[] = [];
+        const batchOffsets: { modelId: number; materialId: number; offset: number; count: number }[] = [];
         const dyn = this.instances.dynamicData;
         const stat = this.instances.staticData;
 
-        this.instances.batcher.each((modelId, instances, count) => {
+        this.instances.batcher.each((modelId, instances, count, key) => {
+            const materialId = (key / SparseBatcher.MAX_SHEETS) | 0;
             const model = this.models.get(modelId);
             if (!model) return;
             const baseRadius = model.boundingRadius;
@@ -907,7 +933,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
             const visibleCount = indexOffset - batchStart;
             if (visibleCount > 0) {
-                batchOffsets.push({ modelId, offset: batchStart, count: visibleCount });
+                batchOffsets.push({ modelId, materialId, offset: batchStart, count: visibleCount });
             }
         });
 
@@ -1008,55 +1034,80 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             },
         });
 
-        // --- Draw non-skinned models ---
+        // --- Draw non-skinned models (pass 0: opaque, pass 1: transparent) ---
         let currentPipeline: GPURenderPipeline | null = null;
 
-        for (const batch of batchOffsets) {
-            const model = this.models.get(batch.modelId);
-            if (!model) continue;
+        for (let passIndex = 0; passIndex < 2; passIndex++) {
+            currentPipeline = null;
 
-            // Check if any instance in this batch has a per-instance texture override
-            let hasCustomTex = false;
-            for (let i = 0; i < batch.count; i++) {
-                const slot = this.instances.slotIndexData[batch.offset + i];
-                if (this.instances.textureBindGroup(slot) !== undefined) {
-                    hasCustomTex = true;
-                    break;
+            for (const batch of batchOffsets) {
+                const model = this.models.get(batch.modelId);
+                if (!model) continue;
+
+                const material = batch.materialId > 0 ? this.materials.get(batch.materialId) : null;
+                const transparent = material ? material.transparent : false;
+                if ((passIndex === 1) !== transparent) continue;
+
+                if (material) {
+                    if (material.pipeline !== currentPipeline) {
+                        pass.setPipeline(material.pipeline);
+                        pass.setBindGroup(0, this.pipelines.rawBindGroup);
+                        currentPipeline = material.pipeline;
+                    }
+                    pass.setBindGroup(1, material.bindGroup);
+                    pass.setVertexBuffer(0, model.rawVertexBuffer);
+                    if (model.rawIndexBuffer) {
+                        pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
+                        pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
+                    } else {
+                        pass.draw(model.vertexCount, batch.count, 0, batch.offset);
+                    }
+                    continue;
                 }
-            }
 
-            const needsTextured = model.hasTexture || hasCustomTex;
-            const pipeline = needsTextured ? this.pipelines.rawTexturedPipeline : this.pipelines.rawPipeline;
-            if (pipeline !== currentPipeline) {
-                pass.setPipeline(pipeline);
-                pass.setBindGroup(0, this.pipelines.rawBindGroup);
-                currentPipeline = pipeline;
-            }
+                // Check if any instance in this batch has a per-instance texture override
+                let hasCustomTex = false;
+                for (let i = 0; i < batch.count; i++) {
+                    const slot = this.instances.slotIndexData[batch.offset + i];
+                    if (this.instances.textureBindGroup(slot) !== undefined) {
+                        hasCustomTex = true;
+                        break;
+                    }
+                }
 
-            if (!needsTextured) {
-                // Untextured — draw entire batch at once
+                const needsTextured = model.hasTexture || hasCustomTex;
+                const pipeline = needsTextured ? this.pipelines.rawTexturedPipeline : this.pipelines.rawPipeline;
+                if (pipeline !== currentPipeline) {
+                    pass.setPipeline(pipeline);
+                    pass.setBindGroup(0, this.pipelines.rawBindGroup);
+                    currentPipeline = pipeline;
+                }
+
+                if (!needsTextured) {
+                    // Untextured — draw entire batch at once
+                    pass.setVertexBuffer(0, model.rawVertexBuffer);
+                    if (model.rawIndexBuffer) {
+                        pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
+                        pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
+                    } else {
+                        pass.draw(model.vertexCount, batch.count, 0, batch.offset);
+                    }
+                    continue;
+                }
+
+                // Textured — per-instance bind group (custom override, model default, or white fallback)
                 pass.setVertexBuffer(0, model.rawVertexBuffer);
-                if (model.rawIndexBuffer) {
-                    pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                    pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
-                } else {
-                    pass.draw(model.vertexCount, batch.count, 0, batch.offset);
-                }
-                continue;
-            }
-
-            // Textured — per-instance bind group (custom override, model default, or white fallback)
-            pass.setVertexBuffer(0, model.rawVertexBuffer);
-            if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-            const whiteBG = this.textures.white;
-            for (let i = 0; i < batch.count; i++) {
-                const slot = this.instances.slotIndexData[batch.offset + i];
-                const customBG = this.instances.textureBindGroup(slot);
-                pass.setBindGroup(1, customBG ?? model.textureBindGroup ?? whiteBG);
-                if (model.rawIndexBuffer) {
-                    pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
-                } else {
-                    pass.draw(model.vertexCount, 1, 0, batch.offset + i);
+                if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
+                const whiteBG = this.textures.white;
+                for (let i = 0; i < batch.count; i++) {
+                    const slot = this.instances.slotIndexData[batch.offset + i];
+                    const customBG = this.instances.textureBindGroup(slot);
+                    pass.setBindGroup(1, customBG ?? model.textureBindGroup ?? whiteBG);
+                    if (model.rawIndexBuffer) {
+                        pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
+                    } else {
+                        pass.draw(model.vertexCount, 1, 0, batch.offset + i);
+                    }
                 }
             }
         }

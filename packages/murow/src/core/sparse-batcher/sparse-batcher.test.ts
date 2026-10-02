@@ -207,6 +207,19 @@ describe('SparseBatcher', () => {
             batcher.each(() => { called = true; });
             expect(called).toBe(false);
         });
+
+        test('passes the flat key as an extra argument', () => {
+            const batcher = new SparseBatcher(1000);
+            batcher.add(3, 5, 1);
+            batcher.add(0, 2, 2);
+
+            const keys: number[] = [];
+            batcher.each((sheetId, _instances, _count, key) => {
+                keys.push(key);
+                expect(key % SparseBatcher.MAX_SHEETS).toBe(sheetId);
+            });
+            expect(keys.sort((a, b) => a - b)).toEqual([2, 3 * SparseBatcher.MAX_SHEETS + 5]);
+        });
     });
 
     describe('clear', () => {

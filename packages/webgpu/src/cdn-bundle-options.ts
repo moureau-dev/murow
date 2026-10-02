@@ -5,7 +5,9 @@ import type { BuildOptions } from 'esbuild';
  *
  * `minifySyntax` is intentionally disabled: it folds consecutive statements
  * into SequenceExpressions and merges declarations, which tinyest-for-wgsl
- * cannot transpile at runtime.
+ * cannot transpile at runtime. `minifyIdentifiers` is enabled; renamed shader
+ * free variables are recovered at runtime by `attachShaderMetadata` using
+ * namespace member paths and the externals getter's source.
  */
 export const cdnBundleOptions: BuildOptions = {
     entryPoints: ['./src/index.ts'],

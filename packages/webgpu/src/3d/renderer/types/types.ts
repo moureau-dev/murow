@@ -14,6 +14,7 @@ import type {
     RaycastOptions as RaycastOptionsBase,
 } from 'murow/renderer';
 import type { Handles } from '../handles';
+import type { MaterialHandle } from '../materials';
 
 export type ModelHandle = Handles.ModelHandle;
 export type GltfModel = Handles.GltfModel;
@@ -54,6 +55,9 @@ interface MeshInstance<A extends AssetBucket<'3d', any, any>> {
      * texture is used.
      */
     texture?: StringOr<TextureIdsOf<A>> | TexturePrefab;
+
+    /** Material to render this instance with. Defaults to the engine material. */
+    material?: MaterialHandle<any>;
 }
 
 export interface MeshInstanceOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends MeshInstance<A> {
@@ -75,6 +79,8 @@ export type RaycastMemo = RaycastMemoBase<MeshInstanceHandle, [number, number, n
 export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Renderer3DOptions {
     maxSkinnedInstances?: number;
     maxBonesPerSkin?: number;
+    /** Max simultaneously created materials. Defaults to 64. */
+    maxMaterials?: number;
     /**
      * Pre-loaded AssetBucket. When provided, the renderer uploads every
      * prefab (glTF, grid, cube, plane) and texture to the GPU during

@@ -59,6 +59,10 @@ export declare namespace Handles {
         play?(name: string, opts?: PlayOptions): void;
         stop?(): void;
         setTexture?(texture: string | TexturePrefab | null): void;
+        /** Swap the instance's material (0 = engine default). */
+        setMaterial?(materialId: number): void;
+        /** Per-instance floats available to materials as `statics[slot].custom0/1`. */
+        setMaterialParams?(a: number, b: number): void;
         /** Free this instance's renderer slot. Safe to call once per handle. */
         destroy(): void;
     }

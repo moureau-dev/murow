@@ -100,9 +100,12 @@ export const StaticMesh = d.struct({
     colorR: d.f32,
     colorG: d.f32,
     colorB: d.f32,
+    materialId: d.f32,
+    custom0: d.f32,
+    custom1: d.f32,
 });
 
-export const STATIC_MESH_FLOATS = 6;
+export const STATIC_MESH_FLOATS = 9;
 
 // --- 3D Skinned Instance Data (adds bone offset for skeletal animation) ---
 
@@ -132,6 +135,9 @@ export const MeshUniforms = d.struct({
     ambientG: d.f32,
     ambientB: d.f32,
     lightCount: d.u32,
+    cameraX: d.f32,
+    cameraY: d.f32,
+    cameraZ: d.f32,
 });
 
 // Float offsets into MeshUniforms, named so the renderer never hard-codes them.
@@ -139,8 +145,10 @@ export const MeshUniforms = d.struct({
 export const MESH_UNIFORM_ALPHA_OFFSET = 16;
 /** The directional/ambient/count block starts right after `alpha`. */
 export const MESH_UNIFORM_LIGHT_OFFSET = 17;
-/** Total f32 slots in MeshUniforms (mat4x4 16 + alpha 1 + 10 light terms + count 1). */
-export const MESH_UNIFORM_FLOATS = 28;
+/** Interpolated camera position (world space), used by view-dependent materials. */
+export const MESH_UNIFORM_CAMERA_OFFSET = 28;
+/** Total f32 slots written to the mesh uniform buffer. */
+export const MESH_UNIFORM_FLOATS = 31;
 
 // --- 3D Dynamic Lights ---
 

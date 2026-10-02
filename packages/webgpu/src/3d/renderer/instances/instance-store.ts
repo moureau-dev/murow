@@ -9,6 +9,7 @@ import {
     DYN_PREV_RX, DYN_PREV_RY, DYN_PREV_RZ,
     DYN_CURR_RX, DYN_CURR_RY, DYN_CURR_RZ,
     STAT_SX, STAT_SY, STAT_SZ, STAT_CR, STAT_CG, STAT_CB,
+    STAT_MATERIAL_ID, STAT_CUSTOM0, STAT_CUSTOM1,
 } from './offsets';
 import { resolveTransform } from './transform';
 
@@ -35,6 +36,8 @@ export class InstanceStore {
 
     /** Dense live-slot set; iterate `activeSlots` over `[0, size)`. */
     readonly slots: SlotMap;
+    /** Per-slot material id (0 = default). */
+    readonly materialIds: Uint16Array;
     /** Per-slot texture override bind group, or null for the model default. */
     private readonly textureBGs: (GPUBindGroup | null)[];
 
@@ -45,6 +48,7 @@ export class InstanceStore {
         this.slotIndexData = new Uint32Array(n);
         this.instanceModelIds = new Uint8Array(n);
         this.instanceHandles = new Array(n).fill(null);
+        this.materialIds = new Uint16Array(n);
         this.textureBGs = new Array(n).fill(null);
         this.slots = new SlotMap(n);
         this.batcher = new SparseBatcher(n);
@@ -63,7 +67,7 @@ export class InstanceStore {
     }
 
     /** Allocate a slot, write the initial transform, and return a live handle. */
-    spawn(opts: MeshInstanceOptions<any>, modelHandle: ModelHandle, userPrefabId: string | null, id: number): MeshInstanceHandle {
+    spawn(opts: MeshInstanceOptions<any>, modelHandle: ModelHandle, userPrefabId: string | null, id: number, materialId: number = 0): MeshInstanceHandle {
         const slot = this.slots.add();
         if (slot === -1) throw new Error(`Max instances (${this.deps.maxInstances}) reached`);
 
@@ -94,10 +98,14 @@ export class InstanceStore {
         stat[statBase + STAT_CR] = t.cr;
         stat[statBase + STAT_CG] = t.cg;
         stat[statBase + STAT_CB] = t.cb;
+        stat[statBase + STAT_MATERIAL_ID] = materialId;
+        stat[statBase + STAT_CUSTOM0] = 0;
+        stat[statBase + STAT_CUSTOM1] = 0;
 
         this.staticDirty = true;
         this.instanceModelIds[slot] = modelHandle.id;
-        this.batcher.add(0, modelHandle.id, slot);
+        this.materialIds[slot] = materialId;
+        this.batcher.add(materialId, modelHandle.id, slot);
 
         const self = this;
         let destroyed = false;
@@ -175,11 +183,24 @@ export class InstanceStore {
                     }
                 }
             },
+            setMaterial(next: number) {
+                const current = self.materialIds[slot];
+                if (current === next || destroyed) return;
+                self.batcher.remove(current, modelHandle.id, slot);
+                self.batcher.add(next, modelHandle.id, slot);
+                self.materialIds[slot] = next;
+                stat[statBase + STAT_MATERIAL_ID] = next;
+            },
+            setMaterialParams(a: number, b: number) {
+                stat[statBase + STAT_CUSTOM0] = a;
+                stat[statBase + STAT_CUSTOM1] = b;
+            },
             destroy() {
                 if (destroyed) return;
                 destroyed = true;
                 self.textureBGs[slot] = null;
-                self.batcher.remove(0, modelHandle.id, slot);
+                self.batcher.remove(self.materialIds[slot], modelHandle.id, slot);
+                self.materialIds[slot] = 0;
                 self.slots.remove(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 stat.fill(0, statBase, statBase + STATIC_MESH_FLOATS);

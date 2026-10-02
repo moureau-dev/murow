@@ -1,4 +1,4 @@
-import type { TgpuRoot, TgpuBuffer } from 'typegpu';
+import type { TgpuRoot, TgpuBuffer, TgpuVertexFn, TgpuFragmentFn, TgpuBindGroupLayout } from 'typegpu';
 import { tgpu, d } from '../../../shaders/typegpu';
 import {
     DynamicMesh,
@@ -73,11 +73,15 @@ export class MeshPipelines {
 
     private device!: GPUDevice;
     private root!: TgpuRoot;
+    private format!: GPUTextureFormat;
+    private vertexBufferLayout!: GPUVertexBufferLayout;
+    private rawMeshBGL!: GPUBindGroupLayout;
 
     build(opts: MeshPipelinesOptions): void {
         const { root, device, format, maxInstances, maxSkinnedInstances, maxTotalBones } = opts;
         this.root = root;
         this.device = device;
+        this.format = format;
 
         this.depthTexture = device.createTexture({
             size: [opts.width, opts.height],
@@ -107,6 +111,7 @@ export class MeshPipelines {
                 { shaderLocation: 2, offset: 24, format: 'float32x2' },
             ],
         };
+        this.vertexBufferLayout = vertexBufferLayout;
 
         // --- Untextured pipeline (color only) ---
         const vertex = createMeshVertex(this.meshLayout);
@@ -114,6 +119,7 @@ export class MeshPipelines {
         const { code: wgslCode } = tgpu.resolveWithContext([vertex, fragment]);
         const shaderModule = device.createShaderModule({ code: wgslCode });
         const rawBGL = root.unwrap(this.meshLayout);
+        this.rawMeshBGL = rawBGL;
 
         this.rawPipeline = device.createRenderPipeline({
             layout: device.createPipelineLayout({ bindGroupLayouts: [rawBGL] }),
@@ -242,6 +248,50 @@ export class MeshPipelines {
     setBoneBuffer(rawBoneBuffer: GPUBuffer): void {
         this.rawBoneMatrixBuffer = rawBoneBuffer;
         this.rebuildSkinnedBindGroup();
+    }
+
+    /**
+     * Build a non-skinned material pipeline: group 0 is the shared mesh bind
+     * group, group 1 is the material's (uniforms + textures).
+     */
+    buildMaterialPipeline(opts: {
+        vertex: any;
+        fragment: any;
+        materialLayout: TgpuBindGroupLayout;
+        blend: 'opaque' | 'alpha' | 'additive';
+        depthWrite: boolean;
+        depthTest: boolean;
+        cull: 'back' | 'front' | 'none';
+    }): GPURenderPipeline {
+        const { code } = tgpu.resolveWithContext([opts.vertex as any, opts.fragment as any]);
+        const module = this.device.createShaderModule({ code });
+        const rawMaterialBGL = this.root.unwrap(opts.materialLayout) as unknown as GPUBindGroupLayout;
+
+        const depthStencil: GPUDepthStencilState = {
+            format: 'depth24plus',
+            depthWriteEnabled: opts.depthWrite,
+            depthCompare: opts.depthTest ? 'less' : 'always',
+        };
+        const target: GPUColorTargetState = { format: this.format };
+        if (opts.blend === 'alpha') {
+            target.blend = {
+                color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            };
+        } else if (opts.blend === 'additive') {
+            target.blend = {
+                color: { srcFactor: 'src-alpha', dstFactor: 'one', operation: 'add' },
+                alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+            };
+        }
+
+        return this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.rawMeshBGL, rawMaterialBGL] }),
+            vertex: { module, buffers: [this.vertexBufferLayout] },
+            fragment: { module, targets: [target] },
+            primitive: { topology: 'triangle-list', cullMode: opts.cull },
+            depthStencil,
+        });
     }
 
     resizeDepth(width: number, height: number): void {

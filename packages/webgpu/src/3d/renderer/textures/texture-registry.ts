@@ -41,6 +41,11 @@ export class TextureRegistry {
         return this.whiteTex!.bindGroup;
     }
 
+    /** The white fallback texture (view + sampler). */
+    get whiteTexture(): GpuTexture {
+        return this.whiteTex!;
+    }
+
     initWhiteFallback(): void {
         const texture = this.device.createTexture({
             size: [1, 1, 1],

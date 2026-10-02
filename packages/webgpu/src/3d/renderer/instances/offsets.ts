@@ -9,6 +9,8 @@ export const DYN_CURR_RX = 9, DYN_CURR_RY = 10, DYN_CURR_RZ = 11;
 // --- Static offset constants ---
 export const STAT_SX = 0, STAT_SY = 1, STAT_SZ = 2;
 export const STAT_CR = 3, STAT_CG = 4, STAT_CB = 5;
+export const STAT_MATERIAL_ID = 6;
+export const STAT_CUSTOM0 = 7, STAT_CUSTOM1 = 8;
 
 // --- Skinned static offset constants (extra boneOffset) ---
 export const SSTAT_SX = 0, SSTAT_SY = 1, SSTAT_SZ = 2;

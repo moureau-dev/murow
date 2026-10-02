@@ -30,6 +30,12 @@ export type {
     MeshInstanceHandle,
     LightHandle,
     MeshInstanceOptions,
+    MaterialHandle,
+    MaterialSpec,
+    BlendMode,
+    CullMode,
+    EngineMaterialSpec,
+    ShaderMaterialSpec,
 } from './3d/renderer';
 export type { LightSpec } from './3d/renderer/lights';
 export type { Handles } from './3d/renderer';

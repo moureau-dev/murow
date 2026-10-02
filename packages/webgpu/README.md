@@ -39,6 +39,7 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **Composites** — a `{ type: 'composite', parts: [...] }` spec wires several prefabs into one spawnable instance with baked offsets
 - **Instance recycling** — `handle.destroy()` frees slots and bone-matrix blocks; respawns reuse them without growing buffers
 - **Grid / cube helpers** — `{ type: 'grid' }` and `{ type: 'cube' }` prefab specs
+- **Materials** — `renderer.createMaterial(spec)` with `standard` (lit), `unlit`, `emissive`, and custom `shader` types; per-material uniforms, one `map` texture, and render state (blend / depth / cull)
 
 ## Usage
 
@@ -107,6 +108,45 @@ renderer.camera.setPosition(3, 1, 3);
 renderer.camera.setTarget(0, 0, 0);
 renderer.render(alpha);
 ```
+</details>
+
+<details>
+<summary><strong>Materials (3D)</strong></summary>
+
+Create a material after `renderer.init()`. A `shader` material omits `shaders.vertex` to reuse the engine mesh vertex, so the fragment receives `vNormal`, `vColor`, `vUV`, `vWorldPos`.
+
+```typescript
+import { d, std } from 'murow/webgpu';
+
+const holo = renderer.createMaterial({
+  type: 'shader',
+  blend: 'additive',
+  depthWrite: false,
+  textures: { map: 'flame' },           // texture id from the AssetBucket
+  uniforms: { scan: d.f32, tint: d.vec3f },
+  defaultUniforms: { scan: 2, tint: [0.35, 0.85, 1] },
+  shaders: {
+    fragment: (input) => {
+      const tex = std.textureSample(textures.map, textures.sampler, d.vec2f(input.vUV.x, input.vUV.y));
+      const band = std.saturate(std.sin(input.vWorldPos.y * material.scan) * 0.5 + 0.5);
+      const c = std.mul(material.tint, band);
+      return d.vec4f(c.x, c.y, c.z, tex.w);
+    },
+  },
+});
+
+const glow = renderer.createMaterial({ type: 'emissive', color: [1, 0.45, 0.1], emissive: 2 });
+
+const orb = renderer.addInstance({ prefab: 'orb', material: holo });
+orb.setMaterial(glow.slot + 1);   // slot + 1; 0 is the engine default
+orb.setMaterialParams(1.5, 0);    // per-instance custom0 / custom1
+
+holo.uniforms.scan += 0.6;         // live, typed write
+holo.setTexture('map', 'smoke');
+holo.destroy();
+```
+
+Types: `MaterialSpec` (`EngineMaterialSpec | ShaderMaterialSpec`), `MaterialHandle<U>`, `BlendMode` (`'opaque' | 'alpha' | 'additive'`), `CullMode` (`'back' | 'front' | 'none'`), `EngineMaterialSpec`, `ShaderMaterialSpec` — all exported from `murow/webgpu`.
 </details>
 
 <details>
@@ -195,6 +235,10 @@ from `'murow'`.
 ### Geometry & Compute
 - [`GeometryBuilder`](./src/geometry/geometry-builder.ts) — Custom instanced geometries with TypeGPU shaders
 - [`ComputeBuilder`](./src/compute/compute-builder.ts) — GPU compute kernels with buffer management
+
+### Materials (3D)
+- `WebGPU3DRenderer.createMaterial(spec)` — `standard` (lit), `unlit`, `emissive`, and custom `shader` materials; returns a typed `MaterialHandle<U>` (`slot`, `uniforms`, `setTexture`, `destroy`)
+- `MaterialSpec` / `EngineMaterialSpec` / `ShaderMaterialSpec` / `BlendMode` / `CullMode` — material spec types, exported from `murow/webgpu`
 
 ### Camera
 - [`Camera2D`](./src/camera/camera-2d.ts) — Orthographic camera with pan/zoom

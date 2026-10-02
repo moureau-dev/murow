@@ -136,6 +136,11 @@ export function attachShaderMetadata(
 
         // Split combined declarations: minifiers produce `let a=1,b=2,c=3`
         // but tinyest only supports one declaration per statement.
+        //
+        // Minifiers also merge property reads into object destructuring
+        // (`const { lightCount: n, alpha: a } = u`), which tinyest has no
+        // transpiler for. Expand each binding back into a member access so the
+        // statement stays inside the supported subset.
         const splitDecls = (stmts: acorn.Node[]): void => {
             for (let i = stmts.length - 1; i >= 0; i--) {
                 const s = stmts[i] as acorn.VariableDeclaration;
@@ -143,17 +148,49 @@ export function attachShaderMetadata(
                     Array.isArray(s.declarations)) {
                     s.kind = 'const';
 
-                    if (s.declarations.length > 1) {
-                        const newStmts = s.declarations.map(d => ({
-                            type: 'VariableDeclaration',
-                            start: d.start,
-                            end: d.end,
-                            kind: 'const',
-                            declarations: [d],
-                        })) as acorn.VariableDeclaration[];
+                    const single = (decl: acorn.VariableDeclarator): acorn.VariableDeclaration => ({
+                        type: 'VariableDeclaration',
+                        start: decl.start,
+                        end: decl.end,
+                        kind: 'const',
+                        declarations: [decl],
+                    } as unknown as acorn.VariableDeclaration);
 
-                        stmts.splice(i, 1, ...newStmts);
+                    const expanded: acorn.VariableDeclaration[] = [];
+                    for (const d of s.declarations) {
+                        const id = d.id as unknown as acorn.Pattern & { type?: string; properties?: unknown[] };
+                        const props = id.type === 'ObjectPattern' ? (id.properties ?? []) : null;
+                        // Only expand plain `{ key: binding }` patterns. Anything
+                        // else is left untouched so it fails closed in tinyest
+                        // instead of silently dropping a binding.
+                        const simple = props !== null && props.length > 0 && props.every((prop) => {
+                            const p = prop as { type?: string; computed?: boolean; key?: { type?: string }; value?: { type?: string } };
+                            return p.type === 'Property' && !p.computed && p.key?.type === 'Identifier' && p.value?.type === 'Identifier';
+                        });
+                        if (simple && d.init) {
+                            for (const prop of props as Array<{ key: { type?: string; name?: string }; value: { type?: string; name?: string } }>) {
+                                expanded.push(single({
+                                    type: 'VariableDeclarator',
+                                    start: d.start,
+                                    end: d.end,
+                                    id: prop.value,
+                                    init: {
+                                        type: 'MemberExpression',
+                                        start: d.start,
+                                        end: d.end,
+                                        object: d.init,
+                                        property: prop.key,
+                                        computed: false,
+                                        optional: false,
+                                    },
+                                } as unknown as acorn.VariableDeclarator));
+                            }
+                        } else {
+                            expanded.push(single(d));
+                        }
                     }
+
+                    stmts.splice(i, 1, ...expanded);
                 }
                 // Recurse into nested blocks
                 const blk = (s as unknown as acorn.Class).body;
@@ -193,19 +230,32 @@ export function attachShaderMetadata(
         return;
     }
 
-    // Walk the AST to collect member accesses per identifier: `id.member` → record `member` under `id`.
-    // Used to disambiguate bundler-renamed namespace references (e.g. `d10.f32` is the data namespace).
-    const memberAccesses: Record<string, string[]> = {};
+    // Walk the AST to collect member-access paths per identifier:
+    // `meshLayout.$.uniforms` records `['$', 'uniforms']` under `meshLayout`.
+    // Full paths (not just the first member) disambiguate several layout
+    // namespaces that all expose a `$` accessor, e.g. `meshLayout` vs
+    // `matLayout` in a material shader.
+    const memberPaths: Record<string, string[][]> = {};
     const visit = (node: unknown): void => {
         if (!node || typeof node !== 'object') return;
         const n = node as { type?: string; [k: string]: unknown };
-        if (n.type === 'MemberExpression') {
-            const obj = n.object as { type?: string; name?: string } | undefined;
+        if (n.type === 'MemberExpression' && !n.computed) {
             const prop = n.property as { type?: string; name?: string } | undefined;
-            if (obj?.type === 'Identifier' && obj.name && prop?.type === 'Identifier' && prop.name && !n.computed) {
-                const arr = memberAccesses[obj.name];
-                if (arr) arr.push(prop.name);
-                else memberAccesses[obj.name] = [prop.name];
+            if (prop?.type === 'Identifier' && prop.name) {
+                const path: string[] = [prop.name];
+                let obj = n.object as { type?: string; name?: string; computed?: boolean; object?: unknown; property?: { type?: string; name?: string } } | undefined;
+                while (obj?.type === 'MemberExpression' && !obj.computed &&
+                    obj.property?.type === 'Identifier' && obj.property.name) {
+                    path.unshift(obj.property.name);
+                    obj = obj.object as typeof obj;
+                }
+                // Two segments (`$` plus the first entry) are enough to tell
+                // layout namespaces apart. Going deeper would require reading
+                // buffer values, which TypeGPU forbids outside codegen.
+                if (path.length > 2) path.length = 2;
+                if (obj?.type === 'Identifier' && obj.name) {
+                    (memberPaths[obj.name] ??= []).push(path);
+                }
             }
         }
         for (const key of Object.keys(n)) {
@@ -220,19 +270,30 @@ export function attachShaderMetadata(
     // Otherwise use tinyest's extracted names (works for non-minified code).
     const effectiveExternalNames = knownExternalNames ?? externalNames;
 
+    // Traverse a member path (e.g. `['$', 'uniforms']`) through a namespace
+    // object. TypeGPU layout objects expose their entries through the `$`
+    // accessor, which supports `in` and property reads.
+    const pathExists = (ns: unknown, path: string[]): boolean => {
+        let cur: any = ns;
+        for (let i = 0; i < path.length; i++) {
+            if (cur === null || (typeof cur !== 'object' && typeof cur !== 'function')) return false;
+            if (!(path[i]! in cur)) return false;
+            // Do not read the final segment: layout entry values throw outside
+            // codegen. `in` is enough to prove the path exists.
+            if (i < path.length - 1) cur = cur[path[i]!];
+        }
+        return true;
+    };
+
     // For each discovered external name, pick the namespace alias whose
-    // object contains *every* member accessed via that name.
+    // object contains *every* member path accessed via that name.
     const resolvedAliases: Record<string, object> = {};
     const candidateEntries = Object.entries(namespaceAliases);
     for (const name of effectiveExternalNames) {
-        const members = memberAccesses[name];
-        if (!members || members.length === 0) continue;
+        const paths = memberPaths[name];
+        if (!paths || paths.length === 0) continue;
         for (const [, ns] of candidateEntries) {
-            let matches = true;
-            for (const m of members) {
-                if (!(m in (ns as Record<string, unknown>))) { matches = false; break; }
-            }
-            if (matches) {
+            if (paths.every((p) => pathExists(ns, p))) {
                 resolvedAliases[name] = ns;
                 break;
             }
@@ -298,22 +359,37 @@ export function attachShaderMetadata(
     if (externalNames.some(n => !resolvedAliases[n] && !resolvedMembers[n] && !(n in baseExternals))) {
         try {
             const getterSrc = getExternals.toString();
-            // Match key: value pairs in arrow functions: ({key1: val1, key2: val2})
-            const objMatch = getterSrc.match(/\(\s*\{[^}]+\}\s*\)/);
-            if (objMatch) {
-                // Extract key:value pairs
-                const pairRegex = /([\w$]+)\s*:\s*([\w$]+)/g;
-                let pair;
-                while ((pair = pairRegex.exec(objMatch[0])) !== null) {
-                    const canonicalKey = pair[1];
-                    const minifiedVar = pair[2];
-                    if (!(minifiedVar in baseExternals) && !resolvedAliases[minifiedVar] && !resolvedMembers[minifiedVar]) {
-                        if (canonicalKey in baseExternals) {
+            // Collect every `{ canonicalKey: renamedBinding }` pair. This works
+            // for object-literal arrows and for block-bodied getters that build
+            // an externals object and return it.
+            const getterAst = acorn.parse(`(${getterSrc})`, {
+                ecmaVersion: 2022,
+                sourceType: 'script',
+            }) as acorn.Node;
+            const collectPairs = (node: unknown): void => {
+                if (!node || typeof node !== 'object') return;
+                const n = node as { type?: string; properties?: unknown[]; [k: string]: unknown };
+                if (n.type === 'ObjectExpression' && Array.isArray(n.properties)) {
+                    for (const prop of n.properties as Array<{ type?: string; computed?: boolean; key?: { type?: string; name?: string }; value?: { type?: string; name?: string } }>) {
+                        if (prop.type !== 'Property' || prop.computed) continue;
+                        if (prop.key?.type !== 'Identifier' || prop.value?.type !== 'Identifier') continue;
+                        const canonicalKey = prop.key.name!;
+                        const minifiedVar = prop.value.name!;
+                        if (canonicalKey in baseExternals &&
+                            !(minifiedVar in baseExternals) &&
+                            !resolvedAliases[minifiedVar] &&
+                            !resolvedMembers[minifiedVar]) {
                             resolvedMembers[minifiedVar] = baseExternals[canonicalKey];
                         }
                     }
                 }
-            }
+                for (const key of Object.keys(n)) {
+                    const v = n[key];
+                    if (Array.isArray(v)) for (const item of v) collectPairs(item);
+                    else if (v && typeof v === 'object') collectPairs(v);
+                }
+            };
+            collectPairs(getterAst);
         } catch {
             // Ignore — getter source parsing is best-effort
         }

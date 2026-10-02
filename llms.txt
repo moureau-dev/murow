@@ -15,7 +15,7 @@ The `webgpu` and `netcode` subpaths are bundled with the `murow` package — `np
 Before writing anything, internalize these — they are the patterns agents wrongly import from other engines:
 
 - **No entity/component classes.** A component is a typed binary schema (`defineComponent`), not a class with methods. An entity is a plain `number`. Don't write `class Player {}` or `class PositionComponent {}`.
-- **No scene graph / `Object3D` / `mesh.material.color`.** You spawn instance *handles* from a renderer and set flat transforms/tint; there is no node hierarchy and (3D) no live material editing.
+- **No scene graph / `Object3D` / `mesh.material.color`.** You spawn instance *handles* from a renderer and set flat transforms/tint; there is no node hierarchy. 3D surfaces use `renderer.createMaterial(spec)` + a `MaterialHandle` (see "Materials (3D)"), not a material assigned to a mesh.
 - **No React-style hooks, no per-frame object allocation in hot loops.** State lives in components (multiplayer) or in your own arrays (single-player) — not in closures or framework state.
 - **Determinism in predictions:** no `Math.random()` (use `ctx.rng`), no `Date.now()`/`performance.now()` (use `ctx.tick`/`ctx.deltaTime`), no I/O, no module-level mutable state. Predictions only write **networked** components.
 - **Server is authority.** Handlers are server-only. Gameplay decisions (hits, awards) live in `defineHandlers`, never on the client.
@@ -2815,7 +2815,71 @@ loop.events.on('pre-tick', () => renderer.storePreviousState());
 spot.destroy();                 // free the slot
 ```
 
-The 3D renderer is **not a PBR/material engine** — there are no shadows, no skybox, no specular/metallic/emissive. Per-instance `color` (a flat tint set at spawn) is the only surface property you control. Lighting is per-vertex diffuse with the dynamic lights plus the directional + ambient globals.
+The 3D renderer is **not a PBR engine** — there are no shadows, no skybox, and no metalness/roughness/IBL. Surface shading comes from the material system (`standard` / `unlit` / `emissive` / custom `shader`; see "Materials (3D)"). Lighting is per-vertex diffuse with the dynamic lights plus the directional + ambient globals.
+
+### Materials (3D)
+
+`renderer.createMaterial(spec)` compiles a `MaterialSpec` into a `MaterialHandle`. Materials are GPU resources created **after `init()`**; there is no string registry, no `AssetBucket` entry, and no `.get(id)`.
+
+```ts
+import { d, std } from 'murow/webgpu';
+
+// Declarative custom shader. Omitting `shaders.vertex` reuses the engine mesh
+// vertex, so the fragment receives vNormal, vColor, vUV, vWorldPos.
+const holo = renderer.createMaterial({
+  type: 'shader',
+  blend: 'additive',            // 'opaque' | 'alpha' | 'additive'
+  depthWrite: false,
+  textures: { map: 'flame' },  // texture id from the AssetBucket -> group 1
+  uniforms: { scan: d.f32, tint: d.vec3f },
+  defaultUniforms: { scan: 2, tint: [0.35, 0.85, 1] },
+  shaders: {
+    fragment: (input) => {
+      const tex = std.textureSample(textures.map, textures.sampler, d.vec2f(input.vUV.x, input.vUV.y));
+      const band = std.saturate(std.sin(input.vWorldPos.y * material.scan) * 0.5 + 0.5);
+      const c = std.mul(material.tint, band);
+      return d.vec4f(c.x, c.y, c.z, tex.w);
+    },
+  },
+});
+
+const glow = renderer.createMaterial({ type: 'emissive', color: [1, 0.45, 0.1], emissive: 2 });
+
+const orb = renderer.addInstance({ prefab: 'orb', material: holo });
+orb.setMaterial(glow.slot + 1);      // runtime swap (O(1)); 0 = engine default
+orb.setMaterialParams(1.5, 0);       // writes statics[slot].custom0 / custom1
+
+holo.uniforms.scan += 0.6;           // typed write; `.uniforms` is a live view
+holo.setTexture('map', 'smoke');     // swap the one material texture
+holo.destroy();                      // free the slot + uniform buffer
+```
+
+`MaterialHandle<U>` (`U` = the `uniforms` schema; accessors typed with TypeGPU `Infer`):
+
+| Member | Description |
+|---|---|
+| `slot: number` | Material identity. An instance's `materialId` is `slot + 1` (`0` = engine default). |
+| `uniforms` | Typed read/write over this material's uniform buffer. `holo.uniforms.scan = v` and `+=` both work. |
+| `setTexture(name, texture)` | Re-binds the material texture (`'map'` only). |
+| `destroy()` | Frees the slot and uniform buffer. |
+
+Spec fields:
+
+| Field | Applies to | Notes |
+|---|---|---|
+| `type` | all | `'standard'` (lit), `'unlit'`, `'emissive'`, `'shader'` |
+| `color`, `opacity`, `emissive`, `texture` | engine types | `texture` is an AssetBucket texture id |
+| `uniforms`, `defaultUniforms`, `textures`, `shaders` | `shader` | `uniforms` is a TGSL schema; `textures: { map: 'id' }`; `shaders.fragment` is required, `shaders.vertex` optional |
+| `blend`, `depthWrite`, `depthTest`, `cull` | all | render state. Defaults: `'opaque'`, `depthWrite:true`, `depthTest:true`, `cull:'none'`; `emissive` defaults to `blend:'additive'` + `depthWrite:false` |
+
+Free variables inside a `shader` fragment (and custom vertex): `scene` (engine uniforms: `viewProjection`, `alpha`, sun direction/ambient, `lightCount`), `material` (this material's uniforms), `textures` (`{ map, sampler }`), `lights`, `dynamic`, `statics`, `slotIndices`; plus `d`, `std`, and the helpers `lightContribution`, `tonemap`.
+
+Batching is by `(materialId, modelId)`; `render()` draws opaque batches first, then transparent (`alpha`/`additive`) batches.
+
+Caveats:
+- Skinned meshes still use the engine default material; `addInstance({ material })` applies to non-skinned models only.
+- One `map` texture per material.
+- Per-material params are stored per material, not yet a single shared SoA buffer.
 
 ### Renderer shape
 
@@ -3404,7 +3468,7 @@ inverseLerp(min: number, max: number, value: number): number;
 | Calling `server.on('intent', handler)` to implement gameplay | That event is **observe-only** telemetry. Gameplay belongs in `defineHandlers(intents, {...})`. Both can coexist |
 | Casting `world.fields(C)` results to specific typed arrays | Don't - the return type is precisely inferred from the schema (`f32 -> Float32Array`, `u8 -> Uint8Array`, etc.). Casts only mask bugs |
 | Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `addInstance({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
-| Expecting shadows, a skybox, or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, but no shadows, skybox, or material API. Write a custom `Base3DRenderer` backend if you need more |
+| Expecting shadows, a skybox, or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient and a material system (`standard` / `unlit` / `emissive` / custom `shader`), but no shadows, skybox, or PBR. Write a custom `Base3DRenderer` backend if you need more |
 | `addInstance({ model: ... })` | The option key is `prefab`, not `model`. Use `addInstance({ prefab: assets.prefabs.get(id) })` |
 | `renderer.createCube({ size: 1 })` for the player / obstacles / ground | Declare reusable models as `AssetBucket` prefabs (`assets.prefabs.get('id')`) — the renderer `create*` / `load*` factories are one-off/debug conveniences: no parallel load, no typed ids, no bucket GPU sizing |
 | `.prefabs(({ bucket }) => { bucket.add(...); })` — block body doesn't return the bucket | `textures()` / `prefabs()` callbacks MUST return the bucket: expression body (`({ bucket }) => bucket.add(...)`) or explicit `return bucket.add(...)`. A block that only calls `.add(...)` returns `undefined` and registers nothing |

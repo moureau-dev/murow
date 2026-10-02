@@ -113,7 +113,7 @@ export class SparseBatcher {
      * Iterate active buckets in layer order (back-to-front), zero allocations.
      * Callback receives sheetId and a subarray view of instance indices.
      */
-    each(cb: (sheetId: number, instances: Uint32Array, count: number) => void): void {
+    each(cb: (sheetId: number, instances: Uint32Array, count: number, key: number) => void): void {
         this.sortBuffer.set(this.activeBuckets.subarray(0, this.activeCount));
 
         // insertion sort. activeCount is tiny in practice
@@ -130,7 +130,7 @@ export class SparseBatcher {
             const key = this.sortBuffer[i];
             const sheetId = key % SparseBatcher.MAX_SHEETS;
             const count = this.bucketSizes[key];
-            cb(sheetId, this.buckets.get(key)!.subarray(0, count), count);
+            cb(sheetId, this.buckets.get(key)!.subarray(0, count), count, key);
         }
     }
 
