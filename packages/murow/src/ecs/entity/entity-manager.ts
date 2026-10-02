@@ -1,3 +1,5 @@
+import { SlotSet } from '../../core/slot-map';
+
 /**
  * Entity ID type (just a number, indexing into component arrays)
  */
@@ -5,8 +7,8 @@ export type Entity = Uint32Array[number];
 
 /**
  * Owns entity lifecycle storage: the free-id ring buffer for O(1) id reuse
- * and a dense alive list (packed in [0, count)) backed by a sparse index and
- * per-entity flags for O(1) alive checks and swap-pop removal.
+ * and a dense alive set backed by the core `SlotSet` (packed dense array +
+ * sparse index + per-id flags for O(1) alive checks and swap-pop removal).
  *
  * Component clearing, query maintenance, and despawn tracking are orchestrated
  * by `World` around `spawn`/`despawn`; this class only manages id allocation
@@ -21,19 +23,14 @@ export class EntityManager {
     private freeEntityCount: number = 0;
     private freeEntityMask: number = 0;
 
-    private aliveEntitiesArray: Uint32Array;
-    private aliveCount: number = 0;
-    private aliveEntitiesIndices: Uint32Array;
-    private aliveEntityFlags: Uint8Array;
+    private readonly alive: SlotSet;
 
     constructor(private readonly maxEntities: number) {
         const ringBufferSize = Math.pow(2, Math.ceil(Math.log2(maxEntities)));
         this.freeEntityIds = new Uint32Array(ringBufferSize);
         this.freeEntityMask = ringBufferSize - 1;
 
-        this.aliveEntitiesArray = new Uint32Array(maxEntities);
-        this.aliveEntitiesIndices = new Uint32Array(maxEntities);
-        this.aliveEntityFlags = new Uint8Array(maxEntities);
+        this.alive = new SlotSet(maxEntities);
     }
 
     spawn(): Entity {
@@ -50,35 +47,22 @@ export class EntityManager {
         if (id >= this.maxEntities) {
             throw new Error(
                 `Maximum entities (${this.maxEntities}) reached. ` +
-                    `Current alive: ${this.aliveCount}, ` +
+                    `Current alive: ${this.alive.size}, ` +
                     `Free list: ${this.freeEntityCount}`,
             );
         }
 
-        this.aliveEntityFlags[id] = 1;
-        this.aliveEntitiesIndices[id] = this.aliveCount;
-        this.aliveEntitiesArray[this.aliveCount++] = id;
-
+        this.alive.add(id);
         return id;
     }
 
     /**
-     * Remove the entity from the alive set (swap-pop) and return its id to the
-     * free list. Returns false if the entity was already despawned, so callers
-     * can skip the rest of the despawn sequence.
+     * Remove the entity from the alive set and return its id to the free ring.
+     * Returns false if the entity was already despawned, so callers can skip
+     * the rest of the despawn sequence.
      */
     despawn(entity: Entity): boolean {
-        if (this.aliveEntityFlags[entity] === 0) return false;
-        this.aliveEntityFlags[entity] = 0;
-
-        const idx = this.aliveEntitiesIndices[entity]!;
-        const last = this.aliveCount - 1;
-        if (idx !== last) {
-            const lastEntity = this.aliveEntitiesArray[last]!;
-            this.aliveEntitiesArray[idx] = lastEntity;
-            this.aliveEntitiesIndices[lastEntity] = idx;
-        }
-        this.aliveCount--;
+        if (!this.alive.remove(entity)) return false;
 
         this.freeEntityIds[this.freeEntityHead] = entity;
         this.freeEntityHead = (this.freeEntityHead + 1) & this.freeEntityMask;
@@ -88,11 +72,11 @@ export class EntityManager {
     }
 
     isAlive(entity: Entity): boolean {
-        return this.aliveEntityFlags[entity] === 1;
+        return this.alive.has(entity);
     }
 
     get count(): number {
-        return this.aliveCount;
+        return this.alive.size;
     }
 
     getMaxEntities(): number {
@@ -100,11 +84,11 @@ export class EntityManager {
     }
 
     getEntities(): Uint32Array {
-        return this.aliveEntitiesArray.subarray(0, this.aliveCount);
+        return this.alive.denseBuffer.subarray(0, this.alive.size);
     }
 
     /** Full-capacity dense alive buffer; valid entries are in [0, count). */
     get aliveBuffer(): Uint32Array {
-        return this.aliveEntitiesArray;
+        return this.alive.denseBuffer;
     }
 }

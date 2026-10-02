@@ -23,8 +23,8 @@ renderer/
 │   ├── bucket/            (generic Bucket base)
 │   ├── texture/           (TextureBucket — texture specs → ImageBitmap)
 │   ├── prefab/            (PrefabBucket — spec → prefab for 2D/3D)
-│   │   ├── prefab.ts
-│   │   └── utility/       (BasePrefabBucket, specs, parsers, concrete)
+│   │   ├── prefab.ts      (extends core Bucket)
+│   │   └── utility/       (specs, parsers, shared types)
 │   └── asset/             (AssetBucket — textures + prefabs under one roof)
 ├── raycast/           — abstract pick / ray-test contracts
 │   └── raycast.ts         (Raycast, RaycastMemo, RaycastHit, RaycastOptions)
@@ -94,7 +94,7 @@ The same events are available on `assets.textures.events` (loading progress, loa
 <details>
 <summary>PrefabBucket — spec → prefab registry</summary>
 
-The `PrefabBucket` powers `assets.prefabs`. You typically don't reach for it directly, but it's the engine behind typed lookups, hitboxes, groups, and metadata.
+The `PrefabBucket` powers `assets.prefabs`. You typically don't reach for it directly, but it's the engine behind typed lookups, hitboxes, and metadata.
 
 ```typescript
 import { PrefabBucket } from 'murow';
@@ -128,7 +128,7 @@ bucket.get('typo');              // ❌ compile error: not assignable to '"hero"
 
 1. **`add()` / `addAll()`** — collect specs (sync, no I/O). Chainable.
 2. **`load()`** — resolves all async work (fetch, parse) in parallel. Frozen after this.
-3. **`get(id)` / `getAllByType(type)`** — typed lookups.
+3. **`get(id)` / `entries()`** — typed lookup and full iteration.
 
 The bucket carries derived stats (joint counts, skinned-part counts, vertex totals) so renderers can self-size their GPU buffers without you having to specify magic numbers.
 
@@ -137,7 +137,20 @@ The bucket carries derived stats (joint counts, skinned-part counts, vertex tota
 - `new PrefabBucket('3d')` — accepts gltf / grid / cube / composite / sphere / cylinder / cone / mesh specs
 - `new PrefabBucket('2d')` — accepts spritesheet specs
 
-Use `addGroup(name, parts)` to register a set of prefabs under a dotted namespace (`bucket.get('campfire.logs')`) and `getGroup(name).asComposite()` to spawn the whole group as one logical instance with per-part offsets.
+To make a multi-part prefab spawnable as one instance, register the parts as normal prefabs and wire them with a `composite` spec (parts are looked up by id and carry per-part offsets):
+
+```typescript
+const bucket = new PrefabBucket('3d')
+  .add({ type: 'cube', id: 'campfire.logs',  size: 1 })
+  .add({ type: 'cube', id: 'campfire.flame', size: 0.3 })
+  .add({
+    type: 'composite', id: 'campfire',
+    parts: [
+      { partId: 'campfire.logs' },
+      { partId: 'campfire.flame', offset: { position: [0, 0.3, 0] } },
+    ],
+  });
+```
 
 The mode narrows what `add()` accepts and what `get()` returns. Type-safe by construction.
 

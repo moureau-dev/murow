@@ -1,11 +1,18 @@
 import { test, expect, describe } from 'bun:test';
-import { SlotMap, SlotStore } from './slot-map';
+import { SlotMap, SlotSet, SlotStore } from './slot-map';
 
 /** Collect the live slots into a plain sorted array for order-independent checks. */
 function liveSlots(map: SlotMap): number[] {
     const out: number[] = [];
     const active = map.activeSlots;
     for (let i = 0; i < map.size; i++) out.push(active[i]!);
+    return out.sort((a, b) => a - b);
+}
+
+/** Collect the live ids of a SlotSet for order-independent checks. */
+function liveIds(set: SlotSet): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < set.size; i++) out.push(set.denseBuffer[i]!);
     return out.sort((a, b) => a - b);
 }
 
@@ -160,6 +167,127 @@ describe('SlotMap', () => {
 
     test('capacity reflects the constructor argument', () => {
         expect(new SlotMap(123).capacity).toBe(123);
+    });
+});
+
+describe('SlotSet', () => {
+    describe('add', () => {
+        test('adds an externally chosen id and grows size', () => {
+            const set = new SlotSet(8);
+            expect(set.add(3)).toBe(true);
+            expect(set.size).toBe(1);
+            expect(set.has(3)).toBe(true);
+        });
+
+        test('ids need not be contiguous', () => {
+            const set = new SlotSet(1000);
+            expect(set.add(900)).toBe(true);
+            expect(set.add(5)).toBe(true);
+            expect(set.add(0)).toBe(true);
+            expect(set.size).toBe(3);
+            expect(liveIds(set)).toEqual([0, 5, 900]);
+        });
+
+        test('rejects a duplicate id', () => {
+            const set = new SlotSet(8);
+            expect(set.add(4)).toBe(true);
+            expect(set.add(4)).toBe(false);
+            expect(set.size).toBe(1);
+        });
+
+        test('rejects out-of-range ids', () => {
+            const set = new SlotSet(8);
+            expect(set.add(-1)).toBe(false);
+            expect(set.add(8)).toBe(false);
+            expect(set.size).toBe(0);
+        });
+    });
+
+    describe('remove', () => {
+        test('removes a live id', () => {
+            const set = new SlotSet(8);
+            set.add(2);
+            expect(set.remove(2)).toBe(true);
+            expect(set.size).toBe(0);
+            expect(set.has(2)).toBe(false);
+        });
+
+        test('removing an absent id is a no-op', () => {
+            const set = new SlotSet(8);
+            expect(set.remove(5)).toBe(false);
+            expect(set.size).toBe(0);
+        });
+
+        test('removing an out-of-range id is a no-op', () => {
+            const set = new SlotSet(8);
+            expect(set.remove(-1)).toBe(false);
+            expect(set.remove(8)).toBe(false);
+        });
+
+        test('keeps dense packed after a middle removal (swap-pop)', () => {
+            const set = new SlotSet(16);
+            set.add(2);
+            set.add(5);
+            set.add(9);
+            set.remove(5);
+            expect(set.size).toBe(2);
+            expect(liveIds(set)).toEqual([2, 9]);
+            expect(set.has(5)).toBe(false);
+        });
+    });
+
+    describe('has', () => {
+        test('is false for out-of-range ids without throwing', () => {
+            const set = new SlotSet(8);
+            expect(set.has(-1)).toBe(false);
+            expect(set.has(8)).toBe(false);
+        });
+    });
+
+    describe('reuse', () => {
+        test('an id can be re-added after removal', () => {
+            const set = new SlotSet(8);
+            set.add(6);
+            set.remove(6);
+            expect(set.add(6)).toBe(true);
+            expect(set.size).toBe(1);
+            expect(set.has(6)).toBe(true);
+        });
+
+        test('survives an add/remove churn cycle with consistent membership', () => {
+            const set = new SlotSet(16);
+            const live = new Set<number>();
+            let cursor = 0;
+            for (let round = 0; round < 200; round++) {
+                if (live.size === 0 || (round % 3 !== 0 && live.size < 16)) {
+                    const id = cursor++ % 16;
+                    if (set.add(id)) live.add(id);
+                } else {
+                    const id = live.values().next().value as number;
+                    set.remove(id);
+                    live.delete(id);
+                }
+                expect(set.size).toBe(live.size);
+                for (const id of live) expect(set.has(id)).toBe(true);
+            }
+        });
+    });
+
+    describe('clear', () => {
+        test('empties the set and allows re-adding', () => {
+            const set = new SlotSet(4);
+            set.add(0);
+            set.add(3);
+            set.clear();
+            expect(set.size).toBe(0);
+            expect(set.has(0)).toBe(false);
+            expect(set.has(3)).toBe(false);
+            expect(set.add(0)).toBe(true);
+        });
+    });
+
+    test('capacity reflects the constructor argument', () => {
+        expect(new SlotSet(123).capacity).toBe(123);
     });
 });
 

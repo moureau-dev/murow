@@ -248,7 +248,7 @@ import {
   NavMesh,
   // mat4 helpers (column-major, offset-based, zero-alloc)
   mat4Identity, mat4IdentityNew, trsToMat4, nodeToMat4, mat4Mul, mat4MulNew,
-  FreeList, SparseBatcher,
+  FreeList, SlotMap, SlotSet, SparseBatcher,
   // Prediction primitives (lower-level — netcode wraps these)
   IntentTracker, Reconciliator,
   // Protocol primitives
@@ -1303,6 +1303,24 @@ pool.free(idx);                       // throws on double-free
 pool.hasAvailable();
 pool.getAvailableCount();
 pool.getAllocatedCount();
+```
+
+### `SlotMap` / `SlotSet` — dense membership for integer ids
+
+`SlotMap` allocates slots from a `FreeList` and keeps live ones packed (`activeSlots`) with a sparse index for O(1) `has`/`remove` — the typed replacement for `Map<id, handle>` you iterate every frame. `SlotSet` is the same dense/sparse membership without the allocator, for externally chosen ids (e.g. ECS entity ids). `SlotStore<TId, T>` layers an object array on a `SlotMap` for items keyed by a non-slot id.
+
+```ts
+import { SlotMap, SlotSet, SlotStore } from 'murow/core/slot-map';
+
+const slots = new SlotMap(1024);
+const slot = slots.add();             // -1 when exhausted
+slots.remove(slot);
+slots.has(slot);
+for (let i = 0; i < slots.size; i++) use(slots.activeSlots[i]);
+
+const members = new SlotSet(1024);    // caller owns id allocation
+members.add(42);                      // false if out of range or already present
+members.has(42);
 ```
 
 ### `SparseBatcher` — layer/sheet bucketing for draw calls
@@ -2599,12 +2617,19 @@ const bucket = new PrefabBucket('3d')          // '2d' | '3d' — narrows what a
     animations: ['Idle', 'Run'],
     metadata: { scale: 0.01 },
   })
-  // Multi-part prefab — spawnable as a single instance with per-part offsets
-  .addGroup('campfire', [
-    { type: 'cube', id: 'logs',  size: 1 },                                          // bucket.get('campfire.logs')
-    { type: 'cube', id: 'flame', size: 0.3, offset: { position: [0, 0.3, 0] } },     // bucket.get('campfire.flame')
-    { type: 'cube',              size: 0.5, offset: { position: [0, 0.8, 0] } },     // bucket.get('campfire.<hex>')
-  ]);
+  // Multi-part prefab — parts are normal prefabs, wired by a composite spec
+  .add({ type: 'cube', id: 'campfire.logs',  size: 1 })
+  .add({ type: 'cube', id: 'campfire.flame', size: 0.3 })
+  .add({ type: 'cube', id: 'campfire.ember', size: 0.5 })
+  .add({
+    type: 'composite',
+    id: 'campfire',
+    parts: [
+      { partId: 'campfire.logs' },
+      { partId: 'campfire.flame', offset: { position: [0, 0.3, 0] } },
+      { partId: 'campfire.ember', offset: { position: [0, 0.8, 0] } },
+    ],
+  });
 
 await bucket.load();                            // parallel fetch + parse — frozen after this
 
@@ -2615,9 +2640,8 @@ hero.metadata.scale;                            // typed as 0.01 (literal)
 hero.totalVertexCount;
 
 bucket.get('typo');                             // ❌ compile error: not assignable to known ids
-bucket.getAllByType('gltf');                    // GltfPrefab[]
-bucket.getGroup('campfire').asComposite();      // spawn the whole group as one logical instance
-bucket.entries();                               // iterable [id, prefab] pairs — for renderer self-sizing
+bucket.entries();                               // all parsed prefabs, registration order
+bucket.get('campfire');                         // CompositePrefab — spawn all parts as one instance
 ```
 
 For 2D, declare the bucket through `AssetBucket('2d')` (same wrapper the 3D renderer takes):

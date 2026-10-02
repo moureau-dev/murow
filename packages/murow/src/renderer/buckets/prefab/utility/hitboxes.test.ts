@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { PrefabBucket } from './concrete';
+import { PrefabBucket } from '../prefab';
 import { Hitbox } from '../../../../core/hitbox/hitbox';
 import { HitboxLibrary } from '../../../../core/hitbox/hitbox-library';
 

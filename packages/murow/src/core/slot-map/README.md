@@ -2,9 +2,10 @@
 
 A zero-GC, O(1) dense slot set for managing runtime-allocated things you both **iterate every frame** and **look up by id**. It is the `FreeList` + packed-array + sparse-reverse-index pattern (dense iteration, swap-and-pop removal, slot recycling) written once, tested once, and type-safe — instead of hand-rolled at every call site.
 
-Two classes ship from this module:
+Three classes ship from this module:
 
-- `SlotMap` — manages integer slots. The id **is** the slot. Use it when the thing you allocate has no companion object (GPU instance/light data rows, particle slots, entity-id tracking).
+- `SlotMap` — manages integer slots. The id **is** the slot. Use it when the thing you allocate has no companion object (GPU instance/light data rows, particle slots).
+- `SlotSet` — the same dense/sparse membership with **no allocator**: you supply the ids. Use it when id allocation follows its own policy (e.g. the ECS FIFO entity-id ring) but you still want packed iteration and O(1) membership.
 - `SlotStore<TId, T>` — layers a slot-indexed object array on top of `SlotMap`, keyed by an external id that need not equal the slot. The typed replacement for `Map<id, handle>` collections iterated every frame.
 
 ## Features
@@ -14,7 +15,7 @@ Two classes ship from this module:
 - Sparse `Int32Array` reverse index (`-1` sentinel) instead of a `Map` for id lookup.
 - Swap-and-pop removal that keeps the dense array packed and fixes the reverse index — the bug-prone bookkeeping lives in one tested place.
 - Stable slots: the slot returned by `add` does not move while live, so it is safe to store as a GPU buffer index or inside a handle.
-- Built on `FreeList`; composes the existing primitive rather than reimplementing allocation.
+- Composed from the existing primitives: `SlotMap = FreeList + SlotSet`. The membership half (`SlotSet`) is shared, not reimplemented.
 - Zero runtime dependencies beyond `FreeList`.
 
 ## id vs slot
@@ -25,6 +26,8 @@ The distinction is the whole design, so it is worth stating once:
 - **id** — the external key you look things up by.
 
 In `SlotMap` these are the **same number**: the slot you allocate is the id. `remove(slot)` is therefore already "remove by id" — there is no separate `removeById`.
+
+In `SlotSet` there is no slot allocator at all: you pass the id you want to track, so id and slot are again the same number but the caller owns allocation. `add(id)` returns `false` when the id is out of range or already present.
 
 In `SlotStore` they are **different spaces**: an external id (e.g. an ECS entity id) maps to a slot. `remove(id)` is the primary entry point because callers (netcode despawn, gameplay) hold the id, not the slot.
 
@@ -73,6 +76,23 @@ minions.forEach((handle, id, slot) => {
 minions.remove(entityId);          // O(1), keeps iteration packed
 ```
 
+### SlotSet — caller-allocated ids
+
+```typescript
+import { SlotSet } from './slot-map';
+
+// ids come from an external allocator (here, the ECS FIFO entity-id ring)
+const alive = new SlotSet(10_000);
+
+alive.add(entityId);               // false if out of range or already present
+alive.has(entityId);               // O(1)
+alive.remove(entityId);            // O(1) swap-and-pop, false if absent
+
+// Packed iteration, zero allocation:
+const dense = alive.denseBuffer;
+for (let i = 0; i < alive.size; i++) visit(dense[i]);
+```
+
 ## API
 
 ### `SlotMap`
@@ -86,6 +106,16 @@ minions.remove(entityId);          // O(1), keeps iteration packed
 - `hasAvailable(): boolean` — Whether another slot can be allocated.
 - `forEach(fn: (slot, index) => void): void` — Iterate live slots, zero allocation.
 - `clear(): void` — Return every slot to the pool.
+
+### `SlotSet`
+
+- `add(id: number): boolean` — Track `id`. Returns `false` if out of range or already present.
+- `remove(id: number): boolean` — Stop tracking `id` (O(1) swap-and-pop). Returns `false` if out of range or absent.
+- `has(id: number): boolean` — Whether `id` is currently tracked.
+- `denseBuffer: Uint32Array` — Packed live ids, valid for `[0, size)`. Reused — do not retain.
+- `size: number` — Number of live ids.
+- `capacity: number` — Configured max id (exclusive).
+- `clear(): void` — Empty the set.
 
 ### `SlotStore<TId extends number, T>`
 
@@ -101,13 +131,13 @@ minions.remove(entityId);          // O(1), keeps iteration packed
 
 ## When to use it
 
-Reach for this when a collection has all three of: runtime add/remove, a stable slot something holds onto, and dense per-frame iteration or id lookup. That covers instanced renderer data, lights, blob shadows, and per-archetype handle collections.
+Reach for this when a collection has all three of: runtime add/remove, a stable slot something holds onto, and dense per-frame iteration or id lookup. That covers instanced renderer data, lights, blob shadows, and per-archetype handle collections. Use `SlotSet` directly when the ids are allocated elsewhere (e.g. ECS entity ids from a FIFO ring) and you only need membership plus packed iteration.
 
 It is **not** the right tool for append-only name registries (`Map<string, number>` is correct there), for anonymous fungible pools with no id and no stable slot (a plain count is enough), or for string-keyed lookups touched only on connect/disconnect (keep the `Map` at that boundary). `SlotStore` ids must be non-negative integers below `maxId`.
 
 ## Ids
 
-Both `SlotMap` and `SlotStore` index typed arrays by id, so ids must be small non-negative integers. The exported `SlotId<Brand>` type is a compile-time brand for keeping distinct id spaces from being cross-wired:
+Both `SlotMap`, `SlotSet`, and `SlotStore` index typed arrays by id, so ids must be small non-negative integers (below the configured capacity). The exported `SlotId<Brand>` type is a compile-time brand for keeping distinct id spaces from being cross-wired:
 
 ```typescript
 import type { SlotId } from './slot-map';
@@ -119,4 +149,4 @@ type EntityId = SlotId<'entity'>;
 
 ---
 
-`SlotMap` centralizes the dense-slot pattern the engine previously hand-rolled per renderer — one allocation-free, tested implementation behind a typed API.
+`SlotMap` / `SlotSet` centralize the dense-slot pattern the engine previously hand-rolled per renderer and in the ECS — one allocation-free, tested implementation behind a typed API.

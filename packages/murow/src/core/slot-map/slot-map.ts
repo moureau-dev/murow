@@ -20,26 +20,102 @@ import { FreeList } from '../free-list';
 export type SlotId<Brand extends string = string> = number & { readonly __slot?: Brand };
 
 /**
+ * Dense membership set for externally chosen integer ids in `[0, capacity)`.
+ *
+ * Keeps live ids packed in `dense` for zero-allocation iteration, with a
+ * sparse id -> dense index (`-1` when absent) and a per-id flag for O(1)
+ * membership. It does NOT allocate ids; the caller owns id allocation. This is
+ * the shared core of `SlotMap` (which adds a FreeList) and of ECS entity
+ * bookkeeping (which uses a FIFO id ring).
+ */
+export class SlotSet {
+    private readonly dense: Uint32Array;
+    private readonly sparse: Int32Array;
+    private readonly flags: Uint8Array;
+    private _size = 0;
+
+    constructor(private readonly _capacity: number) {
+        this.dense = new Uint32Array(_capacity);
+        this.sparse = new Int32Array(_capacity).fill(-1);
+        this.flags = new Uint8Array(_capacity);
+    }
+
+    /** Add `id`. Returns false if out of range or already present. */
+    add(id: number): boolean {
+        if (id < 0 || id >= this._capacity || this.flags[id] === 1) return false;
+        this.flags[id] = 1;
+        this.sparse[id] = this._size;
+        this.dense[this._size++] = id;
+        return true;
+    }
+
+    /**
+     * Remove `id`, keeping `dense` packed by swapping the last live id into the
+     * freed position. Returns false if out of range or already absent.
+     */
+    remove(id: number): boolean {
+        if (id < 0 || id >= this._capacity) return false;
+        const idx = this.sparse[id]!;
+        if (idx === -1) return false;
+
+        const last = this._size - 1;
+        if (idx !== last) {
+            const lastId = this.dense[last]!;
+            this.dense[idx] = lastId;
+            this.sparse[lastId] = idx;
+        }
+        this.sparse[id] = -1;
+        this.flags[id] = 0;
+        this._size--;
+        return true;
+    }
+
+    /** Whether `id` is currently live. O(1). */
+    has(id: number): boolean {
+        return id >= 0 && id < this._capacity && this.flags[id] === 1;
+    }
+
+    /** Packed live ids, valid for `[0, size)`. Reused across calls. */
+    get denseBuffer(): Uint32Array {
+        return this.dense;
+    }
+
+    /** Number of live ids. */
+    get size(): number {
+        return this._size;
+    }
+
+    /** Configured capacity. */
+    get capacity(): number {
+        return this._capacity;
+    }
+
+    /** Empty the set. */
+    clear(): void {
+        for (let i = 0; i < this._size; i++) {
+            const id = this.dense[i]!;
+            this.sparse[id] = -1;
+            this.flags[id] = 0;
+        }
+        this._size = 0;
+    }
+}
+
+/**
  * Dense slot set. Slots are allocated from a fixed-capacity FreeList; the id
  * returned by `add` IS the slot and stays stable until freed. Live slots are
- * kept in a packed array (`activeSlots`) for cache-friendly iteration with no
- * per-call allocation, and a sparse `Int32Array` maps slot -> dense position
- * (`-1` when absent) for O(1) membership and removal.
+ * kept in a packed array (`activeSlots`, via the underlying `SlotSet`) for
+ * cache-friendly iteration with no per-call allocation.
  */
 export class SlotMap {
     private readonly freeList: FreeList;
-    /** Packed live slots, valid for `[0, size)`. Iterate this. */
-    private readonly dense: Uint32Array;
-    /** slot -> index into `dense`, or `-1` if the slot is not live. */
-    private readonly sparse: Int32Array;
-    private _size = 0;
+    private readonly set: SlotSet;
     private readonly _capacity: number;
 
     constructor(capacity: number) {
         this._capacity = capacity;
         this.freeList = new FreeList(capacity);
-        this.dense = new Uint32Array(capacity);
-        this.sparse = new Int32Array(capacity).fill(-1);
+        this.set = new SlotSet(capacity);
     }
 
     /**
@@ -49,38 +125,22 @@ export class SlotMap {
     add(): number {
         const slot = this.freeList.allocate();
         if (slot === -1) return -1;
-
-        this.dense[this._size] = slot;
-        this.sparse[slot] = this._size;
-        this._size++;
-
+        this.set.add(slot);
         return slot;
     }
 
     /**
-     * Remove a slot from the live set and return it to the pool. Keeps `dense`
-     * packed by swapping the last live slot into the freed position and fixing
-     * its sparse entry. No-op if the slot is not live.
+     * Remove a slot from the live set and return it to the pool. No-op if the
+     * slot is not live.
      */
     remove(slot: number): void {
-        const activeIdx = this.sparse[slot];
-        if (activeIdx === -1) return;
-
-        const lastIdx = this._size - 1;
-        if (activeIdx !== lastIdx) {
-            const lastSlot = this.dense[lastIdx];
-            this.dense[activeIdx] = lastSlot;
-            this.sparse[lastSlot] = activeIdx;
-        }
-
-        this.sparse[slot] = -1;
-        this._size--;
+        if (!this.set.remove(slot)) return;
         this.freeList.free(slot);
     }
 
     /** Whether `slot` is currently live. O(1). */
     has(slot: number): boolean {
-        return slot >= 0 && slot < this._capacity && this.sparse[slot] !== -1;
+        return this.set.has(slot);
     }
 
     /**
@@ -88,12 +148,12 @@ export class SlotMap {
      * `size` are stale. Reused across calls — do not retain.
      */
     get activeSlots(): Uint32Array {
-        return this.dense;
+        return this.set.denseBuffer;
     }
 
     /** Number of live slots. Iterate `activeSlots` over `[0, size)`. */
     get size(): number {
-        return this._size;
+        return this.set.size;
     }
 
     /** Configured capacity (max simultaneously live slots). */
@@ -113,17 +173,17 @@ export class SlotMap {
      * iterate `activeSlots` manually if you need full control.
      */
     forEach(fn: (slot: number, index: number) => void): void {
-        for (let i = 0; i < this._size; i++) fn(this.dense[i]!, i);
+        const dense = this.set.denseBuffer;
+        const size = this.set.size;
+        for (let i = 0; i < size; i++) fn(dense[i]!, i);
     }
 
     /** Empty the set, returning every slot to the pool. */
     clear(): void {
-        for (let i = 0; i < this._size; i++) {
-            const slot = this.dense[i]!;
-            this.sparse[slot] = -1;
-            this.freeList.free(slot);
-        }
-        this._size = 0;
+        const dense = this.set.denseBuffer;
+        const size = this.set.size;
+        for (let i = 0; i < size; i++) this.freeList.free(dense[i]!);
+        this.set.clear();
     }
 }
 

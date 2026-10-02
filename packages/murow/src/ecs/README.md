@@ -495,8 +495,7 @@ Murow uses **Structure of Arrays** (not Array of Structures):
 ### Entity Management
 
 - **Ring buffer free list** — Power-of-2 size for bitwise modulo (`& mask` vs `% size`)
-- **Swap-remove despawn** — O(1) removal from alive entities array
-- **Alive flag array** — O(1) alive checks (Uint8Array, no Set)
+- **Dense alive set (`SlotSet`)** — packed alive array + sparse reverse index + per-id flag for O(1) `has` and swap-and-pop despawn (shared with the core slot tables, not hand-rolled)
 
 ### Bitmask Operations
 

@@ -19,17 +19,18 @@ export type { SkeletalClip, SkeletalAnimState, PlayOptions } from "./gltf/skelet
 export * from "./spritesheet/helpers";
 export * from "./spritesheet/parser";
 
-// PrefabBucket — generic base + concrete (2D/3D) subclass with prewired parsers
+// Prefab types (parsers, spec/prefab bases) + spec union
 export * from "./buckets/prefab/utility";
 export * from "./buckets/prefab/utility/specs";
-export { PrefabBucket } from "./buckets/prefab/utility/concrete";
-export type { PrefabBucket2D, PrefabBucket3D } from "./buckets/prefab/utility/concrete";
 
 // Buckets — typed registries (Bucket, PrefabBucket, TextureBucket, AssetBucket)
 export {
     Bucket,
+    PrefabBucket,
     AssetBucket,
     TextureBucket,
+    type PrefabBucket2D,
+    type PrefabBucket3D,
     type BucketSpecBase,
     type BucketPrefabBase,
 } from "./buckets";
