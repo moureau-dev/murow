@@ -16,6 +16,9 @@ import {
     createUnlitMaterialFragment,
     createEmissiveMaterialFragment,
     createTexturedMeshVertex,
+    createNoiseFn,
+    createFbmFn,
+    createSnoiseFn,
     type EngineMaterialLayout,
 } from './built-in';
 
@@ -59,12 +62,44 @@ export class MaterialLibrary {
     private readonly slots: SlotMap;
     private readonly entries: (MaterialEntry | null)[];
     private readonly deps: MaterialLibraryDeps;
+    private noiseView!: GPUTextureView;
+    private noiseSampler!: GPUSampler;
     private engineVertex: ReturnType<typeof createTexturedMeshVertex> | null = null;
 
     constructor(deps: MaterialLibraryDeps) {
         this.deps = deps;
         this.slots = new SlotMap(deps.maxMaterials);
         this.entries = new Array(deps.maxMaterials).fill(null);
+        this.initNoise(deps);
+    }
+
+    private initNoise(deps: MaterialLibraryDeps): void {
+        const dev: any = deps.device;
+        if (dev && typeof dev.createTexture === 'function' && typeof dev.createSampler === 'function' && dev.queue?.writeTexture) {
+            const N = 256;
+            const data = new Uint8Array(N * N * 4);
+            for (let y = 0; y < N; y++) {
+                for (let x = 0; x < N; x++) {
+                    let n = (x * 374761393 + y * 668265263) >>> 0;
+                    n = ((n ^ (n >>> 13)) * 1274126177) >>> 0;
+                    n = (n ^ (n >>> 16)) >>> 0;
+                    const i = (y * N + x) * 4;
+                    data[i] = n & 255;
+                    data[i + 1] = (n >>> 8) & 255;
+                    data[i + 2] = (n >>> 16) & 255;
+                    data[i + 3] = 255;
+                }
+            }
+            const usage = ((globalThis as any).GPUTextureUsage?.TEXTURE_BINDING ?? 4) | ((globalThis as any).GPUTextureUsage?.COPY_DST ?? 2);
+            const tex = dev.createTexture({ size: [N, N, 1], format: 'rgba8unorm', usage });
+            dev.queue.writeTexture({ texture: tex }, data, { bytesPerRow: N * 4 }, [N, N]);
+            this.noiseView = tex.createView();
+            this.noiseSampler = dev.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat' });
+        } else {
+            const white = deps.textures.whiteTexture;
+            this.noiseView = white.view;
+            this.noiseSampler = white.sampler;
+        }
     }
 
     get count(): number {
@@ -150,6 +185,8 @@ export class MaterialLibrary {
             material: { uniform: Struct },
             map: { texture: 'float' },
             mapSampler: { sampler: 'filtering' },
+            noise: { texture: 'float' },
+            noiseSampler: { sampler: 'filtering' },
         });
 
         const { vertex, fragment } = this.compileDeclarative(spec, this.deps.meshLayout, layout);
@@ -180,9 +217,12 @@ export class MaterialLibrary {
 
     private compileDeclarative(spec: Extract<MaterialSpec, { type: 'shader' }>, meshLayout: MeshDataLayout, matLayout: any) {
         const decl = spec.shaders;
+        const noiseFn = createNoiseFn(matLayout);
+        const fbmFn = createFbmFn(matLayout, noiseFn);
+        const snoiseFn = createSnoiseFn(matLayout);
 
         const resolveExternals = () => () => {
-            const ext: Record<string, unknown> = { d, std, meshLayout, matLayout, lightContribution, tonemap };
+            const ext: Record<string, unknown> = { d, std, meshLayout, matLayout, lightContribution, tonemap, noise: noiseFn, fbm: fbmFn, snoise: snoiseFn };
             try { ext.scene = (meshLayout as any).$.uniforms; } catch { /* outside shader */ }
             try {
                 ext.lights = (meshLayout as any).$.lights;
@@ -237,6 +277,8 @@ export class MaterialLibrary {
                 { binding: 0, resource: { buffer: this.deps.root.unwrap(buffer) as unknown as GPUBuffer } },
                 { binding: 1, resource: view },
                 { binding: 2, resource: sampler },
+                { binding: 3, resource: this.noiseView },
+                { binding: 4, resource: this.noiseSampler },
             ],
         });
     }

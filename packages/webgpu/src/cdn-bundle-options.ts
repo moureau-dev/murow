@@ -16,5 +16,5 @@ export const cdnBundleOptions: BuildOptions = {
     platform: 'browser',
     bundle: true,
     minifyWhitespace: true,
-    minifyIdentifiers: true,
+    minifyIdentifiers: false,
 };
