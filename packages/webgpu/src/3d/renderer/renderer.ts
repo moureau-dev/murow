@@ -28,6 +28,7 @@ import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { MaterialLibrary, type MaterialHandle } from './materials';
 import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
+import { CameraEffectStack } from './camera-effects/stack';
 import { TextureRegistry } from './textures';
 import { ResizeController } from './resize';
 import { RaycastController } from './raycast';
@@ -118,6 +119,13 @@ function computeBucketStats(bucket: PrefabBucket3D): { maxSkinnedParts: number; 
 }
 
 
+/**
+ * Fullscreen pass shared by every camera effect. The active effect is selected
+ * by `u.kind` and parameterised by `u.params`; the renderer runs one pass per
+ * entry in `camera.effects`, ping-ponging through two off-screen targets.
+ * Written as raw WGSL (fullscreen triangle, no vertex buffer) so it stays
+ * independent of the material pipeline plumbing.
+ */
 export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Base3DRenderer {
     private root!: TgpuRoot;
     private device!: GPUDevice;
@@ -163,6 +171,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private lastRenderTime = 0;
     /** Accumulated render time (seconds), exposed to shaders as `scene.time`. */
     private elapsed = 0;
+    private cameraEffects!: CameraEffectStack;
 
     private readonly _assets: AssetBucket<'3d', any, any> | null;
     private readonly _prefabs: PrefabBucket3D | null;
@@ -272,6 +281,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             width: this._width,
             height: this._height,
         });
+
+        this.cameraEffects = new CameraEffectStack(this.device, this.format);
 
         this.textures = new TextureRegistry(this.device, this.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
         this.textures.initWhiteFallback();
@@ -1021,12 +1032,15 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         }
 
         // Compute + render in same command encoder (single submission)
-        const textureView = this.context.getCurrentTexture().createView();
+        const swapchainView = this.context.getCurrentTexture().createView();
+        const effects = this.camera.effects.length > 0 ? this.camera.effects : null;
+        const usePost = effects !== null;
+        const targetView = usePost ? this.cameraEffects.sceneTarget(this._width, this._height) : swapchainView;
         const encoder = this.device.createCommandEncoder();
 
         const pass = encoder.beginRenderPass({
             colorAttachments: [{
-                view: textureView,
+                view: targetView,
                 loadOp: 'clear',
                 storeOp: 'store',
                 clearValue: {
@@ -1176,6 +1190,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         }
 
         pass.end();
+
+        if (effects) {
+            this.cameraEffects.apply(encoder, swapchainView, effects, this.elapsed, this._width, this._height);
+        }
+
         this.device.queue.submit([encoder.finish()]);
     }
 
@@ -1238,6 +1257,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.resize?.disconnect();
         // Detach from the bucket so it doesn't retain this dead renderer via the coordinator's closure.
         this.animation?.dispose();
+        this.cameraEffects?.destroy();
         this.pipelines?.destroy();
         this.models?.destroy();
         this.root?.destroy();

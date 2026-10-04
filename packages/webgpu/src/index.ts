@@ -45,6 +45,7 @@ export type { MorphClip, MorphState, MorphClipConfig } from './3d/morph-animatio
 // Camera
 export { Camera2D } from './camera/camera-2d';
 export { Camera3D } from './camera/camera-3d';
+export type { CameraEffect } from './camera/camera-3d';
 
 // Geometry
 export {

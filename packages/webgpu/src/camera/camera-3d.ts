@@ -7,6 +7,21 @@
  import { Ray3D } from "murow/core/ray";
  import { mat4Mul, type Camera3DState } from 'murow/renderer';
 
+/**
+ * A fullscreen camera effect, applied in `Camera3D.effects` order after the
+ * scene renders. Each entry is one fullscreen pass; they ping-pong through
+ * off-screen targets (see `CameraEffectStack`).
+ */
+export type CameraEffect =
+    | { readonly type: 'vignette'; readonly strength?: number; readonly inner?: number; readonly outer?: number }
+    | { readonly type: 'grade'; readonly saturation?: number; readonly contrast?: number; readonly brightness?: number }
+    | { readonly type: 'grayscale' }
+    | { readonly type: 'chromatic'; readonly amount?: number }
+    | { readonly type: 'scanlines'; readonly intensity?: number; readonly frequency?: number; readonly speed?: number }
+    | { readonly type: 'posterize'; readonly levels?: number }
+    /** Temporal accumulation blur: blends the frame with the previous result. */
+    | { readonly type: 'motionBlur'; readonly feedback?: number };
+
 export class Camera3D implements Camera3DState {
     position: [number, number, number] = [0, 5, -10];
     target: [number, number, number] = [0, 0, 0];
@@ -16,6 +31,8 @@ export class Camera3D implements Camera3DState {
     far: number = 1000;
     aspect: number = 1;
     movement: 'local' | 'grounded' | 'global' = 'local';
+    /** Ordered fullscreen camera effects. Non-empty enables the off-screen path. */
+    effects: CameraEffect[] = [];
 
     // Previous state for interpolation (stored before each tick)
     private _prevPosition: [number, number, number] = [0, 5, -10];
