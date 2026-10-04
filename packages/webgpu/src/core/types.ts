@@ -138,6 +138,10 @@ export const MeshUniforms = d.struct({
     cameraX: d.f32,
     cameraY: d.f32,
     cameraZ: d.f32,
+    /** Elapsed render time in seconds, shared by all shaders. */
+    time: d.f32,
+    resolutionX: d.f32,
+    resolutionY: d.f32,
 });
 
 // Float offsets into MeshUniforms, named so the renderer never hard-codes them.
@@ -147,8 +151,12 @@ export const MESH_UNIFORM_ALPHA_OFFSET = 16;
 export const MESH_UNIFORM_LIGHT_OFFSET = 17;
 /** Interpolated camera position (world space), used by view-dependent materials. */
 export const MESH_UNIFORM_CAMERA_OFFSET = 28;
+/** Shared render time (seconds). */
+export const MESH_UNIFORM_TIME_OFFSET = 31;
+/** Drawable size in pixels, for screen-space effects. */
+export const MESH_UNIFORM_RESOLUTION_OFFSET = 32;
 /** Total f32 slots written to the mesh uniform buffer. */
-export const MESH_UNIFORM_FLOATS = 31;
+export const MESH_UNIFORM_FLOATS = 34;
 
 // --- 3D Dynamic Lights ---
 

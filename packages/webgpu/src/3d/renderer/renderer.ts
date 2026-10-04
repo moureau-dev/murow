@@ -19,6 +19,8 @@ import {
     MESH_UNIFORM_ALPHA_OFFSET,
     MESH_UNIFORM_LIGHT_OFFSET,
     MESH_UNIFORM_CAMERA_OFFSET,
+    MESH_UNIFORM_TIME_OFFSET,
+    MESH_UNIFORM_RESOLUTION_OFFSET,
     MESH_UNIFORM_FLOATS,
 } from '../../core/types';
 import { LightSystem, type LightSpec } from './lights';
@@ -159,6 +161,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     readonly raycast: WebGPURaycast3D;
     private uniformData = new Float32Array(MESH_UNIFORM_FLOATS);
     private lastRenderTime = 0;
+    /** Accumulated render time (seconds), exposed to shaders as `scene.time`. */
+    private elapsed = 0;
 
     private readonly _assets: AssetBucket<'3d', any, any> | null;
     private readonly _prefabs: PrefabBucket3D | null;
@@ -847,6 +851,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const now = performance.now();
         if (this.lastRenderTime > 0) {
             const deltaTime = (now - this.lastRenderTime) / 1000;
+            this.elapsed += deltaTime;
             this.animation.update(deltaTime);
         }
         this.lastRenderTime = now;
@@ -886,6 +891,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.uniformData[MESH_UNIFORM_CAMERA_OFFSET] = camPos[0];
         this.uniformData[MESH_UNIFORM_CAMERA_OFFSET + 1] = camPos[1];
         this.uniformData[MESH_UNIFORM_CAMERA_OFFSET + 2] = camPos[2];
+        this.uniformData[MESH_UNIFORM_TIME_OFFSET] = this.elapsed;
+        this.uniformData[MESH_UNIFORM_RESOLUTION_OFFSET] = this._width;
+        this.uniformData[MESH_UNIFORM_RESOLUTION_OFFSET + 1] = this._height;
         this.device.queue.writeBuffer(
             this.pipelines.rawUniformBuffer, 0,
             this.uniformData.buffer, this.uniformData.byteOffset,

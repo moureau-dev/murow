@@ -64,6 +64,7 @@ export class MaterialLibrary {
     private readonly deps: MaterialLibraryDeps;
     private engineVertex: ReturnType<typeof createTexturedMeshVertex> | null = null;
     private engineUnlitVertex: ReturnType<typeof createUnlitMeshVertex> | null = null;
+    private readonly samplers = new Map<string, GPUSampler>();
 
     constructor(deps: MaterialLibraryDeps) {
         this.deps = deps;
@@ -120,12 +121,16 @@ export class MaterialLibrary {
         const layout = createEngineMaterialLayout();
         const buffer = this.deps.root.createBuffer(EngineMaterialUniforms).$usage('uniform');
         const color = spec.color ?? [1, 1, 1];
+        const uvScale = spec.uvScale ?? [1, 1];
+        const uvOffset = spec.uvOffset ?? [0, 0];
         const mirror = {
             colorR: color[0], colorG: color[1], colorB: color[2],
             opacity: spec.opacity ?? 1,
             emissive: spec.emissive ?? 1,
             alphaTest: spec.alphaTest ?? 0,
-            _pad1: 0, _pad2: 0,
+            uvScaleU: uvScale[0], uvScaleV: uvScale[1],
+            uvOffsetU: uvOffset[0], uvOffsetV: uvOffset[1],
+            _pad0: 0, _pad1: 0,
         };
         buffer.write(mirror);
 
@@ -138,6 +143,7 @@ export class MaterialLibrary {
 
         const textureNames = ['map'];
         const textureIds: Record<string, string | null> = { map: spec.texture ?? null };
+        const samplerOverrides = { map: this.getSampler(spec.wrap, spec.filter) };
         const pipeline = this.deps.pipelines.buildMaterialPipeline({
             vertex: this.engineVertex,
             fragment,
@@ -145,7 +151,7 @@ export class MaterialLibrary {
             blend: state.blend, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
             label: spec.id,
         });
-        const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds);
+        const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds, samplerOverrides);
         return { compiled: { pipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, write: () => buffer.write(mirror as never) };
     }
 
@@ -244,7 +250,7 @@ export class MaterialLibrary {
         } else {
             if (!this.engineVertex) this.engineVertex = createTexturedMeshVertex(meshLayout);
             vertex = this.engineVertex;
-            fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing };
+            fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position };
         }
 
         attachShaderMetadata(decl.fragment.fn as any, resolveExternals(), false, { d, std, meshLayout, matLayout } as any);
@@ -253,7 +259,13 @@ export class MaterialLibrary {
         return { vertex, fragment };
     }
 
-    private createBindGroup(layout: any, buffer: TgpuBuffer<any>, textureNames: string[], textureIds: Record<string, string | null>): GPUBindGroup {
+    private createBindGroup(
+        layout: any,
+        buffer: TgpuBuffer<any>,
+        textureNames: string[],
+        textureIds: Record<string, string | null>,
+        samplerOverrides?: Record<string, GPUSampler>,
+    ): GPUBindGroup {
         const entries: GPUBindGroupEntry[] = [
             { binding: 0, resource: { buffer: this.deps.root.unwrap(buffer) as unknown as GPUBuffer } },
         ];
@@ -261,12 +273,31 @@ export class MaterialLibrary {
         for (const name of textureNames) {
             const { view, sampler } = this.resolveTexture(textureIds[name] ?? null);
             entries.push({ binding: binding++, resource: view });
-            entries.push({ binding: binding++, resource: sampler });
+            entries.push({ binding: binding++, resource: samplerOverrides?.[name] ?? sampler });
         }
         return this.deps.device.createBindGroup({
             layout: this.deps.root.unwrap(layout) as unknown as GPUBindGroupLayout,
             entries,
         });
+    }
+
+    /** Sampler for a texture address mode + filter combination, cached by config. */
+    private getSampler(wrap?: 'repeat' | 'clamp', filter?: 'linear' | 'nearest'): GPUSampler {
+        const mode = wrap === 'repeat' ? 'repeat' : 'clamp-to-edge';
+        const filtering = filter === 'nearest' ? 'nearest' : 'linear';
+        const key = `${mode}|${filtering}`;
+        let sampler = this.samplers.get(key);
+        if (!sampler) {
+            sampler = this.deps.device.createSampler({
+                addressModeU: mode,
+                addressModeV: mode,
+                magFilter: filtering,
+                minFilter: filtering,
+                mipmapFilter: 'linear',
+            });
+            this.samplers.set(key, sampler);
+        }
+        return sampler;
     }
 
     private resolveTexture(textureId: string | null): { view: GPUTextureView; sampler: GPUSampler } {

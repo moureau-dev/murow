@@ -22,6 +22,14 @@ export interface EngineMaterialSpec extends MaterialSpecBase {
     readonly emissive?: number;
     /** Discard fragments whose final alpha falls below this threshold. Default 0 (off). */
     readonly alphaTest?: number;
+    /** UV tiling applied to the texture sample. Default `[1, 1]`. */
+    readonly uvScale?: readonly [number, number];
+    /** UV offset (in tiles) applied to the texture sample. Default `[0, 0]`. */
+    readonly uvOffset?: readonly [number, number];
+    /** Texture address mode. Default `'clamp'`. */
+    readonly wrap?: 'repeat' | 'clamp';
+    /** Texture filter. Default `'linear'`. */
+    readonly filter?: 'linear' | 'nearest';
     /** Texture id from the asset bucket, resolved to a `gpuIndex` at compile. */
     readonly texture?: string;
 }

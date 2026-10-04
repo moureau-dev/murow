@@ -14,8 +14,12 @@ export const EngineMaterialUniforms = d.struct({
     opacity: d.f32,
     emissive: d.f32,
     alphaTest: d.f32,
+    uvScaleU: d.f32,
+    uvScaleV: d.f32,
+    uvOffsetU: d.f32,
+    uvOffsetV: d.f32,
+    _pad0: d.f32,
     _pad1: d.f32,
-    _pad2: d.f32,
 });
 
 export function createEngineMaterialLayout() {
@@ -35,13 +39,16 @@ type FragInput = {
     vUV: { x: number; y: number };
     vWorldPos: { x: number; y: number; z: number };
     frontFacing: boolean;
+    /** Fragment coordinates (pixels); divide by `scene.resolution*` for screen UV. */
+    position: { x: number; y: number; z: number; w: number };
 };
 
 export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
     const fn = function(input: FragInput) {
         const u = meshLayout.$.uniforms;
         const m = matLayout.$.material;
-        const tex = std.textureSample(matLayout.$.map, matLayout.$.mapSampler, d.vec2f(input.vUV.x, input.vUV.y));
+        const uv = d.vec2f(input.vUV.x * m.uvScaleU + m.uvOffsetU, input.vUV.y * m.uvScaleV + m.uvOffsetV);
+        const tex = std.textureSample(matLayout.$.map, matLayout.$.mapSampler, uv);
         const baseColor = d.vec3f(
             std.mul(std.mul(tex.x, input.vColor.x), m.colorR),
             std.mul(std.mul(tex.y, input.vColor.y), m.colorG),
@@ -80,13 +87,14 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
         return d.vec4f(mapped.x, mapped.y, mapped.z, alpha);
     };
     attachShaderMetadata(fn as any, () => ({ d, std, meshLayout, matLayout, lightContribution, tonemap }), false, { d, std, meshLayout, matLayout });
-    return tgpu.fragmentFn({ in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing }, out: d.vec4f })(fn as any);
+    return tgpu.fragmentFn({ in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position }, out: d.vec4f })(fn as any);
 }
 
 export function createUnlitMaterialFragment(_meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
     const fn = function(input: FragInput) {
         const m = matLayout.$.material;
-        const tex = std.textureSample(matLayout.$.map, matLayout.$.mapSampler, d.vec2f(input.vUV.x, input.vUV.y));
+        const uv = d.vec2f(input.vUV.x * m.uvScaleU + m.uvOffsetU, input.vUV.y * m.uvScaleV + m.uvOffsetV);
+        const tex = std.textureSample(matLayout.$.map, matLayout.$.mapSampler, uv);
         const alpha = std.mul(tex.w, m.opacity);
         if (alpha < m.alphaTest) { std.discard(); }
         return d.vec4f(
@@ -103,7 +111,8 @@ export function createUnlitMaterialFragment(_meshLayout: MeshDataLayout, matLayo
 export function createEmissiveMaterialFragment(_meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
     const fn = function(input: FragInput) {
         const m = matLayout.$.material;
-        const tex = std.textureSample(matLayout.$.map, matLayout.$.mapSampler, d.vec2f(input.vUV.x, input.vUV.y));
+        const uv = d.vec2f(input.vUV.x * m.uvScaleU + m.uvOffsetU, input.vUV.y * m.uvScaleV + m.uvOffsetV);
+        const tex = std.textureSample(matLayout.$.map, matLayout.$.mapSampler, uv);
         const baseColor = d.vec3f(
             std.mul(std.mul(tex.x, input.vColor.x), m.colorR),
             std.mul(std.mul(tex.y, input.vColor.y), m.colorG),
