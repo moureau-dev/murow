@@ -58,7 +58,7 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
         // Flip the normal on back faces so double-sided/unculled surfaces light correctly.
         const normal = std.mul(
             std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z)),
-            std.select(-1.0, 1.0, input.frontFacing),
+            std.select(d.vec3f(-1.0, -1.0, -1.0), d.vec3f(1.0, 1.0, 1.0), input.frontFacing),
         );
 
         const lightDir = std.normalize(d.vec3f(u.lightDirX, u.lightDirY, u.lightDirZ));

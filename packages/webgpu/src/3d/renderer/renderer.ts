@@ -28,6 +28,7 @@ import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { MaterialLibrary, type MaterialHandle } from './materials';
 import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
+import type { CameraEffect } from '../../camera/camera-effect';
 import { CameraEffectStack } from './camera-effects/stack';
 import { TextureRegistry } from './textures';
 import { ResizeController } from './resize';
@@ -119,13 +120,7 @@ function computeBucketStats(bucket: PrefabBucket3D): { maxSkinnedParts: number; 
 }
 
 
-/**
- * Fullscreen pass shared by every camera effect. The active effect is selected
- * by `u.kind` and parameterised by `u.params`; the renderer runs one pass per
- * entry in `camera.effects`, ping-ponging through two off-screen targets.
- * Written as raw WGSL (fullscreen triangle, no vertex buffer) so it stays
- * independent of the material pipeline plumbing.
- */
+/** The WebGPU 3D renderer: instances, materials, lights, skinning, and camera effects. */
 export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Base3DRenderer {
     private root!: TgpuRoot;
     private device!: GPUDevice;
@@ -282,7 +277,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             height: this._height,
         });
 
-        this.cameraEffects = new CameraEffectStack(this.device, this.format);
+        this.cameraEffects = new CameraEffectStack(this.root, this.format);
 
         this.textures = new TextureRegistry(this.device, this.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
         this.textures.initWhiteFallback();
@@ -1033,9 +1028,12 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         // Compute + render in same command encoder (single submission)
         const swapchainView = this.context.getCurrentTexture().createView();
-        const effects = this.camera.effects.length > 0 ? this.camera.effects : null;
-        const usePost = effects !== null;
-        const targetView = usePost ? this.cameraEffects.sceneTarget(this._width, this._height) : swapchainView;
+        let effects: CameraEffect[] | null = null;
+        for (const effect of this.camera.effects) {
+            if (!effect.enabled) continue;
+            (effects ??= []).push(effect);
+        }
+        const targetView = effects ? this.cameraEffects.sceneTarget(this._width, this._height) : swapchainView;
         const encoder = this.device.createCommandEncoder();
 
         const pass = encoder.beginRenderPass({
