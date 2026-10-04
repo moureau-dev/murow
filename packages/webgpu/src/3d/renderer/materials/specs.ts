@@ -1,13 +1,43 @@
 import type { AnyWgslData } from 'typegpu/data';
 
-export type BlendMode = 'opaque' | 'alpha' | 'additive';
+export type BlendMode =
+    | 'opaque'
+    | 'alpha'
+    | 'additive'
+    | 'premultiplied'
+    | 'multiply'
+    | 'screen';
 export type CullMode = 'back' | 'front' | 'none';
+
+export interface BlendState {
+    readonly color?: GPUBlendComponent;
+    readonly alpha?: GPUBlendComponent;
+}
+
+export interface ColorWriteMask {
+    readonly r?: boolean;
+    readonly g?: boolean;
+    readonly b?: boolean;
+    readonly a?: boolean;
+}
+
+export interface DepthBias {
+    readonly constant?: number;
+    readonly slopeScale?: number;
+    readonly clamp?: number;
+}
 
 export interface MaterialRenderState {
     readonly blend?: BlendMode;
+    /** Explicit blend components. When set, takes precedence over `blend`. */
+    readonly blendState?: BlendState;
     readonly depthWrite?: boolean;
     readonly depthTest?: boolean;
     readonly cull?: CullMode;
+    /** Channel write mask. `false` disables all channels; default writes all. */
+    readonly colorWrite?: ColorWriteMask | boolean;
+    /** Depth-bias for coplanar decals/shadows. */
+    readonly depthBias?: DepthBias;
 }
 
 export interface MaterialSpecBase extends MaterialRenderState {
@@ -56,21 +86,80 @@ export type MaterialSpec = EngineMaterialSpec | ShaderMaterialSpec;
 
 export interface ResolvedRenderState {
     readonly blend: BlendMode;
+    readonly blendState: BlendState | null;
     readonly depthWrite: boolean;
     readonly depthTest: boolean;
     readonly cull: CullMode;
+    readonly colorWrite: number;
+    readonly depthBias: number;
+    readonly depthBiasSlopeScale: number;
+    readonly depthBiasClamp: number;
+}
+
+const COLORS = { r: 1, g: 2, b: 4, a: 8 };
+const ALL_CHANNELS = 15;
+
+function resolveColorWrite(mask: ColorWriteMask | boolean | undefined): number {
+    if (mask === undefined || mask === true) return ALL_CHANNELS;
+    if (mask === false) return 0;
+    let flags = 0;
+    if (mask.r !== false) flags |= COLORS.r;
+    if (mask.g !== false) flags |= COLORS.g;
+    if (mask.b !== false) flags |= COLORS.b;
+    if (mask.a !== false) flags |= COLORS.a;
+    return flags;
+}
+
+/** Blend components for a named mode, or null for opaque (blending disabled). */
+export function blendComponents(mode: BlendMode): BlendState | null {
+    switch (mode) {
+        case 'opaque':
+            return null;
+        case 'alpha':
+            return {
+                color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            };
+        case 'additive':
+            return {
+                color: { srcFactor: 'src-alpha', dstFactor: 'one', operation: 'add' },
+                alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+            };
+        case 'premultiplied':
+            return {
+                color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            };
+        case 'multiply':
+            return {
+                color: { srcFactor: 'dst', dstFactor: 'zero', operation: 'add' },
+                alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            };
+        case 'screen':
+            return {
+                color: { srcFactor: 'one', dstFactor: 'one-minus-src', operation: 'add' },
+                alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            };
+    }
 }
 
 export function resolveRenderState(spec: MaterialSpec): ResolvedRenderState {
     const isEmissive = spec.type === 'emissive';
+    const blend = spec.blend ?? (isEmissive ? 'additive' : 'opaque');
+    const bias = spec.depthBias ?? {};
     return {
-        blend: spec.blend ?? (isEmissive ? 'additive' : 'opaque'),
+        blend,
+        blendState: spec.blendState ?? blendComponents(blend),
         depthWrite: spec.depthWrite ?? !isEmissive,
         depthTest: spec.depthTest ?? true,
         cull: spec.cull ?? 'none',
+        colorWrite: resolveColorWrite(spec.colorWrite),
+        depthBias: bias.constant ?? 0,
+        depthBiasSlopeScale: bias.slopeScale ?? 0,
+        depthBiasClamp: bias.clamp ?? 0,
     };
 }
 
 export function isTransparent(state: ResolvedRenderState): boolean {
-    return state.blend !== 'opaque';
+    return state.blend !== 'opaque' || state.blendState !== null;
 }

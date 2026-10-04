@@ -258,10 +258,14 @@ export class MeshPipelines {
         vertex: any;
         fragment: any;
         materialLayout: TgpuBindGroupLayout;
-        blend: 'opaque' | 'alpha' | 'additive';
+        blendState: { color?: GPUBlendComponent; alpha?: GPUBlendComponent } | null;
         depthWrite: boolean;
         depthTest: boolean;
         cull: 'back' | 'front' | 'none';
+        colorWrite?: number;
+        depthBias?: number;
+        depthBiasSlopeScale?: number;
+        depthBiasClamp?: number;
         label?: string;
     }): GPURenderPipeline {
         const { code } = tgpu.resolveWithContext([opts.vertex as any, opts.fragment as any]);
@@ -272,17 +276,18 @@ export class MeshPipelines {
             format: 'depth24plus',
             depthWriteEnabled: opts.depthWrite,
             depthCompare: opts.depthTest ? 'less' : 'always',
+            depthBias: opts.depthBias ?? 0,
+            depthBiasSlopeScale: opts.depthBiasSlopeScale ?? 0,
+            depthBiasClamp: opts.depthBiasClamp ?? 0,
         };
-        const target: GPUColorTargetState = { format: this.format };
-        if (opts.blend === 'alpha') {
+        const target: GPUColorTargetState = {
+            format: this.format,
+            writeMask: opts.colorWrite ?? 0xf,
+        };
+        if (opts.blendState) {
             target.blend = {
-                color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-                alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-            };
-        } else if (opts.blend === 'additive') {
-            target.blend = {
-                color: { srcFactor: 'src-alpha', dstFactor: 'one', operation: 'add' },
-                alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+                color: opts.blendState.color ?? { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                alpha: opts.blendState.alpha ?? { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
             };
         }
 

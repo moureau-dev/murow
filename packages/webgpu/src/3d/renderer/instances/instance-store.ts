@@ -143,6 +143,7 @@ export class InstanceStore {
                 stat[statBase + STAT_SX] = nx;
                 stat[statBase + STAT_SY] = ny;
                 stat[statBase + STAT_SZ] = nz;
+                self.staticDirty = true;
             },
             teleport(nx: number, ny: number, nz: number) {
                 dyn[dynBase + DYN_PREV_PX] = nx;
@@ -194,6 +195,7 @@ export class InstanceStore {
             setMaterialParams(a: number, b: number) {
                 stat[statBase + STAT_CUSTOM0] = a;
                 stat[statBase + STAT_CUSTOM1] = b;
+                self.staticDirty = true;
             },
             destroy() {
                 if (destroyed) return;

@@ -148,7 +148,9 @@ export class MaterialLibrary {
             vertex: this.engineVertex,
             fragment,
             materialLayout: layout,
-            blend: state.blend, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
+            blendState: state.blendState, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
+            colorWrite: state.colorWrite, depthBias: state.depthBias,
+            depthBiasSlopeScale: state.depthBiasSlopeScale, depthBiasClamp: state.depthBiasClamp,
             label: spec.id,
         });
         const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds, samplerOverrides);
@@ -189,7 +191,9 @@ export class MaterialLibrary {
             vertex: vertex as any,
             fragment: fragment as any,
             materialLayout: layout,
-            blend: state.blend, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
+            blendState: state.blendState, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
+            colorWrite: state.colorWrite, depthBias: state.depthBias,
+            depthBiasSlopeScale: state.depthBiasSlopeScale, depthBiasClamp: state.depthBiasClamp,
             label: spec.id,
         });
         const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds);

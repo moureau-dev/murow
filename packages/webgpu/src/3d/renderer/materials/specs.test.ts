@@ -16,7 +16,7 @@ function spec(type: 'standard' | 'unlit' | 'emissive' | 'shader'): MaterialSpec 
 
 describe('resolveRenderState defaults', () => {
     test('emissive is additive with no depth write and no culling', () => {
-        expect(resolveRenderState(spec('emissive'))).toEqual({
+        expect(resolveRenderState(spec('emissive'))).toMatchObject({
             blend: 'additive',
             depthWrite: false,
             depthTest: true,
@@ -26,11 +26,12 @@ describe('resolveRenderState defaults', () => {
 
     for (const type of ['standard', 'unlit', 'shader'] as const) {
         test(`${type} is opaque with depth write and no culling`, () => {
-            expect(resolveRenderState(spec(type))).toEqual({
+            expect(resolveRenderState(spec(type))).toMatchObject({
                 blend: 'opaque',
                 depthWrite: true,
                 depthTest: true,
                 cull: 'none',
+                blendState: null,
             });
         });
     }
@@ -47,7 +48,7 @@ describe('resolveRenderState overrides', () => {
             depthTest: false,
             cull: 'back',
         };
-        expect(resolveRenderState(overridden)).toEqual({
+        expect(resolveRenderState(overridden)).toMatchObject({
             blend: 'alpha',
             depthWrite: true,
             depthTest: false,
@@ -84,9 +85,14 @@ describe('resolveRenderState overrides', () => {
 describe('isTransparent', () => {
     const state = (blend: ResolvedRenderState['blend']): ResolvedRenderState => ({
         blend,
+        blendState: blend === 'opaque' ? null : {},
         depthWrite: true,
         depthTest: true,
         cull: 'none',
+        colorWrite: 15,
+        depthBias: 0,
+        depthBiasSlopeScale: 0,
+        depthBiasClamp: 0,
     });
 
     test('is false only for opaque', () => {
@@ -104,7 +110,41 @@ describe('isTransparent', () => {
     test('matches resolveRenderState for every material type', () => {
         for (const type of ['standard', 'unlit', 'emissive', 'shader'] as const) {
             const resolved = resolveRenderState(spec(type));
-            expect(isTransparent(resolved)).toBe(resolved.blend !== 'opaque');
+            expect(isTransparent(resolved)).toBe(resolved.blendState !== null);
         }
+    });
+});
+
+describe('render state extensions', () => {
+    test('every non-opaque named mode yields blend components', () => {
+        for (const mode of ['alpha', 'additive', 'premultiplied', 'multiply', 'screen'] as const) {
+            const r = resolveRenderState({ type: 'standard', blend: mode });
+            expect(r.blendState).not.toBeNull();
+            expect(isTransparent(r)).toBe(true);
+        }
+    });
+
+    test('opaque has no blend state', () => {
+        expect(resolveRenderState({ type: 'standard' }).blendState).toBeNull();
+    });
+
+    test('explicit blendState overrides the named mode and marks transparent', () => {
+        const custom = { color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' } } as any;
+        const r = resolveRenderState({ type: 'standard', blend: 'opaque', blendState: custom });
+        expect(r.blendState).toEqual(custom);
+        expect(isTransparent(r)).toBe(true);
+    });
+
+    test('colorWrite false disables channels; partial masks set bits', () => {
+        expect(resolveRenderState({ type: 'standard', colorWrite: false }).colorWrite).toBe(0);
+        expect(resolveRenderState({ type: 'standard', colorWrite: { r: true, g: false, b: false, a: false } }).colorWrite).toBe(1);
+    });
+
+    test('depthBias resolves with zero defaults', () => {
+        const r = resolveRenderState({ type: 'standard', depthBias: { constant: 2, slopeScale: 3, clamp: 0.5 } });
+        expect(r.depthBias).toBe(2);
+        expect(r.depthBiasSlopeScale).toBe(3);
+        expect(r.depthBiasClamp).toBe(0.5);
+        expect(resolveRenderState({ type: 'standard' }).depthBias).toBe(0);
     });
 });
