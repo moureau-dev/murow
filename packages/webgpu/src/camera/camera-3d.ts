@@ -8,6 +8,11 @@
  import { mat4Mul, type Camera3DState } from 'murow/renderer';
  import { CameraEffectList } from './camera-effect';
 
+export interface Camera3DOptions {
+    /** Capacity of the camera-effect chain. Default 20. */
+    maxEffects?: number;
+}
+
 export class Camera3D implements Camera3DState {
     position: [number, number, number] = [0, 5, -10];
     target: [number, number, number] = [0, 0, 0];
@@ -18,7 +23,15 @@ export class Camera3D implements Camera3DState {
     aspect: number = 1;
     movement: 'local' | 'grounded' | 'global' = 'local';
     /** Ordered fullscreen camera effects. Non-empty enables the off-screen path. */
-    readonly effects = new CameraEffectList();
+    readonly effects: CameraEffectList;
+
+    /**
+     * @param options Camera options. `maxEffects` bounds the effect chain and
+     * the integer ids the renderer uses to index compiled effect resources.
+     */
+    constructor({ maxEffects = 20 }: Camera3DOptions = {}) {
+        this.effects = new CameraEffectList(maxEffects);
+    }
 
     // Previous state for interpolation (stored before each tick)
     private _prevPosition: [number, number, number] = [0, 5, -10];

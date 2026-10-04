@@ -64,7 +64,7 @@ export class MaterialLibrary {
     private readonly deps: MaterialLibraryDeps;
     private engineVertex: ReturnType<typeof createTexturedMeshVertex> | null = null;
     private engineUnlitVertex: ReturnType<typeof createUnlitMeshVertex> | null = null;
-    private readonly samplers = new Map<string, GPUSampler>();
+    private readonly samplers: { key: string; sampler: GPUSampler }[] = [];
 
     constructor(deps: MaterialLibraryDeps) {
         this.deps = deps;
@@ -173,14 +173,18 @@ export class MaterialLibrary {
         const { vertex, fragment } = this.compileDeclarative(spec, this.deps.meshLayout, layout, textureNames);
 
         const buffer = this.deps.root.createBuffer(Struct).$usage('uniform');
+        const keys = Object.keys(schema);
         const mirror: Record<string, unknown> = {};
-        for (const key of Object.keys(schema)) {
-            const fromDefaults = spec.defaultUniforms?.[key];
-            mirror[key] = fromDefaults ?? zeroValue(schema[key]!);
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i]!;
+            mirror[key] = spec.defaultUniforms?.[key] ?? zeroValue(schema[key]!);
         }
+        const out: Record<string, unknown> = {};
         const writeMirror = () => {
-            const out: Record<string, unknown> = {};
-            for (const key of Object.keys(schema)) out[key] = coerceUniform(schema[key]!, mirror[key]);
+            for (let i = 0; i < keys.length; i++) {
+                const key = keys[i]!;
+                out[key] = coerceUniform(schema[key]!, mirror[key]);
+            }
             buffer.write(out as never);
         };
         writeMirror();
@@ -290,17 +294,18 @@ export class MaterialLibrary {
         const mode = wrap === 'repeat' ? 'repeat' : 'clamp-to-edge';
         const filtering = filter === 'nearest' ? 'nearest' : 'linear';
         const key = `${mode}|${filtering}`;
-        let sampler = this.samplers.get(key);
-        if (!sampler) {
-            sampler = this.deps.device.createSampler({
-                addressModeU: mode,
-                addressModeV: mode,
-                magFilter: filtering,
-                minFilter: filtering,
-                mipmapFilter: 'linear',
-            });
-            this.samplers.set(key, sampler);
+        // Wrap x filter is a fixed set (<= 4), so a small linear scan beats a Map.
+        for (let i = 0; i < this.samplers.length; i++) {
+            if (this.samplers[i]!.key === key) return this.samplers[i]!.sampler;
         }
+        const sampler = this.deps.device.createSampler({
+            addressModeU: mode,
+            addressModeV: mode,
+            magFilter: filtering,
+            minFilter: filtering,
+            mipmapFilter: 'linear',
+        });
+        this.samplers.push({ key, sampler });
         return sampler;
     }
 

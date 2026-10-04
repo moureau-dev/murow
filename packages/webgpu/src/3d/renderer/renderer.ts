@@ -28,7 +28,6 @@ import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { MaterialLibrary, type MaterialHandle } from './materials';
 import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
-import type { CameraEffect } from '../../camera/camera-effect';
 import { CameraEffectStack } from './camera-effects/stack';
 import { TextureRegistry } from './textures';
 import { ResizeController } from './resize';
@@ -167,6 +166,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     /** Accumulated render time (seconds), exposed to shaders as `scene.time`. */
     private elapsed = 0;
     private cameraEffects!: CameraEffectStack;
+    private readonly maxCameraEffects: number;
 
     private readonly _assets: AssetBucket<'3d', any, any> | null;
     private readonly _prefabs: PrefabBucket3D | null;
@@ -182,7 +182,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const resolvedMaxInstances = options.maxInstances
             ?? (options.assets ? options.assets.prefabs.size + 16 : 32);
         super(canvas, { ...options, maxInstances: resolvedMaxInstances });
-        this.camera = new Camera3D();
+        this.maxCameraEffects = options.maxCameraEffects ?? 20;
+        this.camera = new Camera3D({ maxEffects: this.maxCameraEffects });
         this.raycastController = new RaycastController({
             camera: this.camera,
             eachInstance: (visit) => this.eachInstance(visit),
@@ -277,7 +278,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             height: this._height,
         });
 
-        this.cameraEffects = new CameraEffectStack(this.root, this.format);
+        this.cameraEffects = new CameraEffectStack({ root: this.root, format: this.format, maxEffects: this.maxCameraEffects });
 
         this.textures = new TextureRegistry(this.device, this.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
         this.textures.initWhiteFallback();
@@ -1028,12 +1029,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         // Compute + render in same command encoder (single submission)
         const swapchainView = this.context.getCurrentTexture().createView();
-        let effects: CameraEffect[] | null = null;
-        for (const effect of this.camera.effects) {
-            if (!effect.enabled) continue;
-            (effects ??= []).push(effect);
-        }
-        const targetView = effects ? this.cameraEffects.sceneTarget(this._width, this._height) : swapchainView;
+        const effectList = this.camera.effects;
+        const enabledEffects = effectList.enableCount();
+        const targetView = enabledEffects > 0 ? this.cameraEffects.sceneTarget(this._width, this._height) : swapchainView;
         const encoder = this.device.createCommandEncoder();
 
         const pass = encoder.beginRenderPass({
@@ -1189,8 +1187,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         pass.end();
 
-        if (effects) {
-            this.cameraEffects.apply(encoder, swapchainView, effects, this.elapsed, this._width, this._height);
+        if (enabledEffects > 0) {
+            this.cameraEffects.apply(encoder, swapchainView, effectList, this.elapsed, this._width, this._height);
         }
 
         this.device.queue.submit([encoder.finish()]);

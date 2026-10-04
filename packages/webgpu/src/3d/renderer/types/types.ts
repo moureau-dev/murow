@@ -82,6 +82,11 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
     /** Max simultaneously created materials. Defaults to 64. */
     maxMaterials?: number;
     /**
+     * Max camera effects in `renderer.camera.effects`. Bounds the effect-id
+     * pool and the off-screen pass count. Defaults to 20.
+     */
+    maxCameraEffects?: number;
+    /**
      * Pre-loaded AssetBucket. When provided, the renderer uploads every
      * prefab (glTF, grid, cube, plane) and texture to the GPU during
      * `init()`. The bucket must have `load()` resolved before being passed in.

@@ -2,11 +2,9 @@ import type { TgpuRoot, TgpuBuffer } from 'typegpu';
 import type { AnyWgslData } from 'typegpu/data';
 import { tgpu, d, std } from '../../../shaders/typegpu';
 import { attachShaderMetadata } from '../../../shaders/runtime-transpile';
-import type { CameraEffect } from '../../../camera/camera-effect';
+import type { CameraEffect, CameraEffectList } from '../../../camera/camera-effect';
 import { CAMERA_EFFECT_WGSL, EFFECT_SCENE_UNIFORMS } from './shaders';
 
-/** Max effects per frame; also sizes the built-in dynamic uniform buffer. */
-const MAX_EFFECTS = 16;
 /** Uniform slot stride, aligned to the WebGPU min uniform offset alignment. */
 const SLOT = 256;
 const SLOT_FLOATS = SLOT / 4;
@@ -36,7 +34,17 @@ interface CompiledCustomEffect {
  * A persistent `history` target backs temporal effects (`motionBlur`); it is
  * copied from the scene on the first frame and refreshed by the blur pass.
  */
+export interface CameraEffectStackOptions {
+    /** TypeGPU root, used to compile custom effects. */
+    root: TgpuRoot;
+    /** The canvas color format that effect passes target. */
+    format: GPUTextureFormat;
+    /** Chain capacity; sizes the uniform buffer and compiled-effect table. Default 20. */
+    maxEffects?: number;
+}
+
 export class CameraEffectStack {
+    private readonly root: TgpuRoot;
     private readonly device: GPUDevice;
     private readonly format: GPUTextureFormat;
     private readonly layout: GPUBindGroupLayout;
@@ -44,10 +52,12 @@ export class CameraEffectStack {
     private readonly sampler: GPUSampler;
     private readonly uniformBuffer: GPUBuffer;
     private readonly sceneBuffer: GPUBuffer;
+    private readonly maxEffects: number;
     private readonly sceneData = new Float32Array(4);
-    private readonly staging = new Float32Array((MAX_EFFECTS + 2) * SLOT_FLOATS);
-    private readonly stagingU32 = new Uint32Array(this.staging.buffer);
-    private readonly customs = new Map<CameraEffect, CompiledCustomEffect>();
+    private readonly staging: Float32Array;
+    private readonly stagingU32: Uint32Array;
+    /** Compiled custom effects, indexed by `CameraEffect.id` (bounded slot). */
+    private readonly customs: ({ effect: CameraEffect; compiled: CompiledCustomEffect } | null)[];
     private fullscreenVertex: unknown = null;
     private texA: GPUTexture | null = null;
     private texB: GPUTexture | null = null;
@@ -61,9 +71,19 @@ export class CameraEffectStack {
     private targetW = 0;
     private targetH = 0;
 
-    constructor(private readonly root: TgpuRoot, format: GPUTextureFormat) {
+    /**
+     * @param options Stack options. `root` is the TypeGPU root used to compile
+     * custom effects; `format` is the target canvas color format; `maxEffects`
+     * sizes the uniform buffer, per-effect slots, and compiled-effect table.
+     */
+    constructor({ root, format, maxEffects = 20 }: CameraEffectStackOptions) {
+        this.root = root;
         this.device = root.device;
         this.format = format;
+        this.maxEffects = maxEffects;
+        this.staging = new Float32Array((maxEffects + 2) * SLOT_FLOATS);
+        this.stagingU32 = new Uint32Array(this.staging.buffer);
+        this.customs = new Array(maxEffects).fill(null);
         this.sampler = this.device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
         this.layout = this.device.createBindGroupLayout({
             entries: [
@@ -82,7 +102,7 @@ export class CameraEffectStack {
             primitive: { topology: 'triangle-list' },
         });
         this.uniformBuffer = this.device.createBuffer({
-            size: (MAX_EFFECTS + 2) * SLOT,
+            size: (this.maxEffects + 2) * SLOT,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         this.sceneBuffer = this.device.createBuffer({
@@ -101,13 +121,11 @@ export class CameraEffectStack {
     apply(
         encoder: GPUCommandEncoder,
         present: GPUTextureView,
-        effects: readonly CameraEffect[],
+        effects: CameraEffectList,
         time: number,
         width: number,
         height: number,
     ): void {
-        const count = Math.min(effects.length, MAX_EFFECTS);
-
         // Seed temporal history with the current frame the first time only.
         if (!this.historyValid && this.texA && this.history) {
             encoder.copyTextureToTexture(
@@ -120,11 +138,16 @@ export class CameraEffectStack {
 
         // Compile any new custom effects, and refresh the shared scene uniforms.
         let hasCustom = false;
-        for (let i = 0; i < count; i++) {
-            const effect = effects[i]!;
-            if (effect.type !== 'shader') continue;
+        for (let i = 0; i < effects.count; i++) {
+            const effect = effects.at(i);
+            if (!effect.enabled || effect.type !== 'shader') continue;
             hasCustom = true;
-            if (!this.customs.has(effect)) this.customs.set(effect, this.compileCustom(effect));
+            const id = effect.id;
+            if (id < 0 || id >= this.customs.length) continue;
+            const existing = this.customs[id];
+            if (existing && existing.effect === effect) continue;
+            if (existing) existing.compiled.buffer.destroy();
+            this.customs[id] = { effect, compiled: this.compileCustom(effect) };
         }
         if (hasCustom) {
             this.sceneData[0] = time;
@@ -135,24 +158,29 @@ export class CameraEffectStack {
         }
 
         // Pack built-in effects (and the present pass) into their uniform slots.
-        for (let i = 0; i < count; i++) {
-            const effect = effects[i]!;
-            if (effect.type !== 'shader') this.packEffect(effect, i, time, width, height);
+        let enabled = 0;
+        for (let i = 0; i < effects.count && enabled < this.maxEffects; i++) {
+            const effect = effects.at(i);
+            if (!effect.enabled) continue;
+            if (effect.type !== 'shader') this.packEffect(effect, enabled, time, width, height);
+            enabled++;
         }
-        this.packPresent(count);
-        this.device.queue.writeBuffer(this.uniformBuffer, 0, this.staging.buffer, 0, (count + 1) * SLOT);
+        this.packPresent(enabled);
+        this.device.queue.writeBuffer(this.uniformBuffer, 0, this.staging.buffer, 0, (enabled + 1) * SLOT);
 
         let srcIsA = true;
-        for (let i = 0; i < count; i++) {
-            const effect = effects[i]!;
+        let slot = 0;
+        for (let i = 0; i < effects.count && slot < this.maxEffects; i++) {
+            const effect = effects.at(i);
+            if (!effect.enabled) continue;
             const dstIsB = srcIsA;
             const dst = dstIsB ? this.viewB! : this.viewA!;
             if (effect.type === 'shader') {
-                const compiled = this.customs.get(effect)!;
+                const compiled = this.findCustom(effect)!;
                 compiled.write();
                 this.pass(encoder, compiled.pipeline, srcIsA ? compiled.bindA! : compiled.bindB!, dst, null);
             } else {
-                this.pass(encoder, this.pipeline, srcIsA ? this.bindA! : this.bindB!, dst, i * SLOT);
+                this.pass(encoder, this.pipeline, srcIsA ? this.bindA! : this.bindB!, dst, slot * SLOT);
                 if (effect.type === 'motionBlur' && this.history) {
                     encoder.copyTextureToTexture(
                         { texture: dstIsB ? this.texB! : this.texA! },
@@ -162,10 +190,18 @@ export class CameraEffectStack {
                 }
             }
             srcIsA = !srcIsA;
+            slot++;
         }
 
         // Present the final off-screen result with an identity pass.
-        this.pass(encoder, this.pipeline, srcIsA ? this.bindA! : this.bindB!, present, count * SLOT);
+        this.pass(encoder, this.pipeline, srcIsA ? this.bindA! : this.bindB!, present, enabled * SLOT);
+    }
+
+    private findCustom(effect: CameraEffect): CompiledCustomEffect | null {
+        const id = effect.id;
+        if (id < 0 || id >= this.customs.length) return null;
+        const entry = this.customs[id];
+        return entry && entry.effect === effect ? entry.compiled : null;
     }
 
     destroy(): void {
@@ -174,8 +210,13 @@ export class CameraEffectStack {
         this.history?.destroy();
         this.uniformBuffer.destroy();
         this.sceneBuffer.destroy();
-        for (const compiled of this.customs.values()) compiled.buffer.destroy();
-        this.customs.clear();
+        for (let i = 0; i < this.customs.length; i++) {
+            const entry = this.customs[i];
+            if (entry) {
+                entry.compiled.buffer.destroy();
+                this.customs[i] = null;
+            }
+        }
     }
 
     /** Draw one fullscreen triangle. `offset` is null for layouts without a dynamic buffer. */
@@ -228,7 +269,10 @@ export class CameraEffectStack {
         });
         this.bindA = bind(this.viewA);
         this.bindB = bind(this.viewB);
-        for (const compiled of this.customs.values()) this.rebindCustom(compiled);
+        for (let i = 0; i < this.customs.length; i++) {
+            const entry = this.customs[i];
+            if (entry) this.rebindCustom(entry.compiled);
+        }
         this.targetW = w;
         this.targetH = h;
     }
@@ -278,6 +322,8 @@ export class CameraEffectStack {
             primitive: { topology: 'triangle-list' },
         });
         const buffer = this.root.createBuffer(Struct).$usage('uniform');
+        const keys = Object.keys(schema);
+        const mirror: Record<string, unknown> = {};
         const compiled: CompiledCustomEffect = {
             pipeline,
             layout,
@@ -286,11 +332,11 @@ export class CameraEffectStack {
             bindA: null,
             bindB: null,
             write: () => {
-                const out: Record<string, unknown> = {};
-                for (const key of Object.keys(schema)) {
-                    out[key] = coerceUniform(schema[key]!, effect.params?.[key] ?? zeroValue(schema[key]!));
+                for (let i = 0; i < keys.length; i++) {
+                    const key = keys[i]!;
+                    mirror[key] = coerceUniform(schema[key]!, effect.params?.[key] ?? zeroValue(schema[key]!));
                 }
-                buffer.write(out as never);
+                buffer.write(mirror as never);
             },
         };
         this.rebindCustom(compiled);
