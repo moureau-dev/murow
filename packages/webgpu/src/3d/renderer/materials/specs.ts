@@ -20,6 +20,8 @@ export interface EngineMaterialSpec extends MaterialSpecBase {
     readonly color?: readonly [number, number, number];
     readonly opacity?: number;
     readonly emissive?: number;
+    /** Discard fragments whose final alpha falls below this threshold. Default 0 (off). */
+    readonly alphaTest?: number;
     /** Texture id from the asset bucket, resolved to a `gpuIndex` at compile. */
     readonly texture?: string;
 }

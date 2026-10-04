@@ -13,7 +13,7 @@ export const EngineMaterialUniforms = d.struct({
     colorB: d.f32,
     opacity: d.f32,
     emissive: d.f32,
-    _pad0: d.f32,
+    alphaTest: d.f32,
     _pad1: d.f32,
     _pad2: d.f32,
 });
@@ -34,6 +34,7 @@ type FragInput = {
     vColor: { x: number; y: number; z: number };
     vUV: { x: number; y: number };
     vWorldPos: { x: number; y: number; z: number };
+    frontFacing: boolean;
 };
 
 export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
@@ -47,7 +48,11 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
             std.mul(std.mul(tex.z, input.vColor.z), m.colorB),
         );
         const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
-        const normal = std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z));
+        // Flip the normal on back faces so double-sided/unculled surfaces light correctly.
+        const normal = std.mul(
+            std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z)),
+            std.select(-1.0, 1.0, input.frontFacing),
+        );
 
         const lightDir = std.normalize(d.vec3f(u.lightDirX, u.lightDirY, u.lightDirZ));
         const diff = std.max(std.dot(normal, lightDir), 0.0) * u.lightDirIntensity;
@@ -68,22 +73,27 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
             acc = d.vec3f(acc.x + baseColor.x * c.x, acc.y + baseColor.y * c.y, acc.z + baseColor.z * c.z);
         }
 
+        const alpha = std.mul(tex.w, m.opacity);
+        if (alpha < m.alphaTest) { std.discard(); }
+
         const mapped = tonemap(acc);
-        return d.vec4f(mapped.x, mapped.y, mapped.z, std.mul(tex.w, m.opacity));
+        return d.vec4f(mapped.x, mapped.y, mapped.z, alpha);
     };
     attachShaderMetadata(fn as any, () => ({ d, std, meshLayout, matLayout, lightContribution, tonemap }), false, { d, std, meshLayout, matLayout });
-    return tgpu.fragmentFn({ in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f }, out: d.vec4f })(fn as any);
+    return tgpu.fragmentFn({ in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing }, out: d.vec4f })(fn as any);
 }
 
 export function createUnlitMaterialFragment(_meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
     const fn = function(input: FragInput) {
         const m = matLayout.$.material;
         const tex = std.textureSample(matLayout.$.map, matLayout.$.mapSampler, d.vec2f(input.vUV.x, input.vUV.y));
+        const alpha = std.mul(tex.w, m.opacity);
+        if (alpha < m.alphaTest) { std.discard(); }
         return d.vec4f(
             std.mul(std.mul(tex.x, input.vColor.x), m.colorR),
             std.mul(std.mul(tex.y, input.vColor.y), m.colorG),
             std.mul(std.mul(tex.z, input.vColor.z), m.colorB),
-            std.mul(tex.w, m.opacity),
+            alpha,
         );
     };
     attachShaderMetadata(fn as any, () => ({ d, std, matLayout }), false, { d, std, matLayout });
@@ -99,11 +109,13 @@ export function createEmissiveMaterialFragment(_meshLayout: MeshDataLayout, matL
             std.mul(std.mul(tex.y, input.vColor.y), m.colorG),
             std.mul(std.mul(tex.z, input.vColor.z), m.colorB),
         );
+        const alpha = std.mul(tex.w, m.opacity);
+        if (alpha < m.alphaTest) { std.discard(); }
         return d.vec4f(
             std.mul(baseColor.x, m.emissive),
             std.mul(baseColor.y, m.emissive),
             std.mul(baseColor.z, m.emissive),
-            std.mul(tex.w, m.opacity),
+            alpha,
         );
     };
     attachShaderMetadata(fn as any, () => ({ d, std, matLayout }), false, { d, std, matLayout });

@@ -124,7 +124,8 @@ export class MaterialLibrary {
             colorR: color[0], colorG: color[1], colorB: color[2],
             opacity: spec.opacity ?? 1,
             emissive: spec.emissive ?? 1,
-            _pad0: 0, _pad1: 0, _pad2: 0,
+            alphaTest: spec.alphaTest ?? 0,
+            _pad1: 0, _pad2: 0,
         };
         buffer.write(mirror);
 
@@ -243,7 +244,7 @@ export class MaterialLibrary {
         } else {
             if (!this.engineVertex) this.engineVertex = createTexturedMeshVertex(meshLayout);
             vertex = this.engineVertex;
-            fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f };
+            fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing };
         }
 
         attachShaderMetadata(decl.fragment.fn as any, resolveExternals(), false, { d, std, meshLayout, matLayout } as any);
