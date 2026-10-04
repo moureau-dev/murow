@@ -1,5 +1,4 @@
 import type { TexturePrefab } from 'murow/renderer';
-import { createTextureFromBitmap } from '../../../spritesheet/spritesheet';
 
 export interface GpuTexture {
     view: GPUTextureView;
@@ -65,8 +64,47 @@ export class TextureRegistry {
 
     async upload(prefab: TexturePrefab): Promise<void> {
         const bitmap = await createImageBitmap(prefab.parsed);
-        const { view } = createTextureFromBitmap(this.device, bitmap);
+        const width = bitmap.width;
+        const height = bitmap.height;
+        const levels = Math.max(1, Math.floor(Math.log2(Math.max(width, height))) + 1);
+        const texture = this.device.createTexture({
+            size: [width, height, 1],
+            format: 'rgba8unorm',
+            mipLevelCount: levels,
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+        this.device.queue.copyExternalImageToTexture({ source: bitmap }, { texture }, [width, height]);
         bitmap.close();
+
+        // WebGPU has no built-in mip blit; downsample on the CPU. Without a mip
+        // chain, minified textures (small or distant surfaces) alias into moire.
+        if (levels > 1 && typeof document !== 'undefined') {
+            let source: CanvasImageSource = prefab.parsed as unknown as CanvasImageSource;
+            let w = width;
+            let h = height;
+            for (let level = 1; level < levels; level++) {
+                const nw = Math.max(1, w >> 1);
+                const nh = Math.max(1, h >> 1);
+                const canvas = document.createElement('canvas');
+                canvas.width = nw;
+                canvas.height = nh;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) break;
+                ctx.drawImage(source, 0, 0, nw, nh);
+                const levelBitmap = await createImageBitmap(canvas);
+                this.device.queue.copyExternalImageToTexture(
+                    { source: levelBitmap },
+                    { texture, mipLevel: level },
+                    [nw, nh],
+                );
+                levelBitmap.close();
+                source = canvas;
+                w = nw;
+                h = nh;
+            }
+        }
+
+        const view = texture.createView();
         const sampler = this.device.createSampler({
             magFilter: 'linear',
             minFilter: 'linear',

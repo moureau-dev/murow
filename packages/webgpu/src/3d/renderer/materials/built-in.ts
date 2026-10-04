@@ -23,8 +23,6 @@ export function createEngineMaterialLayout() {
         material: { uniform: EngineMaterialUniforms },
         map: { texture: 'float' },
         mapSampler: { sampler: 'filtering' },
-        noise: { texture: 'float' },
-        noiseSampler: { sampler: 'filtering' },
     });
 }
 
@@ -193,42 +191,6 @@ export function createNoiseFn(_matLayout?: any) {
 }`,
     );
     return tgpu.fn([d.vec3f], d.f32)(noiseFn as any);
-}
-
-export function createFbmFn(matLayout: any, noiseFn: any) {
-    const fbmFn = function fbm(x: d.v2f) {
-        'use gpu';
-        let st = d.vec4f(0.0, 1.0, x.x, x.y);
-        for (let i = d.u32(0); i < d.u32(4); i = i + d.u32(1)) {
-            st = d.vec4f(
-                st.x + noiseFn(d.vec3f(st.z, st.w, 0.0)) * st.y,
-                st.y * 0.5,
-                st.z * 1.7,
-                st.w * 1.7,
-            );
-        }
-        return st.x;
-    };
-    attachShaderMetadata(
-        fbmFn as any,
-        () => ({ d, std, noise: noiseFn, noiseFn }),
-        false,
-        { d, std },
-        undefined,
-        `function fbm(x) {
-    let st = d.vec4f(0.0, 1.0, x.x, x.y);
-    for (let i = d.u32(0); i < d.u32(4); i = i + d.u32(1)) {
-        st = d.vec4f(
-            st.x + noiseFn(d.vec3f(st.z, st.w, 0.0)) * st.y,
-            st.y * 0.5,
-            st.z * 1.7,
-            st.w * 1.7
-        );
-    }
-    return st.x;
-}`,
-    );
-    return tgpu.fn([d.vec2f], d.f32)(fbmFn as any);
 }
 
 /**

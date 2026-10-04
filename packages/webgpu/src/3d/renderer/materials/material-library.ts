@@ -6,7 +6,7 @@ import { lightContribution, tonemap } from '../../../shaders/utils';
 import { SlotMap } from 'murow/core/slot-map';
 import type { MeshPipelines } from '../pipelines/mesh-pipelines';
 import type { TextureRegistry } from '../textures';
-import type { MeshDataLayout } from '../../shader';
+import { createUnlitMeshVertex, type MeshDataLayout } from '../../shader';
 import type { MaterialSpec, ResolvedRenderState } from './specs';
 import { resolveRenderState, isTransparent } from './specs';
 import {
@@ -17,7 +17,6 @@ import {
     createEmissiveMaterialFragment,
     createTexturedMeshVertex,
     createNoiseFn,
-    createFbmFn,
     createSnoiseFn,
     type EngineMaterialLayout,
 } from './built-in';
@@ -54,7 +53,8 @@ interface MaterialEntry {
     buffer: TgpuBuffer<any>;
     layout: any;
     mirror: Record<string, unknown>;
-    textureId: string | null;
+    textureNames: string[];
+    textureIds: Record<string, string | null>;
     write(): void;
 }
 
@@ -62,44 +62,13 @@ export class MaterialLibrary {
     private readonly slots: SlotMap;
     private readonly entries: (MaterialEntry | null)[];
     private readonly deps: MaterialLibraryDeps;
-    private noiseView!: GPUTextureView;
-    private noiseSampler!: GPUSampler;
     private engineVertex: ReturnType<typeof createTexturedMeshVertex> | null = null;
+    private engineUnlitVertex: ReturnType<typeof createUnlitMeshVertex> | null = null;
 
     constructor(deps: MaterialLibraryDeps) {
         this.deps = deps;
         this.slots = new SlotMap(deps.maxMaterials);
         this.entries = new Array(deps.maxMaterials).fill(null);
-        this.initNoise(deps);
-    }
-
-    private initNoise(deps: MaterialLibraryDeps): void {
-        const dev: any = deps.device;
-        if (dev && typeof dev.createTexture === 'function' && typeof dev.createSampler === 'function' && dev.queue?.writeTexture) {
-            const N = 256;
-            const data = new Uint8Array(N * N * 4);
-            for (let y = 0; y < N; y++) {
-                for (let x = 0; x < N; x++) {
-                    let n = (x * 374761393 + y * 668265263) >>> 0;
-                    n = ((n ^ (n >>> 13)) * 1274126177) >>> 0;
-                    n = (n ^ (n >>> 16)) >>> 0;
-                    const i = (y * N + x) * 4;
-                    data[i] = n & 255;
-                    data[i + 1] = (n >>> 8) & 255;
-                    data[i + 2] = (n >>> 16) & 255;
-                    data[i + 3] = 255;
-                }
-            }
-            const usage = ((globalThis as any).GPUTextureUsage?.TEXTURE_BINDING ?? 4) | ((globalThis as any).GPUTextureUsage?.COPY_DST ?? 2);
-            const tex = dev.createTexture({ size: [N, N, 1], format: 'rgba8unorm', usage });
-            dev.queue.writeTexture({ texture: tex }, data, { bytesPerRow: N * 4 }, [N, N]);
-            this.noiseView = tex.createView();
-            this.noiseSampler = dev.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat' });
-        } else {
-            const white = deps.textures.whiteTexture;
-            this.noiseView = white.view;
-            this.noiseSampler = white.sampler;
-        }
     }
 
     get count(): number {
@@ -166,14 +135,17 @@ export class MaterialLibrary {
                 ? createEmissiveMaterialFragment(this.deps.meshLayout, layout)
                 : createStandardMaterialFragment(this.deps.meshLayout, layout);
 
+        const textureNames = ['map'];
+        const textureIds: Record<string, string | null> = { map: spec.texture ?? null };
         const pipeline = this.deps.pipelines.buildMaterialPipeline({
             vertex: this.engineVertex,
             fragment,
             materialLayout: layout,
             blend: state.blend, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
+            label: spec.id,
         });
-        const bindGroup = this.createBindGroup(layout, buffer, spec.texture ?? null);
-        return { compiled: { pipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureId: spec.texture ?? null, write: () => buffer.write(mirror as never) };
+        const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds);
+        return { compiled: { pipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, write: () => buffer.write(mirror as never) };
     }
 
     private createShaderMaterial(slot: number, spec: Extract<MaterialSpec, { type: 'shader' }>, state: ResolvedRenderState): MaterialEntry {
@@ -181,15 +153,15 @@ export class MaterialLibrary {
             ? spec.uniforms
             : { _unused: d.f32 };
         const Struct = d.struct(schema);
-        const layout = tgpu.bindGroupLayout({
-            material: { uniform: Struct },
-            map: { texture: 'float' },
-            mapSampler: { sampler: 'filtering' },
-            noise: { texture: 'float' },
-            noiseSampler: { sampler: 'filtering' },
-        });
+        const textureNames = spec.textures ? Object.keys(spec.textures) : ['map'];
+        const bindings: Record<string, unknown> = { material: { uniform: Struct } };
+        for (const name of textureNames) {
+            bindings[name] = { texture: 'float' };
+            bindings[`${name}Sampler`] = { sampler: 'filtering' };
+        }
+        const layout = tgpu.bindGroupLayout(bindings as any);
 
-        const { vertex, fragment } = this.compileDeclarative(spec, this.deps.meshLayout, layout);
+        const { vertex, fragment } = this.compileDeclarative(spec, this.deps.meshLayout, layout, textureNames);
 
         const buffer = this.deps.root.createBuffer(Struct).$usage('uniform');
         const mirror: Record<string, unknown> = {};
@@ -204,25 +176,26 @@ export class MaterialLibrary {
         };
         writeMirror();
 
-        const textureId = spec.textures?.map ?? null;
+        const textureIds: Record<string, string | null> = {};
+        for (const name of textureNames) textureIds[name] = spec.textures?.[name] ?? null;
         const pipeline = this.deps.pipelines.buildMaterialPipeline({
             vertex: vertex as any,
             fragment: fragment as any,
             materialLayout: layout,
             blend: state.blend, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
+            label: spec.id,
         });
-        const bindGroup = this.createBindGroup(layout, buffer, textureId);
-        return { compiled: { pipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureId, write: writeMirror };
+        const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds);
+        return { compiled: { pipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, write: writeMirror };
     }
 
-    private compileDeclarative(spec: Extract<MaterialSpec, { type: 'shader' }>, meshLayout: MeshDataLayout, matLayout: any) {
+    private compileDeclarative(spec: Extract<MaterialSpec, { type: 'shader' }>, meshLayout: MeshDataLayout, matLayout: any, textureNames: string[]) {
         const decl = spec.shaders;
         const noiseFn = createNoiseFn(matLayout);
-        const fbmFn = createFbmFn(matLayout, noiseFn);
         const snoiseFn = createSnoiseFn(matLayout);
 
         const resolveExternals = () => () => {
-            const ext: Record<string, unknown> = { d, std, meshLayout, matLayout, lightContribution, tonemap, noise: noiseFn, fbm: fbmFn, snoise: snoiseFn };
+            const ext: Record<string, unknown> = { d, std, meshLayout, matLayout, lightContribution, tonemap, noise: noiseFn, snoise: snoiseFn };
             try { ext.scene = (meshLayout as any).$.uniforms; } catch { /* outside shader */ }
             try {
                 ext.lights = (meshLayout as any).$.lights;
@@ -232,7 +205,13 @@ export class MaterialLibrary {
             } catch { /* outside shader */ }
             try {
                 ext.material = (matLayout as any).$.material;
-                ext.textures = { map: (matLayout as any).$.map, sampler: (matLayout as any).$.mapSampler };
+                const textures: Record<string, unknown> = {};
+                for (const name of textureNames) {
+                    textures[name] = (matLayout as any).$[name];
+                    textures[`${name}Sampler`] = (matLayout as any).$[`${name}Sampler`];
+                }
+                if (textureNames[0]) textures.sampler = (matLayout as any).$[`${textureNames[0]}Sampler`];
+                ext.textures = textures;
             } catch { /* outside shader */ }
             return ext;
         };
@@ -257,6 +236,10 @@ export class MaterialLibrary {
                 },
                 out: vertexOut,
             } as any)(decl.vertex.fn as any);
+        } else if (spec.lit === false) {
+            if (!this.engineUnlitVertex) this.engineUnlitVertex = createUnlitMeshVertex(meshLayout);
+            vertex = this.engineUnlitVertex;
+            fragmentIn = { vColor: d.vec3f, vUV: d.vec2f };
         } else {
             if (!this.engineVertex) this.engineVertex = createTexturedMeshVertex(meshLayout);
             vertex = this.engineVertex;
@@ -269,17 +252,19 @@ export class MaterialLibrary {
         return { vertex, fragment };
     }
 
-    private createBindGroup(layout: any, buffer: TgpuBuffer<any>, textureId: string | null): GPUBindGroup {
-        const { view, sampler } = this.resolveTexture(textureId);
+    private createBindGroup(layout: any, buffer: TgpuBuffer<any>, textureNames: string[], textureIds: Record<string, string | null>): GPUBindGroup {
+        const entries: GPUBindGroupEntry[] = [
+            { binding: 0, resource: { buffer: this.deps.root.unwrap(buffer) as unknown as GPUBuffer } },
+        ];
+        let binding = 1;
+        for (const name of textureNames) {
+            const { view, sampler } = this.resolveTexture(textureIds[name] ?? null);
+            entries.push({ binding: binding++, resource: view });
+            entries.push({ binding: binding++, resource: sampler });
+        }
         return this.deps.device.createBindGroup({
             layout: this.deps.root.unwrap(layout) as unknown as GPUBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.deps.root.unwrap(buffer) as unknown as GPUBuffer } },
-                { binding: 1, resource: view },
-                { binding: 2, resource: sampler },
-                { binding: 3, resource: this.noiseView },
-                { binding: 4, resource: this.noiseSampler },
-            ],
+            entries,
         });
     }
 
@@ -294,11 +279,11 @@ export class MaterialLibrary {
 
     private setTexture(slot: number, name: string, textureId: string): void {
         const entry = this.entries[slot];
-        if (!entry || name !== 'map') return;
-        entry.textureId = textureId;
+        if (!entry || !(name in entry.textureIds)) return;
+        entry.textureIds[name] = textureId;
         entry.compiled = {
             ...entry.compiled,
-            bindGroup: this.createBindGroup(entry.layout, entry.buffer, textureId),
+            bindGroup: this.createBindGroup(entry.layout, entry.buffer, entry.textureNames, entry.textureIds),
         };
     }
 

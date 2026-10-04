@@ -370,7 +370,9 @@ describe('CDN bundle shader metadata', () => {
     test('keeps syntax minification off (SequenceExpressions break tinyest)', () => {
         expect(cdnBundleOptions.minify).toBeFalsy();
         expect(cdnBundleOptions.minifySyntax).toBeFalsy();
-        expect(cdnBundleOptions.minifyIdentifiers).toBe(true);
+        // Identifier minification is off: the vertex-fn recovery is fragile under
+        // renamed free variables, and unminified shader bodies resolve reliably.
+        expect(cdnBundleOptions.minifyIdentifiers).toBe(false);
     });
 
     test('finds the expected shaders in the bundle', () => {

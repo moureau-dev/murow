@@ -324,6 +324,83 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
     })(fn as any);
 }
 
+export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
+    const fn = function(input: { position: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
+        const instanceIndex = input.instanceIndex;
+        const slot = meshLayout.$.slotIndices[instanceIndex];
+        const dyn = meshLayout.$.dynamicInstances[slot];
+        const stat = meshLayout.$.staticInstances[slot];
+        const alpha = meshLayout.$.uniforms.alpha;
+
+        const px = std.mix(dyn.prevPosX, dyn.currPosX, alpha);
+        const py = std.mix(dyn.prevPosY, dyn.currPosY, alpha);
+        const pz = std.mix(dyn.prevPosZ, dyn.currPosZ, alpha);
+
+        const rx = std.mix(dyn.prevRotX, dyn.currRotX, alpha);
+        const ry = std.mix(dyn.prevRotY, dyn.currRotY, alpha);
+        const rz = std.mix(dyn.prevRotZ, dyn.currRotZ, alpha);
+
+        const scaled = d.vec3f(
+            std.mul(input.position.x, stat.scaleX),
+            std.mul(input.position.y, stat.scaleY),
+            std.mul(input.position.z, stat.scaleZ),
+        );
+
+        const czr = std.cos(rz);
+        const szr = std.sin(rz);
+        const rz1 = d.vec3f(
+            std.sub(std.mul(scaled.x, czr), std.mul(scaled.y, szr)),
+            std.add(std.mul(scaled.x, szr), std.mul(scaled.y, czr)),
+            scaled.z,
+        );
+
+        const cyr = std.cos(ry);
+        const syr = std.sin(ry);
+        const ry1 = d.vec3f(
+            std.add(std.mul(rz1.x, cyr), std.mul(rz1.z, syr)),
+            rz1.y,
+            std.sub(std.mul(rz1.z, cyr), std.mul(rz1.x, syr)),
+        );
+
+        const cxr = std.cos(rx);
+        const sxr = std.sin(rx);
+        const rx1 = d.vec3f(
+            ry1.x,
+            std.sub(std.mul(ry1.y, cxr), std.mul(ry1.z, sxr)),
+            std.add(std.mul(ry1.y, sxr), std.mul(ry1.z, cxr)),
+        );
+
+        const worldPos = d.vec4f(
+            std.add(rx1.x, px),
+            std.add(rx1.y, py),
+            std.add(rx1.z, pz),
+            1.0,
+        );
+
+        const clipPos = std.mul(meshLayout.$.uniforms.viewProjection, worldPos);
+
+        return {
+            pos: clipPos,
+            vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
+            vUV: input.uv,
+        };
+    };
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std, meshLayout });
+    return tgpu.vertexFn({
+        in: {
+            position: d.location(0, d.vec3f),
+            normal: d.location(1, d.vec3f),
+            uv: d.location(2, d.vec2f),
+            instanceIndex: d.builtin.instanceIndex,
+        },
+        out: {
+            pos: d.builtin.position,
+            vColor: d.vec3f,
+            vUV: d.vec2f,
+        },
+    })(fn as any);
+}
+
 export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout, texLayout: TextureBindGroupLayout) {
     const fn = function(input: { vNormal: { x: number; y: number; z: number }; vColor: { x: number; y: number; z: number }; vUV: { x: number; y: number }; vWorldPos: { x: number; y: number; z: number } }) {
         const u = meshLayout.$.uniforms;

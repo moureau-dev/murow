@@ -262,9 +262,10 @@ export class MeshPipelines {
         depthWrite: boolean;
         depthTest: boolean;
         cull: 'back' | 'front' | 'none';
+        label?: string;
     }): GPURenderPipeline {
         const { code } = tgpu.resolveWithContext([opts.vertex as any, opts.fragment as any]);
-        const module = this.device.createShaderModule({ code });
+        const module = this.device.createShaderModule({ code, label: opts.label });
         const rawMaterialBGL = this.root.unwrap(opts.materialLayout) as unknown as GPUBindGroupLayout;
 
         const depthStencil: GPUDepthStencilState = {
@@ -286,6 +287,7 @@ export class MeshPipelines {
         }
 
         return this.device.createRenderPipeline({
+            label: opts.label,
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.rawMeshBGL, rawMaterialBGL] }),
             vertex: { module, buffers: [this.vertexBufferLayout] },
             fragment: { module, targets: [target] },
