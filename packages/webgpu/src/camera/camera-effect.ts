@@ -25,6 +25,8 @@ export type CameraEffectSpec =
     | { readonly type: 'fxaa' }
     /** Exponential depth fog. */
     | { readonly type: 'fog'; readonly color?: readonly [number, number, number]; readonly density?: number }
+    /** Multi-pass additive bloom (half-res brightpass + separable blur + composite). */
+    | { readonly type: 'bloom'; readonly threshold?: number; readonly intensity?: number; readonly radius?: number }
     | CustomCameraEffectSpec;
 
 /**
@@ -59,6 +61,8 @@ export class CameraEffect {
     feedback?: number;
     color?: readonly [number, number, number];
     density?: number;
+    threshold?: number;
+    radius?: number;
     fragment?: CustomCameraEffectSpec['fragment'];
     uniforms?: CustomCameraEffectSpec['uniforms'];
     defaultUniforms?: CustomCameraEffectSpec['defaultUniforms'];

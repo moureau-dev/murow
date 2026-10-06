@@ -35,6 +35,7 @@ struct EffectU {
 @group(0) @binding(3) var histTex: texture_2d<f32>;
 @group(0) @binding(4) var depthTex: texture_depth_2d;
 @group(0) @binding(5) var depthSamp: sampler;
+@group(0) @binding(6) var bloomTex: texture_2d<f32>;
 
 @vertex fn vs(@builtin(vertex_index) i: u32) -> VSOut {
   var verts = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
@@ -115,6 +116,22 @@ struct EffectU {
     let lin = (2.0 * u.near * u.far) / (u.far + u.near - ndc * (u.far - u.near));
     let f = 1.0 - exp(-lin * u.params.w);
     c = vec4f(mix(c.rgb, u.params.rgb, f), c.a);
+  } else if (u.kind == 10u) {
+    // bloom brightpass: params = [threshold, 0, 0, 0]
+    let b = max(c.rgb - u.params.x, vec3f(0.0, 0.0, 0.0));
+    c = vec4f(b, 1.0);
+  } else if (u.kind == 11u) {
+    // separable blur: params = [offsetX, offsetY, 0, 0]
+    let o = vec2f(u.params.x, u.params.y);
+    c = textureSample(srcTex, srcSamp, in.uv) * 0.227027;
+    c += textureSample(srcTex, srcSamp, in.uv + o * 1.3846153846) * 0.3162162162;
+    c += textureSample(srcTex, srcSamp, in.uv - o * 1.3846153846) * 0.3162162162;
+    c += textureSample(srcTex, srcSamp, in.uv + o * 3.2307692308) * 0.0702702703;
+    c += textureSample(srcTex, srcSamp, in.uv - o * 3.2307692308) * 0.0702702703;
+  } else if (u.kind == 12u) {
+    // bloom composite: params = [intensity, 0, 0, 0]
+    let bloom = textureSample(bloomTex, srcSamp, in.uv);
+    c = vec4f(c.rgb + bloom.rgb * u.params.x, c.a);
   }
   // kind 7 = copy (identity), used to present the final off-screen result.
 

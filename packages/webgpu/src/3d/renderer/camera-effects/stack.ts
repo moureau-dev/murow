@@ -7,6 +7,8 @@ import { CAMERA_EFFECT_WGSL, EFFECT_SCENE_UNIFORMS } from './shaders';
 
 /** Uniform slot stride, aligned to the WebGPU min uniform offset alignment. */
 const SLOT = 256;
+/** Uniform slots reserved for the bloom pass chain (brightpass, blurH, blurV, composite). */
+const BLOOM_SLOTS = 4;
 const SLOT_FLOATS = SLOT / 4;
 
 interface CompiledCustomEffect {
@@ -70,6 +72,17 @@ export class CameraEffectStack {
     private historyValid = false;
     private targetW = 0;
     private targetH = 0;
+    private readonly bloomBase: number;
+    private bloomA: GPUTexture | null = null;
+    private bloomB: GPUTexture | null = null;
+    private bloomViewA: GPUTextureView | null = null;
+    private bloomViewB: GPUTextureView | null = null;
+    private bloomBindA: GPUBindGroup | null = null;
+    private bloomBindB: GPUBindGroup | null = null;
+    private brightA: GPUBindGroup | null = null;
+    private brightB: GPUBindGroup | null = null;
+    private dummyTex: GPUTexture;
+    private dummyView: GPUTextureView;
     private depthView: GPUTextureView;
     private depthSampler: GPUSampler;
     private readonly fallbackDepth: GPUTexture;
@@ -86,9 +99,10 @@ export class CameraEffectStack {
         this.device = root.device;
         this.format = format;
         this.maxEffects = maxEffects;
-        this.staging = new Float32Array((maxEffects + 2) * SLOT_FLOATS);
+        this.staging = new Float32Array((maxEffects + 2 + BLOOM_SLOTS) * SLOT_FLOATS);
         this.stagingU32 = new Uint32Array(this.staging.buffer);
         this.customs = new Array(maxEffects).fill(null);
+        this.bloomBase = maxEffects + 2;
         this.sampler = this.device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
         this.layout = this.device.createBindGroupLayout({
             entries: [
@@ -98,6 +112,7 @@ export class CameraEffectStack {
                 { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
                 { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
                 { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'non-filtering' } },
+                { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
             ],
         });
         this.depthSampler = this.device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
@@ -105,6 +120,9 @@ export class CameraEffectStack {
             size: [1, 1, 1], format: 'depth24plus', usage: GPUTextureUsage.TEXTURE_BINDING,
         });
         this.depthView = this.fallbackDepth.createView();
+        this.dummyTex = this.device.createTexture({ size: [1, 1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+        this.device.queue.writeTexture({ texture: this.dummyTex }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
+        this.dummyView = this.dummyTex.createView();
         const module = this.device.createShaderModule({ code: CAMERA_EFFECT_WGSL, label: 'camera-effects' });
         this.pipeline = this.device.createRenderPipeline({
             label: 'camera-effects',
@@ -114,7 +132,7 @@ export class CameraEffectStack {
             primitive: { topology: 'triangle-list' },
         });
         this.uniformBuffer = this.device.createBuffer({
-            size: (this.maxEffects + 2) * SLOT,
+            size: (this.maxEffects + 2 + BLOOM_SLOTS) * SLOT,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         this.sceneBuffer = this.device.createBuffer({
@@ -178,7 +196,7 @@ export class CameraEffectStack {
             enabled++;
         }
         this.packPresent(enabled);
-        this.device.queue.writeBuffer(this.uniformBuffer, 0, this.staging.buffer, 0, (enabled + 1) * SLOT);
+        this.device.queue.writeBuffer(this.uniformBuffer, 0, this.staging.buffer, 0, (this.maxEffects + 2 + BLOOM_SLOTS) * SLOT);
 
         let srcIsA = true;
         let slot = 0;
@@ -187,7 +205,13 @@ export class CameraEffectStack {
             if (!effect.enabled) continue;
             const dstIsB = srcIsA;
             const dst = dstIsB ? this.viewB! : this.viewA!;
-            if (effect.type === 'shader') {
+            if (effect.type === 'bloom') {
+                // brightpass (full -> half) -> blurH (half) -> blurV (half) -> composite (-> full)
+                this.pass(encoder, this.pipeline, srcIsA ? this.brightA! : this.brightB!, this.bloomViewA!, this.bloomBase * SLOT);
+                this.pass(encoder, this.pipeline, this.bloomBindA!, this.bloomViewB!, (this.bloomBase + 1) * SLOT);
+                this.pass(encoder, this.pipeline, this.bloomBindB!, this.bloomViewA!, (this.bloomBase + 2) * SLOT);
+                this.pass(encoder, this.pipeline, srcIsA ? this.bindA! : this.bindB!, dst, (this.bloomBase + 3) * SLOT);
+            } else if (effect.type === 'shader') {
                 const compiled = this.findCustom(effect)!;
                 compiled.write();
                 this.pass(encoder, compiled.pipeline, srcIsA ? compiled.bindA! : compiled.bindB!, dst, null);
@@ -219,6 +243,9 @@ export class CameraEffectStack {
     destroy(): void {
         this.texA?.destroy();
         this.texB?.destroy();
+        this.bloomA?.destroy();
+        this.bloomB?.destroy();
+        this.dummyTex.destroy();
         this.history?.destroy();
         this.uniformBuffer.destroy();
         this.sceneBuffer.destroy();
@@ -262,7 +289,7 @@ export class CameraEffectStack {
 
     private rebuildBuiltins(): void {
         if (!this.viewA || !this.viewB || !this.historyView) return;
-        const bind = (view: GPUTextureView) => this.device.createBindGroup({
+        const bind = (view: GPUTextureView, bloom: GPUTextureView) => this.device.createBindGroup({
             layout: this.layout,
             entries: [
                 { binding: 0, resource: view },
@@ -271,10 +298,15 @@ export class CameraEffectStack {
                 { binding: 3, resource: this.historyView! },
                 { binding: 4, resource: this.depthView },
                 { binding: 5, resource: this.depthSampler },
+                { binding: 6, resource: bloom },
             ],
         });
-        this.bindA = bind(this.viewA);
-        this.bindB = bind(this.viewB);
+        this.bindA = bind(this.viewA, this.bloomViewA!);
+        this.bindB = bind(this.viewB, this.bloomViewA!);
+        this.brightA = bind(this.viewA, this.dummyView);
+        this.brightB = bind(this.viewB, this.dummyView);
+        this.bloomBindA = bind(this.bloomViewA!, this.dummyView);
+        this.bloomBindB = bind(this.bloomViewB!, this.dummyView);
     }
 
     private ensureTargets(width: number, height: number): void {
@@ -289,6 +321,15 @@ export class CameraEffectStack {
         const make = () => this.device.createTexture({ size: [w, h, 1], format: this.format, usage });
         this.texA = make();
         this.texB = make();
+        const bw = Math.max(1, w >> 1);
+        const bh = Math.max(1, h >> 1);
+        this.bloomA?.destroy();
+        this.bloomB?.destroy();
+        const makeBloom = () => this.device.createTexture({ size: [bw, bh, 1], format: this.format, usage });
+        this.bloomA = makeBloom();
+        this.bloomB = makeBloom();
+        this.bloomViewA = this.bloomA.createView();
+        this.bloomViewB = this.bloomB.createView();
         this.history = this.device.createTexture({
             size: [w, h, 1],
             format: this.format,
@@ -442,10 +483,33 @@ export class CameraEffectStack {
                 f[base + 3] = effect.density ?? 0.02;
                 break;
             }
+            case 'bloom': {
+                this.packBloom(effect);
+                return;
+            }
         }
         f[base + 8] = this.near;
         f[base + 9] = this.far;
         this.stagingU32[base + 7] = kind;
+    }
+
+    /** Pack the four bloom passes into the reserved bloom slots. */
+    private packBloom(effect: CameraEffect): void {
+        const f = this.staging;
+        const b = this.bloomBase * SLOT_FLOATS;
+        const tw = Math.max(1, this.targetW >> 1);
+        const th = Math.max(1, this.targetH >> 1);
+        const radius = effect.radius ?? 1.0;
+        const write = (i: number, p0: number, p1: number, kind: number) => {
+            const o = b + i * SLOT_FLOATS;
+            f[o] = p0; f[o + 1] = p1; f[o + 2] = 0; f[o + 3] = 0;
+            f[o + 8] = this.near; f[o + 9] = this.far;
+            this.stagingU32[o + 7] = kind;
+        };
+        write(0, effect.threshold ?? 1.0, 0, 10);        // brightpass
+        write(1, (1.0 / tw) * radius, 0, 11);            // blurH
+        write(2, 0, (1.0 / th) * radius, 11);            // blurV
+        write(3, effect.intensity ?? 0.8, 0, 12);        // composite
     }
 
     /** Pack the identity present pass into slot `index`. */
