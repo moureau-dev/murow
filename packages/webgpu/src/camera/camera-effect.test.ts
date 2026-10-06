@@ -66,6 +66,26 @@ describe('CameraEffectList', () => {
         expect(c.id).toBe(freed);
     });
 
+    test('accepts built-in effect specs including fxaa', () => {
+        const list = new CameraEffectList();
+        list.add({ type: 'fxaa' });
+        list.add({ type: 'motionBlur', feedback: 0.4 });
+        expect(list.count).toBe(2);
+    });
+
+    test('all() returns every effect of a type in order', () => {
+        const list = new CameraEffectList();
+        const a = list.add({ type: 'grade', saturation: 1.1 });
+        const b = list.add({ type: 'fxaa' });
+        const c = list.add({ type: 'grade', saturation: 1.3 });
+        expect(list.all('grade')).toEqual([a, c]);
+        expect(list.all('fxaa')).toEqual([b]);
+        expect(list.all('chromatic')).toEqual([]);
+        for (const e of list.all('grade')) e.enabled = false;   // settings toggle
+        expect(a.enabled).toBe(false);
+        expect(c.enabled).toBe(false);
+    });
+
     test('throws past capacity', () => {
         const list = new CameraEffectList(1);
         list.add({ type: 'grade' });

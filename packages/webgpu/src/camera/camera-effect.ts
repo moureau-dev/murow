@@ -21,6 +21,8 @@ export type CameraEffectSpec =
     | { readonly type: 'scanlines'; readonly intensity?: number; readonly frequency?: number; readonly speed?: number }
     | { readonly type: 'posterize'; readonly levels?: number }
     | { readonly type: 'motionBlur'; readonly feedback?: number }
+    /** Fast approximate anti-aliasing (Lottes FXAA). */
+    | { readonly type: 'fxaa' }
     | CustomCameraEffectSpec;
 
 /**
@@ -134,6 +136,18 @@ export class CameraEffectList implements Iterable<CameraEffect> {
 
     at(index: number): CameraEffect {
         return this.items[index]!;
+    }
+
+    /**
+     * Every effect of `type`, in chain order (empty if none). Returns an array
+     * because a chain may legitimately contain several effects of one type.
+     */
+    all(type: CameraEffectSpec['type']): CameraEffect[] {
+        const out: CameraEffect[] = [];
+        for (let i = 0; i < this.items.length; i++) {
+            if (this.items[i]!.type === type) out.push(this.items[i]!);
+        }
+        return out;
     }
 
     [Symbol.iterator](): Iterator<CameraEffect> {

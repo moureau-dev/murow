@@ -3112,9 +3112,11 @@ const blur = renderer.camera.effects.add({ type: 'motionBlur', feedback: 0.4 });
 blur.feedback = 0.2;   // live
 blur.enabled = false;
 renderer.camera.effects.remove(blur);
+
+for (const e of renderer.camera.effects.all('fxaa')) e.enabled = false;  // read back by type (array; a chain may hold several)
 ```
 
-- Built-ins: `vignette`, `grade` (saturation/contrast/brightness), `grayscale`, `chromatic`, `scanlines`, `posterize`, `motionBlur` (temporal accumulation).
+- Built-ins: `vignette`, `grade` (saturation/contrast/brightness), `grayscale`, `chromatic`, `scanlines`, `posterize`, `motionBlur` (temporal accumulation), `fxaa` (anti-aliasing).
 - Custom: `new CameraEffect({ type: 'shader', fragment, uniforms?, defaultUniforms? })`. The fragment gets `input.vUV`, `textures.src`/`textures.sampler`, `material.<name>`, `scene.time`/`scene.resolutionX/Y`, and `history`; retune via `effect.params`. Chain capacity = `maxCameraEffects` (default 20).
 
 ### Particles (2D)

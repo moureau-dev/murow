@@ -79,6 +79,31 @@ struct EffectU {
     // motion blur: params = [feedback, 0, 0, 0]
     let h = textureSample(histTex, srcSamp, in.uv);
     c = vec4f(mix(c.rgb, h.rgb, u.params.x), c.a);
+  } else if (u.kind == 8u) {
+    // fxaa: params = [0,0,0,0]
+    let luma = vec3f(0.299, 0.587, 0.114);
+    let texel = vec2f(1.0 / u.resX, 1.0 / u.resY);
+    let nw = dot(textureSample(srcTex, srcSamp, in.uv + vec2f(-1.0, -1.0) * texel).rgb, luma);
+    let ne = dot(textureSample(srcTex, srcSamp, in.uv + vec2f(1.0, -1.0) * texel).rgb, luma);
+    let sw = dot(textureSample(srcTex, srcSamp, in.uv + vec2f(-1.0, 1.0) * texel).rgb, luma);
+    let se = dot(textureSample(srcTex, srcSamp, in.uv + vec2f(1.0, 1.0) * texel).rgb, luma);
+    let mN = dot(textureSample(srcTex, srcSamp, in.uv + vec2f(0.0, -1.0) * texel).rgb, luma);
+    let mS = dot(textureSample(srcTex, srcSamp, in.uv + vec2f(0.0, 1.0) * texel).rgb, luma);
+    let mW = dot(textureSample(srcTex, srcSamp, in.uv + vec2f(-1.0, 0.0) * texel).rgb, luma);
+    let mE = dot(textureSample(srcTex, srcSamp, in.uv + vec2f(1.0, 0.0) * texel).rgb, luma);
+    let lumaMin = min(lum, min(min(nw, ne), min(min(sw, se), min(min(mN, mS), min(mW, mE)))));
+    let lumaMax = max(lum, max(max(nw, ne), max(max(sw, se), max(max(mN, mS), max(mW, mE)))));
+    let dir = vec2f(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
+    let reduce = max((nw + ne + sw + se) * 0.0078125, 0.0078125);
+    let rcp = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+    let step = clamp(dir * rcp, vec2f(-8.0, -8.0), vec2f(8.0, 8.0)) * texel;
+    let a = 0.5 * (textureSample(srcTex, srcSamp, in.uv + step * (1.0 / 3.0 - 0.5)).rgb
+                 + textureSample(srcTex, srcSamp, in.uv + step * (2.0 / 3.0 - 0.5)).rgb);
+    let b = a * 0.5 + 0.25 * (textureSample(srcTex, srcSamp, in.uv + step * -0.5).rgb
+                            + textureSample(srcTex, srcSamp, in.uv + step * 0.5).rgb);
+    let lumaB = dot(b, luma);
+    let useB = lumaB < lumaMin || lumaB > lumaMax;
+    c = vec4f(select(a, b, useB), c.a);
   }
   // kind 7 = copy (identity), used to present the final off-screen result.
 
