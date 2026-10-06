@@ -1294,6 +1294,19 @@ const result = nav2.findPath({ from, to });
 const path2 = result instanceof Promise ? await result : result;
 ```
 
+### `Logger` — shared structured logging
+
+```ts
+import { Logger } from 'murow/core';
+const log = new Logger();                          // [murow] … -> console
+const net = new Logger({ prefix: 'net' });         // [net] …
+new Logger({ sink: (level, message, details) => telemetry[level](message, details) });
+const quiet = Logger.none;                          // discards
+const resolved = Logger.resolve(debugOption);       // boolean | Logger -> Logger
+```
+
+Renderers/systems accept `debug?: boolean | Logger`; `true` uses a console logger, an object routes through it.
+
 ### `FreeList` — O(1) slot allocator (used internally by renderers and ECS)
 
 ```ts
@@ -2828,9 +2841,11 @@ import { d, std } from 'murow/webgpu';
 // vertex, so the fragment receives vNormal, vColor, vUV, vWorldPos.
 const holo = renderer.createMaterial({
   type: 'shader',
-  blend: 'additive',            // 'opaque' | 'alpha' | 'additive'
+  id: 'holo',                   // optional debug label on the GPU pipeline
+  blend: 'additive',            // 'opaque' | 'alpha' | 'additive' | 'premultiplied' | 'multiply' | 'screen'
   depthWrite: false,
-  textures: { map: 'flame' },  // texture id from the AssetBucket -> group 1
+  lit: false,                   // false -> lighter vertex path (no vNormal/vWorldPos)
+  textures: { map: 'flame', mask: 'noise' },  // named textures from the AssetBucket -> group 1
   uniforms: { scan: d.f32, tint: d.vec3f },
   defaultUniforms: { scan: 2, tint: [0.35, 0.85, 1] },
   shaders: {
@@ -2850,7 +2865,7 @@ orb.setMaterial(glow.slot + 1);      // runtime swap (O(1)); 0 = engine default
 orb.setMaterialParams(1.5, 0);       // writes statics[slot].custom0 / custom1
 
 holo.uniforms.scan += 0.6;           // typed write; `.uniforms` is a live view
-holo.setTexture('map', 'smoke');     // swap the one material texture
+holo.setTexture('mask', 'smoke');    // re-bind any declared texture by name
 holo.destroy();                      // free the slot + uniform buffer
 ```
 
@@ -2860,7 +2875,7 @@ holo.destroy();                      // free the slot + uniform buffer
 |---|---|
 | `slot: number` | Material identity. An instance's `materialId` is `slot + 1` (`0` = engine default). |
 | `uniforms` | Typed read/write over this material's uniform buffer. `holo.uniforms.scan = v` and `+=` both work. |
-| `setTexture(name, texture)` | Re-binds the material texture (`'map'` only). |
+| `setTexture(name, texture)` | Re-binds a declared texture by name. |
 | `destroy()` | Frees the slot and uniform buffer. |
 
 Spec fields:
@@ -2869,17 +2884,20 @@ Spec fields:
 |---|---|---|
 | `type` | all | `'standard'` (lit), `'unlit'`, `'emissive'`, `'shader'` |
 | `color`, `opacity`, `emissive`, `texture` | engine types | `texture` is an AssetBucket texture id |
-| `uniforms`, `defaultUniforms`, `textures`, `shaders` | `shader` | `uniforms` is a TGSL schema; `textures: { map: 'id' }`; `shaders.fragment` is required, `shaders.vertex` optional |
-| `blend`, `depthWrite`, `depthTest`, `cull` | all | render state. Defaults: `'opaque'`, `depthWrite:true`, `depthTest:true`, `cull:'none'`; `emissive` defaults to `blend:'additive'` + `depthWrite:false` |
+| `alphaTest` | engine types | discard below this alpha (cutout). Default 0 (off) |
+| `uvScale`, `uvOffset`, `wrap`, `filter` | engine types | sampling controls. Defaults `[1,1]`, `[0,0]`, `'clamp'`, `'linear'` |
+| `uniforms`, `defaultUniforms`, `textures`, `shaders`, `lit` | `shader` | `uniforms` is a TGSL schema; `textures: { map: 'id', mask: 'id' }` (named); `shaders.fragment` required, `shaders.vertex` optional; `lit:false` selects the unlit vertex |
+| `blend`, `blendState`, `depthWrite`, `depthTest`, `cull`, `colorWrite`, `depthBias` | all | render state. `blend` (see above) or `blendState` (raw `GPUBlendComponent`s); `colorWrite` boolean or `{r,g,b,a}`; `depthBias` `{constant, slopeScale, clamp}`. Defaults: `'opaque'`, depthWrite true, depthTest true, `cull:'none'`; `emissive` defaults to additive + no depth write |
+| `id` | all | debug label on the GPU pipeline |
 
-Free variables inside a `shader` fragment (and custom vertex): `scene` (engine uniforms: `viewProjection`, `alpha`, sun direction/ambient, `lightCount`), `material` (this material's uniforms), `textures` (`{ map, sampler }`), `lights`, `dynamic`, `statics`, `slotIndices`; plus `d`, `std`, and the helpers `lightContribution`, `tonemap`.
+Free variables inside a `shader` fragment (and custom vertex): `scene` (engine uniforms: `viewProjection`, `alpha`, sun direction/ambient, `lightCount`, `cameraX/Y/Z`, `time`, `resolutionX/Y`), `material` (this material's uniforms), `textures` (one key per declared texture name, plus a `<name>Sampler` and a convenience `sampler`), `lights`, `dynamic`, `statics`, `slotIndices`; plus `d`, `std`, and the helpers `lightContribution`, `tonemap`. The fragment also receives `input.position` (fragment coords) for screen-space UV: `input.position.xy / vec2(scene.resolutionX, scene.resolutionY)`. Engine fragments flip the normal on back faces, so `cull:'none'` lights both sides.
 
 Batching is by `(materialId, modelId)`; `render()` draws opaque batches first, then transparent (`alpha`/`additive`) batches.
 
 Caveats:
 - Skinned meshes still use the engine default material; `addInstance({ material })` applies to non-skinned models only.
-- One `map` texture per material.
-- Per-material params are stored per material, not yet a single shared SoA buffer.
+- Textures get a mip chain on upload (good minification); atlas sprites must sample LOD 0 to avoid cross-cell bleed (the 3D particle path does).
+- `standard` is Lambert + two-sided; no PBR/specular/normal maps yet.
 
 ### Renderer shape
 
@@ -3073,10 +3091,33 @@ class Camera3D {
   getViewMatrix(): Float32Array;
   getProjectionMatrix(): Float32Array;
   getViewProjectionMatrix(): Float32Array;
+
+  // Ordered fullscreen effect chain (see below).
+  readonly effects: CameraEffectList;
 }
 ```
 
-### Particles
+#### Camera effects — `camera.effects`
+
+An ordered fullscreen post chain: the scene renders off-screen, each effect is one pass (ping-pong through two targets), and the last pass presents to the swapchain. Non-empty `effects` enables the off-screen path; disabled entries are skipped.
+
+```ts
+renderer.camera.effects.add({ type: 'grade', saturation: 1.2 });
+renderer.camera.effects.set([
+  { type: 'motionBlur', feedback: 0.4 },
+  { type: 'chromatic', amount: 0.3 },
+  { type: 'vignette', strength: 0.3 },
+]);
+const blur = renderer.camera.effects.add({ type: 'motionBlur', feedback: 0.4 });
+blur.feedback = 0.2;   // live
+blur.enabled = false;
+renderer.camera.effects.remove(blur);
+```
+
+- Built-ins: `vignette`, `grade` (saturation/contrast/brightness), `grayscale`, `chromatic`, `scanlines`, `posterize`, `motionBlur` (temporal accumulation).
+- Custom: `new CameraEffect({ type: 'shader', fragment, uniforms?, defaultUniforms? })`. The fragment gets `input.vUV`, `textures.src`/`textures.sampler`, `material.<name>`, `scene.time`/`scene.resolutionX/Y`, and `history`; retune via `effect.params`. Chain capacity = `maxCameraEffects` (default 20).
+
+### Particles (2D)
 
 ```ts
 interface Range { min: number; max: number; }
@@ -3119,6 +3160,31 @@ const particles = new ParticleEmitter(renderer, {
 particles.emit(x, y, 50);
 particles.update(deltaTime);
 ```
+
+### Particles (3D) — `renderer.particles`
+
+GPU-first: the CPU only queues spawn records; the GPU spawns into a power-of-two ring pool, integrates in compute, and draws instanced camera-facing quads batched by material (per-material compaction + `drawIndirect`).
+
+```ts
+const fire = renderer.particles.addEmitter({
+  position: [x, y, z], rate: 160,
+  lifetime: [0.5, 1.3], speed: [0.6, 2.2],
+  spread: 0.6, direction: [0, 1, 0], gravity: [0, 1.5, 0],
+  size: [0.1, 0.28], color: [1, 0.55, 0.15, 1],
+  spawnRadius: 0.3, grow: 1.8, spin: 0.5, turbulence: 0.6,
+  material: { texture: 'spark', blend: 'additive', atlas: { cols: 4, rows: 4, fps: 6 } },
+  seed: 1,
+});
+
+fire.rate = 0;  fire.enabled = false;   // live
+fire.update(deltaTime);                  // queue this emitter's spawns (call in tick)
+renderer.particles.update(deltaTime);    // queue every enabled emitter
+renderer.particles.removeEmitter(fire);
+```
+
+- `emitter.update(dt)` queues spawns for that emitter; the renderer runs `simulate(dt)` once per frame (spawn kernel + integrate + per-material compaction + indirect args). `renderer.particles.simulate(dt)` is available if you drive rendering yourself.
+- Material: `{ texture?, blend: 'additive'|'alpha', atlas?: { cols, rows, fps } }`. No texture -> soft procedural disc.
+- Quality knobs: `rateScale` (default 1; 0 stops spawning) and `sizeScale` (default 1.1). Capacities (renderer options): `maxParticles`, `maxSpawnsPerFrame`, `maxParticleMaterials`, `maxParticleEmitters`. Warns once via `debug` when the pool saturates or the spawn budget clamps.
 
 ### `SpriteAccessor` — direct buffer access for 2D sprites
 

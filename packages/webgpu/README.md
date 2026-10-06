@@ -39,7 +39,9 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **Composites** — a `{ type: 'composite', parts: [...] }` spec wires several prefabs into one spawnable instance with baked offsets
 - **Instance recycling** — `handle.destroy()` frees slots and bone-matrix blocks; respawns reuse them without growing buffers
 - **Grid / cube helpers** — `{ type: 'grid' }` and `{ type: 'cube' }` prefab specs
-- **Materials** — `renderer.createMaterial(spec)` with `standard` (lit), `unlit`, `emissive`, and custom `shader` types; per-material uniforms, one `map` texture, and render state (blend / depth / cull)
+- **Materials** — `renderer.createMaterial(spec)` with `standard` (lit), `unlit`, `emissive`, and custom `shader` types; per-material uniforms, named textures (mipmapped), `alphaTest` cutout, UV scale/offset, per-material samplers, two-sided normals, and render state (blend modes / depth / cull / colorWrite / depthBias)
+- **Camera effects** — an ordered fullscreen post chain on `renderer.camera.effects` (vignette, grade, chromatic, scanlines, posterize, motionBlur) plus custom declarative shader effects, rendered through off-screen targets
+- **3D particles** — GPU-first `renderer.particles`: emitters, atlas animation, turbulence, additive/alpha materials, and per-material `drawIndirect` batching
 
 ## Usage
 
@@ -240,9 +242,13 @@ from `'murow'`.
 - `WebGPU3DRenderer.createMaterial(spec)` — `standard` (lit), `unlit`, `emissive`, and custom `shader` materials; returns a typed `MaterialHandle<U>` (`slot`, `uniforms`, `setTexture`, `destroy`)
 - `MaterialSpec` / `EngineMaterialSpec` / `ShaderMaterialSpec` / `BlendMode` / `CullMode` — material spec types, exported from `murow/webgpu`
 
+### Camera effects
+- [`CameraEffectStack`](./src/3d/renderer/camera-effects/stack.ts) — off-screen targets + ping-pong fullscreen passes
+- `CameraEffect` / `CameraEffectList` / `CameraEffectSpec` — the `renderer.camera.effects` API (`add`/`set`/`remove`), built-in + custom shader effects
+
 ### Camera
 - [`Camera2D`](./src/camera/camera-2d.ts) — Orthographic camera with pan/zoom
-- [`Camera3D`](./src/camera/camera-3d.ts) — Perspective camera with FPS controls
+- [`Camera3D`](./src/camera/camera-3d.ts) — Perspective camera with FPS controls and `effects`
 
 ### Animation
 - [`MorphAnimation`](./src/3d/morph-animation.ts) — Morph target animation (GPU buffer write path)
@@ -251,7 +257,8 @@ from `'murow'`.
 
 ### Utilities
 - [`SpriteAccessor`](./src/2d/sprite-accessor.ts) — Direct buffer access for sprites
-- [`ParticleEmitter`](./src/particle/emitter.ts) — CPU particle system
+- [`ParticleEmitter`](./src/particle/emitter.ts) — CPU 2D particle system
+- [`ParticleSystem3D`](./src/3d/particles/particle-system-3d.ts) — GPU-first 3D particles (`renderer.particles`)
 - [`Spritesheet`](./src/spritesheet/spritesheet.ts) — GPU-bound texture atlas (built from a parsed bucket prefab)
 - `d` / `std` — TypeGPU data types and standard library (re-exported)
 
