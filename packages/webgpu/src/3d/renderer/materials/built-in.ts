@@ -2,6 +2,7 @@ import { tgpu, d, std } from '../../../shaders/typegpu';
 import { attachShaderMetadata } from '../../../shaders/runtime-transpile';
 import { lightContribution, tonemap } from '../../../shaders/utils';
 import { createTexturedMeshVertex, type MeshDataLayout } from '../../shader';
+import { ShadowUniforms } from '../shadows';
 
 /**
  * Uniform block shared by all engine-provided materials. f32-only to keep the
@@ -18,7 +19,8 @@ export const EngineMaterialUniforms = d.struct({
     uvScaleV: d.f32,
     uvOffsetU: d.f32,
     uvOffsetV: d.f32,
-    _pad0: d.f32,
+    /** 0 = ignore the shadow map, 1 = sample it. */
+    receiveShadow: d.f32,
     _pad1: d.f32,
 });
 
@@ -27,6 +29,9 @@ export function createEngineMaterialLayout() {
         material: { uniform: EngineMaterialUniforms },
         map: { texture: 'float' },
         mapSampler: { sampler: 'filtering' },
+        shadow: { uniform: ShadowUniforms },
+        shadowMap: { texture: 'float' },
+        shadowSampler: { sampler: 'filtering' },
     });
 }
 
@@ -63,11 +68,61 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
 
         const lightDir = std.normalize(d.vec3f(u.lightDirX, u.lightDirY, u.lightDirZ));
         const diff = std.max(std.dot(normal, lightDir), 0.0) * u.lightDirIntensity;
+        // `let`: the shadow branch below may attenuate this.
+        let direct = std.mul(d.vec3f(u.lightDirR, u.lightDirG, u.lightDirB), diff);
+
+        // Directional shadow (PCF). Uniform-gated so disabled materials/globals
+        // skip sampling entirely. Taps are unrolled with explicitly f32-typed
+        // offsets: numeric literals would otherwise infer i32.
+        const shU = matLayout.$.shadow;
+        if (m.receiveShadow > 0.5 && shU.params.x > 0.5) {
+            // Normal-offset bias: push the sample point toward the light along
+            // the surface normal, scaled by the grazing angle.
+            const ndl = std.saturate(std.dot(normal, lightDir));
+            const noff = shU.texelWorldSize * (1.0 - ndl) * 1.5;
+            const sp = d.vec3f(
+                worldPos.x + normal.x * noff,
+                worldPos.y + normal.y * noff,
+                worldPos.z + normal.z * noff,
+            );
+            const lp = std.mul(shU.viewProjection, d.vec4f(sp.x, sp.y, sp.z, 1.0));
+            const ndc = d.vec3f(lp.x / lp.w, lp.y / lp.w, lp.z / lp.w);
+            const suv = d.vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+            const sDepth = ndc.z * 0.5 + 0.5 - shU.params.y;
+            const t = shU.params.z * shU.params.w;
+            const one = d.f32(1.0);
+            const zero = d.f32(0.0);
+            const xn = d.f32(-1.0);
+            const xz = d.f32(0.0);
+            const xp = d.f32(1.0);
+            const s00 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xn), t))).x;
+            const s10 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xz, xn), t))).x;
+            const s20 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xn), t))).x;
+            const s01 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xz), t))).x;
+            const s11 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xz, xz), t))).x;
+            const s21 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xz), t))).x;
+            const s02 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xp), t))).x;
+            const s12 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xz, xp), t))).x;
+            const s22 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xp), t))).x;
+            // select(falseValue, trueValue, cond): 1 when this tap is occluded.
+            const occ = std.select(zero, one, sDepth > s00)
+                + std.select(zero, one, sDepth > s10)
+                + std.select(zero, one, sDepth > s20)
+                + std.select(zero, one, sDepth > s01)
+                + std.select(zero, one, sDepth > s11)
+                + std.select(zero, one, sDepth > s21)
+                + std.select(zero, one, sDepth > s02)
+                + std.select(zero, one, sDepth > s12)
+                + std.select(zero, one, sDepth > s22);
+            const inside = std.select(zero, one, suv.x >= 0.0) * std.select(zero, one, suv.x <= 1.0)
+                * std.select(zero, one, suv.y >= 0.0) * std.select(zero, one, suv.y <= 1.0);
+            direct = std.mul(direct, 1.0 - (occ / 9.0) * inside);
+        }
 
         let acc = d.vec3f(
-            baseColor.x * (u.ambientR + u.lightDirR * diff),
-            baseColor.y * (u.ambientG + u.lightDirG * diff),
-            baseColor.z * (u.ambientB + u.lightDirB * diff),
+            baseColor.x * (u.ambientR + direct.x),
+            baseColor.y * (u.ambientG + direct.y),
+            baseColor.z * (u.ambientB + direct.z),
         );
 
         const count = u.lightCount;

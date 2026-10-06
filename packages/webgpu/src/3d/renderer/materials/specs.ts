@@ -43,6 +43,15 @@ export interface MaterialRenderState {
 export interface MaterialSpecBase extends MaterialRenderState {
     /** Optional debug label. */
     readonly id?: string;
+    /**
+     * Shadow participation. `cast` adds the geometry to the shadow map;
+     * `receive` samples it in the fragment. Both default to `true` for opaque
+     * engine materials. Transparent materials never cast.
+     */
+    readonly shadow?: {
+        readonly cast?: boolean;
+        readonly receive?: boolean;
+    };
 }
 
 export interface EngineMaterialSpec extends MaterialSpecBase {

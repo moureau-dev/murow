@@ -26,6 +26,7 @@ import {
 import { LightSystem, type LightSpec } from './lights';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { MaterialLibrary, type MaterialHandle } from './materials';
+import { ShadowSystem, type ShadowDrawBatch } from './shadows';
 import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
 import { CameraEffectStack } from './camera-effects/stack';
@@ -181,6 +182,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     // the renderer owns only the GPU buffer it packs into each frame.
     private lights = new LightSystem(MAX_LIGHTS);
     private materials!: MaterialLibrary;
+    private shadowSystem!: ShadowSystem;
+    private readonly shadowBatches: ShadowDrawBatch[] = [];
+    /** Caster slot indices for the shadow pass (all live instances). */
+    private shadowSlots!: Uint32Array<ArrayBuffer>;
 
     readonly camera: Camera3D;
     readonly raycast: WebGPURaycast3D;
@@ -310,6 +315,14 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.cameraEffects = new CameraEffectStack({ root: this.root, format: this.format, maxEffects: this.maxCameraEffects });
         this.cameraEffects.setDepth(this.pipelines.depthTexture.createView(), this.pipelines.depthSampler, this.camera.near, this.camera.far);
 
+        this.shadowSystem = new ShadowSystem({
+            root: this.root,
+            dynamicBuffer: this.pipelines.rawDynamicBuffer,
+            staticBuffer: this.pipelines.rawStaticBuffer,
+            maxInstances: this.maxInstances,
+        }, { resolution: (this.options as WebGPU3DRendererOptions).shadowResolution ?? 2048 });
+        this.shadowSlots = new Uint32Array(this.maxInstances);
+
         this.textures = new TextureRegistry(this.device, this.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
         this.textures.initWhiteFallback();
         if (this._assets) {
@@ -336,8 +349,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             textures: this.textures,
             meshLayout: this.pipelines.meshLayout,
             skinnedLayout: this.pipelines.skinnedMeshLayout,
+            shadow: this.shadowSystem,
             maxMaterials: (this.options as WebGPU3DRendererOptions).maxMaterials ?? 64,
         });
+        // Changing `renderer.shadows.resolution` rebinds every material.
+        this.shadowSystem.setResolutionHook(() => this.materials.rebuildBindGroups());
 
         this.animation = new SkeletalRuntime({
             root: this.root,
@@ -546,6 +562,24 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     /** Number of live dynamic lights. */
     get lightCount(): number {
         return this.lights.count;
+    }
+
+    /**
+     * Directional shadow controls. Mutate the returned object directly:
+     * `renderer.shadows.enabled = false`, `.softness`, `.bias`, `.distance`.
+     * Changing `.resolution` rebuilds the map; call `renderer.resizeShadows()`
+     * afterwards to rebind materials.
+     */
+    get shadows(): ShadowSystem {
+        return this.shadowSystem;
+    }
+
+    /**
+     * Change the shadow map resolution and rebind materials to the new map.
+     * Alias for assigning `renderer.shadows.resolution`.
+     */
+    setShadowResolution(resolution: number): void {
+        this.shadowSystem.resolution = resolution;
     }
 
     /** Create a flat grid mesh on the XZ plane at Y=0. */
@@ -1081,6 +1115,30 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         // Flush queued particle spawns and advance the pool once per frame.
         this.particles.simulate(frameDelta);
         const encoder = this.device.createCommandEncoder();
+
+        // Directional shadow pass: render casters from the sun before the main pass.
+        // Box fitted around the camera position (snapped to texels).
+        this.shadowSystem.update(this.lights.sunDirection, this.camera.position, alpha);
+        if (this.shadowSystem.enabled) {
+            // Casters come from every live instance, not the camera-culled set,
+            // so a caster behind the camera still casts into view.
+            const sb = this.shadowBatches;
+            sb.length = 0;
+            const slots = this.shadowSlots;
+            let slotCount = 0;
+            this.instances.batcher.each((modelId, instances, count, key) => {
+                const materialId = (key / SparseBatcher.MAX_SHEETS) | 0;
+                if (materialId > 0) {
+                    const m = this.materials.get(materialId);
+                    if (!m || m.transparent || !this.materials.casts(materialId)) return;
+                }
+                const offset = slotCount;
+                for (let i = 0; i < count; i++) slots[slotCount++] = instances[i]!;
+                sb.push({ modelId, offset, count });
+            });
+            this.shadowSystem.setSlots(slots, slotCount);
+            this.shadowSystem.encode(encoder, sb, (id) => this.models.get(id) as any);
+        }
 
         const pass = encoder.beginRenderPass({
             colorAttachments: [{

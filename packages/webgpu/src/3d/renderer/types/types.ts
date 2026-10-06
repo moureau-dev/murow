@@ -95,6 +95,8 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
     maxParticleMaterials?: number;
     /** Max live particle emitters. Defaults to 64. */
     maxParticleEmitters?: number;
+    /** Directional shadow map resolution (square). Defaults to 2048. */
+    shadowResolution?: number;
     /**
      * Development diagnostics. `true` routes warnings to the console with a
      * `[murow]` prefix; pass a `Logger` to route them yourself.

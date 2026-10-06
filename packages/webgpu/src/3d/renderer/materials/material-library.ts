@@ -6,6 +6,8 @@ import { lightContribution, tonemap } from '../../../shaders/utils';
 import { SlotMap } from 'murow/core/slot-map';
 import type { MeshPipelines } from '../pipelines/mesh-pipelines';
 import type { TextureRegistry } from '../textures';
+import type { ShadowSystem } from '../shadows';
+import { ShadowUniforms } from '../shadows';
 import { createUnlitMeshVertex, createSkinnedMeshVertex, type MeshDataLayout, type SkinnedMeshDataLayout } from '../../shader';
 import type { MaterialSpec, ResolvedRenderState } from './specs';
 import { resolveRenderState, isTransparent } from './specs';
@@ -29,6 +31,10 @@ export interface MaterialHandle<U extends UniformSchema = UniformSchema> {
     readonly slot: number;
     readonly uniforms: UniformValues<U>;
     setTexture(name: string, texture: string): void;
+    /** Runtime toggle: whether this material's geometry casts a shadow. */
+    setCastShadow(cast: boolean): void;
+    /** Runtime toggle: whether this material samples the shadow map (engine materials). */
+    setReceiveShadow(receive: boolean): void;
     destroy(): void;
 }
 
@@ -49,6 +55,8 @@ export interface MaterialLibraryDeps {
     meshLayout: MeshDataLayout;
     /** Optional skinned layout; enables skinned pipeline variants. */
     skinnedLayout?: SkinnedMeshDataLayout;
+    /** Directional shadow resources bound into every material. */
+    shadow: ShadowSystem;
     maxMaterials: number;
 }
 
@@ -59,6 +67,10 @@ interface MaterialEntry {
     mirror: Record<string, unknown>;
     textureNames: string[];
     textureIds: Record<string, string | null>;
+    /** Per-texture sampler overrides (wrap/filter), re-applied on rebind. */
+    samplerOverrides: Record<string, GPUSampler> | undefined;
+    /** Whether this material's geometry is added to the shadow map. */
+    shadowCast: boolean;
     write(): void;
 }
 
@@ -85,6 +97,24 @@ export class MaterialLibrary {
     get(materialId: number): CompiledMaterial | null {
         if (materialId <= 0) return null;
         return this.entries[materialId - 1]?.compiled ?? null;
+    }
+
+    /** Whether a material's geometry is added to the shadow map. */
+    casts(materialId: number): boolean {
+        if (materialId <= 0) return true;
+        return this.entries[materialId - 1]?.shadowCast ?? true;
+    }
+
+    /** Recreate every material bind group (call after the shadow map is resized). */
+    rebuildBindGroups(): void {
+        for (let slot = 0; slot < this.entries.length; slot++) {
+            const entry = this.entries[slot];
+            if (!entry) continue;
+            entry.compiled = {
+                ...entry.compiled,
+                bindGroup: this.createBindGroup(entry.layout, entry.buffer, entry.textureNames, entry.textureIds, entry.samplerOverrides),
+            };
+        }
     }
 
     createMaterial<U extends UniformSchema = {}>(spec: MaterialSpec): MaterialHandle<U> {
@@ -115,6 +145,12 @@ export class MaterialLibrary {
             setTexture(name, texture) {
                 self.setTexture(slot, name, texture);
             },
+            setCastShadow(cast) {
+                self.setCast(slot, cast);
+            },
+            setReceiveShadow(receive) {
+                self.setReceive(slot, receive);
+            },
             destroy() {
                 self.destroy(slot);
             },
@@ -135,7 +171,7 @@ export class MaterialLibrary {
             alphaTest: spec.alphaTest ?? 0,
             uvScaleU: uvScale[0], uvScaleV: uvScale[1],
             uvOffsetU: uvOffset[0], uvOffsetV: uvOffset[1],
-            _pad0: 0, _pad1: 0,
+            receiveShadow: (spec.shadow?.receive ?? true) ? 1 : 0, _pad1: 0,
         };
         buffer.write(mirror);
 
@@ -160,7 +196,10 @@ export class MaterialLibrary {
         });
         const skinnedPipeline = this.buildEngineSkinnedPipeline(spec, layout, state);
         const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds, samplerOverrides);
-        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, write: () => buffer.write(mirror as never) };
+        // Alpha-tested geometry would cast a solid rectangle (the shadow pass
+        // ignores the alpha texture), so it does not cast unless asked.
+        const shadowCast = (spec.shadow?.cast ?? (spec.alphaTest ?? 0) <= 0) && !isTransparent(state);
+        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides, shadowCast, write: () => buffer.write(mirror as never) };
     }
 
     private createShaderMaterial(slot: number, spec: Extract<MaterialSpec, { type: 'shader' }>, state: ResolvedRenderState): MaterialEntry {
@@ -174,6 +213,9 @@ export class MaterialLibrary {
             bindings[name] = { texture: 'float' };
             bindings[`${name}Sampler`] = { sampler: 'filtering' };
         }
+        bindings.shadow = { uniform: ShadowUniforms };
+        bindings.shadowMap = { texture: 'float' };
+        bindings.shadowSampler = { sampler: 'filtering' };
         const layout = tgpu.bindGroupLayout(bindings as any);
 
         const { vertex, fragment } = this.compileDeclarative(spec, this.deps.meshLayout, layout, textureNames);
@@ -208,7 +250,8 @@ export class MaterialLibrary {
         });
         const skinnedPipeline = this.buildShaderSkinnedPipeline(spec, layout, state, textureNames);
         const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds);
-        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, write: writeMirror };
+        const shadowCast = (spec.shadow?.cast ?? true) && !isTransparent(state);
+        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides: undefined, shadowCast, write: writeMirror };
     }
 
     private compileDeclarative(spec: Extract<MaterialSpec, { type: 'shader' }>, meshLayout: MeshDataLayout | SkinnedMeshDataLayout, matLayout: any, textureNames: string[], skinned = false) {
@@ -237,6 +280,9 @@ export class MaterialLibrary {
                 }
                 if (textureNames[0]) textures.sampler = (matLayout as any).$[`${textureNames[0]}Sampler`];
                 ext.textures = textures;
+                ext.shadow = (matLayout as any).$.shadow;
+                ext.shadowMap = (matLayout as any).$.shadowMap;
+                ext.shadowSampler = (matLayout as any).$.shadowSampler;
             } catch { /* outside shader */ }
             return ext;
         };
@@ -348,6 +394,9 @@ export class MaterialLibrary {
             entries.push({ binding: binding++, resource: view });
             entries.push({ binding: binding++, resource: samplerOverrides?.[name] ?? sampler });
         }
+        entries.push({ binding: binding++, resource: { buffer: this.deps.shadow.uniforms } });
+        entries.push({ binding: binding++, resource: this.deps.shadow.mapTexture });
+        entries.push({ binding: binding++, resource: this.deps.shadow.mapSampler });
         return this.deps.device.createBindGroup({
             layout: this.deps.root.unwrap(layout) as unknown as GPUBindGroupLayout,
             entries,
@@ -383,13 +432,27 @@ export class MaterialLibrary {
         return { view: white.view, sampler: white.sampler };
     }
 
+    /** Runtime toggle for a material's shadow casting. */
+    private setCast(slot: number, cast: boolean): void {
+        const entry = this.entries[slot];
+        if (entry) entry.shadowCast = cast;
+    }
+
+    /** Runtime toggle for a material's shadow receiving (engine materials only). */
+    private setReceive(slot: number, receive: boolean): void {
+        const entry = this.entries[slot];
+        if (!entry || !('receiveShadow' in entry.mirror)) return;
+        entry.mirror.receiveShadow = receive ? 1 : 0;
+        entry.write();
+    }
+
     private setTexture(slot: number, name: string, textureId: string): void {
         const entry = this.entries[slot];
         if (!entry || !(name in entry.textureIds)) return;
         entry.textureIds[name] = textureId;
         entry.compiled = {
             ...entry.compiled,
-            bindGroup: this.createBindGroup(entry.layout, entry.buffer, entry.textureNames, entry.textureIds),
+            bindGroup: this.createBindGroup(entry.layout, entry.buffer, entry.textureNames, entry.textureIds, entry.samplerOverrides),
         };
     }
 

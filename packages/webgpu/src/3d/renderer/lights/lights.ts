@@ -178,6 +178,11 @@ export class LightSystem {
         return this.slots.size;
     }
 
+    /** The global directional light direction (points from surface toward light). */
+    get sunDirection(): readonly [number, number, number] {
+        return this.dirDir;
+    }
+
     /**
      * Pack enabled lights into a dense run for upload. Disabled lights are
      * skipped so the shader loop only walks contributing lights. Returns the
