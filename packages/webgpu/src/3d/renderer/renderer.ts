@@ -308,6 +308,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         });
 
         this.cameraEffects = new CameraEffectStack({ root: this.root, format: this.format, maxEffects: this.maxCameraEffects });
+        this.cameraEffects.setDepth(this.pipelines.depthTexture.createView(), this.pipelines.depthSampler, this.camera.near, this.camera.far);
 
         this.textures = new TextureRegistry(this.device, this.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
         this.textures.initWhiteFallback();
@@ -461,6 +462,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.camera.setAspect(cssW, cssH);
 
         this.pipelines.resizeDepth(w, h);
+        if (this.cameraEffects) {
+            this.cameraEffects.setDepth(this.pipelines.depthTexture.createView(), this.pipelines.depthSampler, this.camera.near, this.camera.far);
+        }
     }
 
     /**

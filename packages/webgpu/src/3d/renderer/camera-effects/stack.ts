@@ -70,6 +70,11 @@ export class CameraEffectStack {
     private historyValid = false;
     private targetW = 0;
     private targetH = 0;
+    private depthView: GPUTextureView;
+    private depthSampler: GPUSampler;
+    private readonly fallbackDepth: GPUTexture;
+    private near = 0.1;
+    private far = 1000;
 
     /**
      * @param options Stack options. `root` is the TypeGPU root used to compile
@@ -89,10 +94,17 @@ export class CameraEffectStack {
             entries: [
                 { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
                 { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-                { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: 32 } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: 48 } },
                 { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+                { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
+                { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'non-filtering' } },
             ],
         });
+        this.depthSampler = this.device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+        this.fallbackDepth = this.device.createTexture({
+            size: [1, 1, 1], format: 'depth24plus', usage: GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.depthView = this.fallbackDepth.createView();
         const module = this.device.createShaderModule({ code: CAMERA_EFFECT_WGSL, label: 'camera-effects' });
         this.pipeline = this.device.createRenderPipeline({
             label: 'camera-effects',
@@ -236,6 +248,35 @@ export class CameraEffectStack {
         pass.end();
     }
 
+    /**
+     * Bind the scene depth texture for depth-based effects (e.g. `fog`), plus
+     * the camera near/far used to linearise it. Call on init and after resize.
+     */
+    setDepth(view: GPUTextureView, sampler: GPUSampler, near: number, far: number): void {
+        this.depthView = view;
+        this.depthSampler = sampler;
+        this.near = near;
+        this.far = far;
+        if (this.viewA && this.viewB) this.rebuildBuiltins();
+    }
+
+    private rebuildBuiltins(): void {
+        if (!this.viewA || !this.viewB || !this.historyView) return;
+        const bind = (view: GPUTextureView) => this.device.createBindGroup({
+            layout: this.layout,
+            entries: [
+                { binding: 0, resource: view },
+                { binding: 1, resource: this.sampler },
+                { binding: 2, resource: { buffer: this.uniformBuffer, offset: 0, size: 48 } },
+                { binding: 3, resource: this.historyView! },
+                { binding: 4, resource: this.depthView },
+                { binding: 5, resource: this.depthSampler },
+            ],
+        });
+        this.bindA = bind(this.viewA);
+        this.bindB = bind(this.viewB);
+    }
+
     private ensureTargets(width: number, height: number): void {
         const w = Math.max(1, width);
         const h = Math.max(1, height);
@@ -258,17 +299,7 @@ export class CameraEffectStack {
         this.historyView = this.history.createView();
         this.historyValid = false;
 
-        const bind = (view: GPUTextureView) => this.device.createBindGroup({
-            layout: this.layout,
-            entries: [
-                { binding: 0, resource: view },
-                { binding: 1, resource: this.sampler },
-                { binding: 2, resource: { buffer: this.uniformBuffer, offset: 0, size: 32 } },
-                { binding: 3, resource: this.historyView! },
-            ],
-        });
-        this.bindA = bind(this.viewA);
-        this.bindB = bind(this.viewB);
+        this.rebuildBuiltins();
         for (let i = 0; i < this.customs.length; i++) {
             const entry = this.customs[i];
             if (entry) this.rebindCustom(entry.compiled);
@@ -402,7 +433,18 @@ export class CameraEffectStack {
                 kind = 5; f[base] = effect.levels ?? 6; break;
             case 'motionBlur':
                 kind = 6; f[base] = effect.feedback ?? 0.82; break;
+            case 'fxaa':
+                kind = 8; break;
+            case 'fog': {
+                kind = 9;
+                const c = effect.color ?? [0.5, 0.6, 0.7];
+                f[base] = c[0]; f[base + 1] = c[1]; f[base + 2] = c[2];
+                f[base + 3] = effect.density ?? 0.02;
+                break;
+            }
         }
+        f[base + 8] = this.near;
+        f[base + 9] = this.far;
         this.stagingU32[base + 7] = kind;
     }
 
@@ -411,6 +453,8 @@ export class CameraEffectStack {
         const base = index * SLOT_FLOATS;
         this.staging[base] = 0; this.staging[base + 1] = 0;
         this.staging[base + 2] = 0; this.staging[base + 3] = 0;
+        this.staging[base + 8] = this.near;
+        this.staging[base + 9] = this.far;
         this.stagingU32[base + 7] = 7;
     }
 }

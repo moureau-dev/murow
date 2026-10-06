@@ -25,12 +25,16 @@ struct EffectU {
   resX: f32,
   resY: f32,
   kind: u32,
+  near: f32,
+  far: f32,
 };
 
 @group(0) @binding(0) var srcTex: texture_2d<f32>;
 @group(0) @binding(1) var srcSamp: sampler;
 @group(0) @binding(2) var<uniform> u: EffectU;
 @group(0) @binding(3) var histTex: texture_2d<f32>;
+@group(0) @binding(4) var depthTex: texture_depth_2d;
+@group(0) @binding(5) var depthSamp: sampler;
 
 @vertex fn vs(@builtin(vertex_index) i: u32) -> VSOut {
   var verts = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
@@ -104,6 +108,13 @@ struct EffectU {
     let lumaB = dot(b, luma);
     let useB = lumaB < lumaMin || lumaB > lumaMax;
     c = vec4f(select(a, b, useB), c.a);
+  } else if (u.kind == 9u) {
+    // depth fog: params = [colorR, colorG, colorB, density]
+    let raw = textureSample(depthTex, depthSamp, in.uv);
+    let ndc = raw * 2.0 - 1.0;
+    let lin = (2.0 * u.near * u.far) / (u.far + u.near - ndc * (u.far - u.near));
+    let f = 1.0 - exp(-lin * u.params.w);
+    c = vec4f(mix(c.rgb, u.params.rgb, f), c.a);
   }
   // kind 7 = copy (identity), used to present the final off-screen result.
 

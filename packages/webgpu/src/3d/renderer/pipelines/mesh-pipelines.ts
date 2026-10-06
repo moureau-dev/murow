@@ -45,6 +45,7 @@ export class MeshPipelines {
     skinnedMeshLayout!: SkinnedMeshDataLayout;
 
     depthTexture!: GPUTexture;
+    depthSampler!: GPUSampler;
 
     dynamicBuffer!: TgpuBuffer<any>;
     staticBuffer!: TgpuBuffer<any>;
@@ -86,8 +87,9 @@ export class MeshPipelines {
         this.depthTexture = device.createTexture({
             size: [opts.width, opts.height],
             format: 'depth24plus',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
+        this.depthSampler = device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
 
         this.meshLayout = createMeshLayout(maxInstances);
 
@@ -306,7 +308,7 @@ export class MeshPipelines {
         this.depthTexture = this.device.createTexture({
             size: [width, height],
             format: 'depth24plus',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
     }
 

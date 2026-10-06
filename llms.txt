@@ -3116,7 +3116,7 @@ renderer.camera.effects.remove(blur);
 for (const e of renderer.camera.effects.all('fxaa')) e.enabled = false;  // read back by type (array; a chain may hold several)
 ```
 
-- Built-ins: `vignette`, `grade` (saturation/contrast/brightness), `grayscale`, `chromatic`, `scanlines`, `posterize`, `motionBlur` (temporal accumulation), `fxaa` (anti-aliasing).
+- Built-ins: `vignette`, `grade` (saturation/contrast/brightness), `grayscale`, `chromatic`, `scanlines`, `posterize`, `motionBlur` (temporal accumulation), `fxaa` (anti-aliasing), `fog` (exponential depth fog; the built-in effect library can sample scene depth via bindings 4/5 and camera `near`/`far`).
 - Custom: `new CameraEffect({ type: 'shader', fragment, uniforms?, defaultUniforms? })`. The fragment gets `input.vUV`, `textures.src`/`textures.sampler`, `material.<name>`, `scene.time`/`scene.resolutionX/Y`, and `history`; retune via `effect.params`. Chain capacity = `maxCameraEffects` (default 20).
 
 ### Particles (2D)

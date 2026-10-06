@@ -23,6 +23,8 @@ export type CameraEffectSpec =
     | { readonly type: 'motionBlur'; readonly feedback?: number }
     /** Fast approximate anti-aliasing (Lottes FXAA). */
     | { readonly type: 'fxaa' }
+    /** Exponential depth fog. */
+    | { readonly type: 'fog'; readonly color?: readonly [number, number, number]; readonly density?: number }
     | CustomCameraEffectSpec;
 
 /**
@@ -55,6 +57,8 @@ export class CameraEffect {
     speed?: number;
     levels?: number;
     feedback?: number;
+    color?: readonly [number, number, number];
+    density?: number;
     fragment?: CustomCameraEffectSpec['fragment'];
     uniforms?: CustomCameraEffectSpec['uniforms'];
     defaultUniforms?: CustomCameraEffectSpec['defaultUniforms'];
