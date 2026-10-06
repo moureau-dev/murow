@@ -205,6 +205,10 @@ export class ParticleSystem3D {
     private totalSpawned = 0;
     private pending = 0;
     private time = 0;
+    /** Global spawn-rate multiplier for quality scaling (0 stops spawning). */
+    private _rateScale = 1;
+    /** Global particle size multiplier for quality scaling. */
+    private _sizeScale = 1.1;
 
     constructor(options: ParticleSystem3DOptions) {
         const { root, format } = options;
@@ -456,6 +460,25 @@ export class ParticleSystem3D {
         return this.totalSpawned;
     }
 
+    /**
+     * Global spawn-rate multiplier, applied to every emitter. Lower it (e.g.
+     * `0.5`) for weaker configurations; `0` stops all spawning. Default 1.
+     */
+    get rateScale(): number {
+        return this._rateScale;
+    }
+    set rateScale(value: number) {
+        this._rateScale = Math.max(0, value);
+    }
+
+    /** Global particle size multiplier, for quality scaling. Default 1.1. */
+    get sizeScale(): number {
+        return this._sizeScale;
+    }
+    set sizeScale(value: number) {
+        this._sizeScale = Math.max(0, value);
+    }
+
     /** Register an emitter and return its live handle. */
     addEmitter(options: ParticleEmitter3DOptions = {}): ParticleEmitter3D {
         const emitter: ParticleEmitter3D = {
@@ -512,7 +535,7 @@ export class ParticleSystem3D {
         f.set(viewProj, 0);
         f[16] = right[0]!; f[17] = right[1]!; f[18] = right[2]!; f[19] = 1;
         f[20] = up[0]!; f[21] = up[1]!; f[22] = up[2]!; f[23] = 0;
-        f[24] = 0; f[25] = 0; f[26] = 0; f[27] = 1.1;   // sizeScale
+        f[24] = 0; f[25] = 0; f[26] = 0; f[27] = this._sizeScale;   // sizeScale
         f[28] = this.totalSpawned; f[29] = 0; f[30] = 0; f[31] = 0;
         this.device.queue.writeBuffer(this.renderFrame, 0, f);
 
@@ -586,7 +609,7 @@ export class ParticleSystem3D {
     }
 
     private emitFrom(emitter: ParticleEmitter3D, deltaTime: number): void {
-        emitter.budget += emitter.rate * deltaTime;
+        emitter.budget += emitter.rate * this._rateScale * deltaTime;
         let n = Math.floor(emitter.budget);
         if (n <= 0) return;
         if (this.pending + n > this.maxSpawns) n = this.maxSpawns - this.pending;
