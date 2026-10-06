@@ -4,7 +4,7 @@ import { attachShaderMetadata } from '../../shaders/runtime-transpile';
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotMap } from 'murow/core/slot-map';
-import type { RendererLogger } from 'murow/renderer';
+import { Logger } from 'murow/core';
 import { PARTICLE_3D_STRIDE, PARTICLE_3D_FRAME_FLOATS } from './shaders';
 
 /** Per-particle GPU record. Must match the raw WGSL `Particle` layout exactly. */
@@ -153,11 +153,9 @@ export interface ParticleSystem3DOptions {
     /** Resolves a material texture id to a GPU view + sampler. */
     resolveTexture?: (id: string) => { view: GPUTextureView; sampler: GPUSampler } | undefined;
     /** Diagnostic logger for non-fatal warnings. Defaults to a no-op. */
-    logger?: RendererLogger;
+    logger?: Logger;
 }
 
-/** No-op logger used when none is supplied. */
-const NOOP_LOGGER: RendererLogger = { warn() {} };
 
 interface ParticleMaterial {
     key: string;
@@ -188,7 +186,7 @@ export class ParticleSystem3D {
     private readonly maxMaterials: number;
     private readonly maxEmitters: number;
     private readonly resolveTexture: ((id: string) => { view: GPUTextureView; sampler: GPUSampler } | undefined) | undefined;
-    private readonly logger: RendererLogger;
+    private readonly logger: Logger;
     private readonly pool: TgpuBuffer<any>;
     private readonly spawns: TgpuBuffer<any>;
     private readonly computeFrame: TgpuBuffer<any>;
@@ -240,7 +238,7 @@ export class ParticleSystem3D {
         this.maxMaterials = options.maxMaterials ?? 16;
         this.maxEmitters = options.maxEmitters ?? 64;
         this.resolveTexture = options.resolveTexture;
-        this.logger = options.logger ?? NOOP_LOGGER;
+        this.logger = options.logger ?? Logger.none;
         this.materialSlots = new SlotMap(this.maxMaterials);
         this.materials = new Array(this.maxMaterials).fill(null);
         this.emitterSlots = new SlotMap(this.maxEmitters);

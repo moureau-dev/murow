@@ -12,6 +12,7 @@ export * from './clock';
 export * from './timeline';
 export * from './input';
 export * from './audio';
+export * from './logger';
 export * from './free-list';
 export * from './sparse-batcher';
 export * from './slot-map';

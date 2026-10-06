@@ -8,12 +8,12 @@ import type {
     Prefab3DSpec,
     Prefab3D,
     TexturePrefab,
-    RendererLogger,
     Raycast as RaycastBase,
     RaycastMemo as RaycastMemoBase,
     RaycastHit as RaycastHitBase,
     RaycastOptions as RaycastOptionsBase,
 } from 'murow/renderer';
+import type { Logger } from 'murow/core';
 import type { Handles } from '../handles';
 import type { MaterialHandle } from '../materials';
 
@@ -97,9 +97,9 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
     maxParticleEmitters?: number;
     /**
      * Development diagnostics. `true` routes warnings to the console with a
-     * `[murow]` prefix; pass a `RendererLogger` to route them yourself.
+     * `[murow]` prefix; pass a `Logger` to route them yourself.
      */
-    debug?: boolean | RendererLogger;
+    debug?: boolean | Logger;
     /**
      * Pre-loaded AssetBucket. When provided, the renderer uploads every
      * prefab (glTF, grid, cube, plane) and texture to the GPU during
