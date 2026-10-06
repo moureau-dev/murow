@@ -16,6 +16,7 @@ const Particle3D = d.struct({
     grow: d.f32,
     rot: d.f32,
     spin: d.f32,
+    turb: d.f32,
 });
 
 /** Frame data shared by the spawn + integrate compute kernels. */
@@ -90,6 +91,8 @@ export interface ParticleEmitter3DOptions {
     grow?: number;
     /** Sprite spin in radians/second (randomised direction). Default 0. */
     spin?: number;
+    /** Turbulence (sinusoidal swirl) strength, world units/s^2. Default 0. */
+    turbulence?: number;
     /** Particle material (texture + blend). Defaults to a soft additive disc. */
     material?: ParticleMaterialSpec;
     /** Per-emitter RNG seed. Default 1. */
@@ -117,6 +120,7 @@ export interface ParticleEmitter3D {
     spawnRadius: number;
     grow: number;
     spin: number;
+    turbulence: number;
     /** @internal Material index into the system's material table. */
     material: number;
     /** @internal Fractional spawn budget carried between updates. */
@@ -194,6 +198,7 @@ export class ParticleSystem3D {
     private head = 0;
     private totalSpawned = 0;
     private pending = 0;
+    private time = 0;
 
     constructor(options: ParticleSystem3DOptions) {
         const { root, format } = options;
@@ -248,6 +253,7 @@ export class ParticleSystem3D {
                 particles[slot].grow = src.grow;
                 particles[slot].rot = src.rot;
                 particles[slot].spin = src.spin;
+                particles[slot].turb = src.turb;
             })
             .build();
 
@@ -265,9 +271,12 @@ export class ParticleSystem3D {
                 const dt = frame.params.x;
                 // @ts-ignore — TGSL uniform struct access
                 const drag = frame.params.z;
-                const vx = (p.vx + p.gx * dt) * drag;
-                const vy = (p.vy + p.gy * dt) * drag;
-                const vz = (p.vz + p.gz * dt) * drag;
+                // @ts-ignore — TGSL uniform struct access
+                const time = frame.params.y;
+                const tv = p.turb * dt;
+                const vx = (p.vx + p.gx * dt) * drag + std.sin(p.py * 2.1 + time * 0.9) * tv;
+                const vy = (p.vy + p.gy * dt) * drag + std.sin(p.pz * 2.3 - time * 0.7) * tv;
+                const vz = (p.vz + p.gz * dt) * drag + std.sin(p.px * 2.0 + time * 1.1) * tv;
                 const age = p.age + dt;
                 particles[i].px = p.px + vx * dt;
                 particles[i].py = p.py + vy * dt;
@@ -451,6 +460,7 @@ export class ParticleSystem3D {
             spawnRadius: options.spawnRadius ?? 0,
             grow: options.grow ?? 1,
             spin: options.spin ?? 0,
+            turbulence: options.turbulence ?? 0,
             material: this.materialIndex(options.material),
             budget: 0,
             rng: new SimpleRNG(options.seed ?? 1),
@@ -589,8 +599,9 @@ export class ParticleSystem3D {
                 this.spawnStaging.buffer, 0, spawnCount * PARTICLE_3D_STRIDE * 4,
             );
         }
+        this.time += deltaTime;
         this.computeFrameF32[0] = deltaTime;
-        this.computeFrameF32[1] = 0;
+        this.computeFrameF32[1] = this.time;
         this.computeFrameF32[2] = 0.985;
         this.computeFrameF32[3] = 0;
         this.computeFrameU32[4] = this.head;
@@ -652,6 +663,7 @@ export class ParticleSystem3D {
         s[base + 17] = em.grow;
         s[base + 18] = rng.rand() * Math.PI * 2;
         s[base + 19] = em.spin * (rng.rand() * 2 - 1);
+        s[base + 20] = em.turbulence;
     }
 }
 
