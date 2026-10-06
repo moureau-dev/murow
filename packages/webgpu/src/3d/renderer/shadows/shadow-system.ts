@@ -1,7 +1,7 @@
 import type { TgpuRoot } from 'typegpu';
 import { tgpu, d, std } from '../../../shaders/typegpu';
 import { attachShaderMetadata } from '../../../shaders/runtime-transpile';
-import { DynamicMesh, StaticMesh } from '../../../core/types';
+import { DynamicMesh, SkinnedStaticMesh, StaticMesh } from '../../../core/types';
 
 /** Light-space matrix + tunables, shared by the shadow pass and receivers. */
 export const ShadowUniforms = d.struct({
@@ -21,6 +21,15 @@ export interface ShadowSystemDeps {
     dynamicBuffer: GPUBuffer;
     staticBuffer: GPUBuffer;
     maxInstances: number;
+    /** Skinned buffers; enables skinned casters when provided. */
+    skinned?: {
+        dynamicBuffer: GPUBuffer;
+        staticBuffer: GPUBuffer;
+        boneBuffer: GPUBuffer;
+        maxInstances: number;
+        maxBones: number;
+        vertexBufferLayout: GPUVertexBufferLayout;
+    };
 }
 
 export interface ShadowOptions {
@@ -75,6 +84,9 @@ export class ShadowSystem {
     private readonly layout: ReturnType<typeof createShadowLayout>;
     private readonly pipeline: GPURenderPipeline;
     private readonly bindGroup: GPUBindGroup;
+    private readonly skinnedSlotIndexBuffer: GPUBuffer | null;
+    private readonly skinnedPipeline: GPURenderPipeline | null;
+    private readonly skinnedBindGroup: GPUBindGroup | null;
     private resolutionHook: (() => void) | null = null;
 
     constructor(deps: ShadowSystemDeps, options: ShadowOptions = {}) {
@@ -141,6 +153,41 @@ export class ShadowSystem {
                 { binding: 3, resource: { buffer: this.slotIndexBuffer } },
             ],
         });
+
+        if (deps.skinned) {
+            const s = deps.skinned;
+            this.skinnedSlotIndexBuffer = this.device.createBuffer({
+                size: Math.max(4, s.maxInstances * 4),
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            });
+            const skinnedLayout = createSkinnedShadowLayout(s.maxInstances, s.maxBones);
+            const skinnedVertex = createSkinnedShadowVertex(skinnedLayout);
+            const { code: skinnedCode } = tgpu.resolveWithContext([skinnedVertex, createShadowFragment()]);
+            const skinnedModule = this.device.createShaderModule({ code: skinnedCode, label: 'shadow-skinned' });
+            const skinnedBgl = this.root.unwrap(skinnedLayout) as unknown as GPUBindGroupLayout;
+            this.skinnedPipeline = this.device.createRenderPipeline({
+                label: 'shadow-skinned',
+                layout: this.device.createPipelineLayout({ bindGroupLayouts: [skinnedBgl] }),
+                vertex: { module: skinnedModule, buffers: [s.vertexBufferLayout] },
+                fragment: { module: skinnedModule, targets: [{ format: 'rgba16float' }] },
+                primitive: { topology: 'triangle-list', cullMode: 'none' },
+                depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
+            });
+            this.skinnedBindGroup = this.device.createBindGroup({
+                layout: skinnedBgl,
+                entries: [
+                    { binding: 0, resource: { buffer: this.uniformBuffer } },
+                    { binding: 1, resource: { buffer: s.dynamicBuffer } },
+                    { binding: 2, resource: { buffer: s.staticBuffer } },
+                    { binding: 3, resource: { buffer: this.skinnedSlotIndexBuffer } },
+                    { binding: 4, resource: { buffer: s.boneBuffer } },
+                ],
+            });
+        } else {
+            this.skinnedSlotIndexBuffer = null;
+            this.skinnedPipeline = null;
+            this.skinnedBindGroup = null;
+        }
     }
 
     /**
@@ -209,8 +256,15 @@ export class ShadowSystem {
         if (count > 0) this.device.queue.writeBuffer(this.slotIndexBuffer, 0, slots, 0, count);
     }
 
+    /** Upload the skinned caster slot indices for this frame. */
+    setSkinnedSlots(slots: Uint32Array<ArrayBuffer>, count: number): void {
+        if (count > 0 && this.skinnedSlotIndexBuffer) {
+            this.device.queue.writeBuffer(this.skinnedSlotIndexBuffer, 0, slots, 0, count);
+        }
+    }
+
     /** Encode the shadow pass into `encoder` (before the main pass). */
-    encode(encoder: GPUCommandEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined): void {
+    encode(encoder: GPUCommandEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined, skinnedBatches: ShadowDrawBatch[] = []): void {
         if (!this.enabled) return;
         const pass = encoder.beginRenderPass({
             colorAttachments: [{
@@ -228,6 +282,23 @@ export class ShadowSystem {
         });
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.bindGroup);
+        this.drawBatches(pass, batches, getModel);
+        pass.end();
+
+        // Skinned casters into the same map (load the cleared depth/color).
+        if (skinnedBatches.length > 0 && this.skinnedPipeline && this.skinnedBindGroup) {
+            const spass = encoder.beginRenderPass({
+                colorAttachments: [{ view: this.mapView, loadOp: 'load', storeOp: 'store' }],
+                depthStencilAttachment: { view: this.depthView, depthLoadOp: 'load', depthStoreOp: 'store' },
+            });
+            spass.setPipeline(this.skinnedPipeline);
+            spass.setBindGroup(0, this.skinnedBindGroup);
+            this.drawBatches(spass, skinnedBatches, getModel);
+            spass.end();
+        }
+    }
+
+    private drawBatches(pass: GPURenderPassEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined): void {
         let current: GPUBuffer | null = null;
         for (const batch of batches) {
             const model = getModel(batch.modelId);
@@ -243,7 +314,6 @@ export class ShadowSystem {
                 pass.draw(model.vertexCount, batch.count, 0, batch.offset);
             }
         }
-        pass.end();
     }
 
     /** Rebuild the shadow map at a new resolution. Invalidates receiver bind groups. */
@@ -264,6 +334,7 @@ export class ShadowSystem {
         this.depth.destroy();
         this.uniformBuffer.destroy();
         this.slotIndexBuffer.destroy();
+        this.skinnedSlotIndexBuffer?.destroy();
     }
 
     private createTargets(res: number): { map: GPUTexture; mapView: GPUTextureView; depth: GPUTexture } {
@@ -350,6 +421,101 @@ function createShadowFragment() {
     };
     attachShaderMetadata(fn as any, () => ({ d, std }), false, { d, std });
     return tgpu.fragmentFn({ in: { vDepth: d.f32 }, out: d.vec4f } as any)(fn as any);
+}
+
+function createSkinnedShadowLayout(maxInstances: number, maxBones: number) {
+    return tgpu.bindGroupLayout({
+        uniforms: { uniform: ShadowUniforms },
+        dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
+        staticInstances: { storage: d.arrayOf(SkinnedStaticMesh, maxInstances) },
+        slotIndices: { storage: d.arrayOf(d.u32, maxInstances) },
+        boneMatrices: { storage: d.arrayOf(d.mat4x4f, maxBones) },
+    });
+}
+
+function createSkinnedShadowVertex(layout: ReturnType<typeof createSkinnedShadowLayout>) {
+    const _WS = ['d', 'std', 'layout', 'mix', 'cos', 'sin', 'mul', 'mat4x4f'];
+    const fn = function(input: {
+        position: { x: number; y: number; z: number };
+        normal: { x: number; y: number; z: number };
+        uv: { x: number; y: number };
+        joints: { x: number; y: number; z: number; w: number };
+        weights: { x: number; y: number; z: number; w: number };
+        instanceIndex: number;
+    }) {
+        const slot = layout.$.slotIndices[input.instanceIndex];
+        const dyn = layout.$.dynamicInstances[slot];
+        const stat = layout.$.staticInstances[slot];
+        const alpha = layout.$.uniforms.alpha;
+        const boneOffset = stat.boneOffset;
+
+        const j0 = input.joints.x, j1 = input.joints.y, j2 = input.joints.z, j3 = input.joints.w;
+        const w0 = input.weights.x, w1 = input.weights.y, w2 = input.weights.z, w3 = input.weights.w;
+
+        const bm = layout.$.boneMatrices;
+        const m0 = bm[(d.i32(boneOffset) + d.i32(j0))];
+        const m1 = bm[(d.i32(boneOffset) + d.i32(j1))];
+        const m2 = bm[(d.i32(boneOffset) + d.i32(j2))];
+        const m3 = bm[(d.i32(boneOffset) + d.i32(j3))];
+
+        const p = d.vec4f(input.position.x, input.position.y, input.position.z, 1.0);
+        // @ts-ignore — TGSL: matrix * vector
+        const sp0 = m0 * p as unknown as d.v4f;
+        // @ts-ignore
+        const sp1 = m1 * p as unknown as d.v4f;
+        // @ts-ignore
+        const sp2 = m2 * p as unknown as d.v4f;
+        // @ts-ignore
+        const sp3 = m3 * p as unknown as d.v4f;
+
+        const skinned = d.vec3f(
+            sp0.x * w0 + sp1.x * w1 + sp2.x * w2 + sp3.x * w3,
+            sp0.y * w0 + sp1.y * w1 + sp2.y * w2 + sp3.y * w3,
+            sp0.z * w0 + sp1.z * w1 + sp2.z * w2 + sp3.z * w3,
+        );
+
+        const px = std.mix(dyn.prevPosX, dyn.currPosX, alpha);
+        const py = std.mix(dyn.prevPosY, dyn.currPosY, alpha);
+        const pz = std.mix(dyn.prevPosZ, dyn.currPosZ, alpha);
+        const rx = std.mix(dyn.prevRotX, dyn.currRotX, alpha);
+        const ry = std.mix(dyn.prevRotY, dyn.currRotY, alpha);
+        const rz = std.mix(dyn.prevRotZ, dyn.currRotZ, alpha);
+
+        const scaled = d.vec3f(skinned.x * stat.scaleX, skinned.y * stat.scaleY, skinned.z * stat.scaleZ);
+        const czr = std.cos(rz), szr = std.sin(rz);
+        const rz1 = d.vec3f(
+            std.sub(std.mul(scaled.x, czr), std.mul(scaled.y, szr)),
+            std.add(std.mul(scaled.x, szr), std.mul(scaled.y, czr)),
+            scaled.z,
+        );
+        const cyr = std.cos(ry), syr = std.sin(ry);
+        const ry1 = d.vec3f(
+            std.add(std.mul(rz1.x, cyr), std.mul(rz1.z, syr)),
+            rz1.y,
+            std.sub(std.mul(rz1.z, cyr), std.mul(rz1.x, syr)),
+        );
+        const cxr = std.cos(rx), sxr = std.sin(rx);
+        const rx1 = d.vec3f(
+            ry1.x,
+            std.sub(std.mul(ry1.y, cxr), std.mul(ry1.z, sxr)),
+            std.add(std.mul(ry1.y, sxr), std.mul(ry1.z, cxr)),
+        );
+        const world = d.vec4f(std.add(rx1.x, px), std.add(rx1.y, py), std.add(rx1.z, pz), 1.0);
+        const clip = std.mul(layout.$.uniforms.viewProjection, world);
+        return { pos: clip, vDepth: clip.z / clip.w * 0.5 + 0.5 };
+    };
+    attachShaderMetadata(fn as any, () => ({ d, std, layout }), false, { d, std, layout }, _WS);
+    return tgpu.vertexFn({
+        in: {
+            position: d.location(0, d.vec3f),
+            normal: d.location(1, d.vec3f),
+            uv: d.location(2, d.vec2f),
+            joints: d.location(3, d.vec4u),
+            weights: d.location(4, d.vec4f),
+            instanceIndex: d.builtin.instanceIndex,
+        },
+        out: { pos: d.builtin.position, vDepth: d.f32 },
+    } as any)(fn as any);
 }
 
 /** Write `proj * view` for an orthographic box of half-extent `radius`. */

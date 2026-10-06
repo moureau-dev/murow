@@ -184,8 +184,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private materials!: MaterialLibrary;
     private shadowSystem!: ShadowSystem;
     private readonly shadowBatches: ShadowDrawBatch[] = [];
+    private readonly shadowSkinnedBatches: ShadowDrawBatch[] = [];
     /** Caster slot indices for the shadow pass (all live instances). */
     private shadowSlots!: Uint32Array<ArrayBuffer>;
+    private shadowSkinnedSlots!: Uint32Array<ArrayBuffer>;
 
     readonly camera: Camera3D;
     readonly raycast: WebGPURaycast3D;
@@ -320,8 +322,17 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             dynamicBuffer: this.pipelines.rawDynamicBuffer,
             staticBuffer: this.pipelines.rawStaticBuffer,
             maxInstances: this.maxInstances,
+            skinned: {
+                dynamicBuffer: this.pipelines.rawSkinnedDynamicBuffer,
+                staticBuffer: this.pipelines.rawSkinnedStaticBuffer,
+                boneBuffer: this.pipelines.rawBoneMatrixBuffer,
+                maxInstances: this.maxSkinnedInstances,
+                maxBones: this.maxTotalBones,
+                vertexBufferLayout: this.pipelines.skinnedVertexBufferLayout,
+            },
         }, { resolution: (this.options as WebGPU3DRendererOptions).shadowResolution ?? 2048 });
         this.shadowSlots = new Uint32Array(this.maxInstances);
+        this.shadowSkinnedSlots = new Uint32Array(this.maxSkinnedInstances);
 
         this.textures = new TextureRegistry(this.device, this.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
         this.textures.initWhiteFallback();
@@ -1137,7 +1148,28 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                 sb.push({ modelId, offset, count });
             });
             this.shadowSystem.setSlots(slots, slotCount);
-            this.shadowSystem.encode(encoder, sb, (id) => this.models.get(id) as any);
+
+            // Skinned casters (same all-instance rule).
+            const skb = this.shadowSkinnedBatches;
+            skb.length = 0;
+            const sslots = this.shadowSkinnedSlots;
+            let sSlotCount = 0;
+            this.skinned.batcher.each((modelId, instances, count) => {
+                const offset = sSlotCount;
+                for (let i = 0; i < count; i++) {
+                    const slot = instances[i]!;
+                    const mid = this.skinned.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
+                    if (mid > 0) {
+                        const m = this.materials.get(mid);
+                        if (!m || m.transparent || !this.materials.casts(mid)) continue;
+                    }
+                    sslots[sSlotCount++] = slot;
+                }
+                if (sSlotCount > offset) skb.push({ modelId, offset, count: sSlotCount - offset });
+            });
+            this.shadowSystem.setSkinnedSlots(sslots, sSlotCount);
+
+            this.shadowSystem.encode(encoder, sb, (id) => this.models.get(id) as any, skb);
         }
 
         const pass = encoder.beginRenderPass({
