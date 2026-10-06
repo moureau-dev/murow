@@ -3,6 +3,7 @@ import { tgpu, d, std } from '../../shaders/typegpu';
 import { attachShaderMetadata } from '../../shaders/runtime-transpile';
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { SimpleRNG } from 'murow/core/simple-rng';
+import { SlotMap } from 'murow/core/slot-map';
 import { PARTICLE_3D_STRIDE, PARTICLE_3D_FRAME_FLOATS } from './shaders';
 
 /** Per-particle GPU record. Must match the raw WGSL `Particle` layout exactly. */
@@ -59,6 +60,8 @@ const DrawArgs = d.struct({
 
 /** Fixed material capacity: sizes the per-material counters/indices/args. */
 const MAX_MATERIALS = 16;
+/** Fixed emitter capacity. */
+const MAX_EMITTERS = 64;
 
 export type ParticleBlend = 'additive' | 'alpha';
 
@@ -133,6 +136,8 @@ export interface ParticleEmitter3D {
     budget: number;
     /** @internal Per-emitter RNG, seeded by `ParticleEmitter3DOptions.seed`. */
     rng: SimpleRNG;
+    /** @internal Slot in the system's emitter table. */
+    slot: number;
 }
 
 export interface ParticleSystem3DOptions {
@@ -192,13 +197,15 @@ export class ParticleSystem3D {
     private readonly sampler: GPUSampler;
     private readonly additivePipeline: GPURenderPipeline;
     private readonly alphaPipeline: GPURenderPipeline;
-    private readonly materials: ParticleMaterial[] = [];
+    private readonly materialSlots = new SlotMap(MAX_MATERIALS);
+    private readonly materials: (ParticleMaterial | null)[] = new Array(MAX_MATERIALS).fill(null);
     private readonly spawnStaging: Float32Array;
     private readonly frameData = new Float32Array(PARTICLE_3D_FRAME_FLOATS);
     private readonly computeFrameData = new ArrayBuffer(32);
     private readonly computeFrameF32 = new Float32Array(this.computeFrameData);
     private readonly computeFrameU32 = new Uint32Array(this.computeFrameData);
-    private readonly emitters: ParticleEmitter3D[] = [];
+    private readonly emitterSlots = new SlotMap(MAX_EMITTERS);
+    private readonly emitters: (ParticleEmitter3D | null)[] = new Array(MAX_EMITTERS).fill(null);
     private readonly _dir = new Float32Array(3);
     private readonly _jitter = new Float32Array(3);
     private head = 0;
@@ -481,6 +488,8 @@ export class ParticleSystem3D {
 
     /** Register an emitter and return its live handle. */
     addEmitter(options: ParticleEmitter3DOptions = {}): ParticleEmitter3D {
+        const slot = this.emitterSlots.add();
+        if (slot === -1) throw new Error(`ParticleSystem3D: max emitters (${MAX_EMITTERS}) reached`);
         const emitter: ParticleEmitter3D = {
             enabled: true,
             position: options.position ?? [0, 0, 0],
@@ -499,15 +508,19 @@ export class ParticleSystem3D {
             material: this.materialIndex(options.material),
             budget: 0,
             rng: new SimpleRNG(options.seed ?? 1),
+            slot,
             update: (deltaTime: number) => this.updateEmitter(emitter, deltaTime),
         };
-        this.emitters.push(emitter);
+        this.emitters[slot] = emitter;
         return emitter;
     }
 
     removeEmitter(emitter: ParticleEmitter3D): void {
-        const i = this.emitters.indexOf(emitter);
-        if (i >= 0) this.emitters.splice(i, 1);
+        const slot = emitter.slot;
+        if (slot < 0) return;
+        this.emitterSlots.remove(slot);
+        this.emitters[slot] = null;
+        emitter.slot = -1;
     }
 
     /**
@@ -521,8 +534,10 @@ export class ParticleSystem3D {
 
     /** Spawn from every enabled emitter (queues records; see `simulate`). */
     update(deltaTime: number): void {
-        for (let e = 0; e < this.emitters.length; e++) {
-            const em = this.emitters[e]!;
+        const active = this.emitterSlots.activeSlots;
+        const size = this.emitterSlots.size;
+        for (let i = 0; i < size; i++) {
+            const em = this.emitters[active[i]!]!;
             if (em.enabled) this.emitFrom(em, deltaTime);
         }
     }
@@ -540,11 +555,14 @@ export class ParticleSystem3D {
         this.device.queue.writeBuffer(this.renderFrame, 0, f);
 
         const args = this.root.unwrap(this.args) as unknown as GPUBuffer;
-        for (let m = 0; m < this.materials.length; m++) {
-            const material = this.materials[m]!;
+        const active = this.materialSlots.activeSlots;
+        const size = this.materialSlots.size;
+        for (let i = 0; i < size; i++) {
+            const slot = active[i]!;
+            const material = this.materials[slot]!;
             pass.setPipeline(material.pipeline);
             pass.setBindGroup(0, material.bindGroup);
-            pass.drawIndirect(args, m * 16);
+            pass.drawIndirect(args, slot * 16);
         }
     }
 
@@ -553,7 +571,7 @@ export class ParticleSystem3D {
         this.spawns.destroy();
         this.computeFrame.destroy();
         this.renderFrame.destroy();
-        for (let m = 0; m < this.materials.length; m++) this.materials[m]!.buffer.destroy();
+        this.materialSlots.forEach((slot) => this.materials[slot]!.buffer.destroy());
         this.counts.destroy();
         this.indices.destroy();
         this.args.destroy();
@@ -568,14 +586,18 @@ export class ParticleSystem3D {
 
     private materialIndex(spec: ParticleMaterialSpec | undefined): number {
         const key = `${spec?.texture ?? ''}|${spec?.blend ?? 'additive'}|${spec?.atlas ? `${spec.atlas.cols}x${spec.atlas.rows}@${spec.atlas.fps}` : ''}`;
-        for (let m = 0; m < this.materials.length; m++) {
-            if (this.materials[m]!.key === key) return m;
+        const active = this.materialSlots.activeSlots;
+        const size = this.materialSlots.size;
+        for (let i = 0; i < size; i++) {
+            const slot = active[i]!;
+            if (this.materials[slot]!.key === key) return slot;
         }
         return this.createMaterial(spec ?? {});
     }
 
     private createMaterial(spec: ParticleMaterialSpec): number {
-        if (this.materials.length >= MAX_MATERIALS) {
+        const slot = this.materialSlots.add();
+        if (slot === -1) {
             throw new Error(`ParticleSystem3D: max materials (${MAX_MATERIALS}) reached`);
         }
         const blend: ParticleBlend = spec.blend ?? 'additive';
@@ -583,7 +605,7 @@ export class ParticleSystem3D {
         const useTexture = resolved ? 1 : 0;
         const view = resolved?.view ?? this.whiteView;
         const sampler = resolved?.sampler ?? this.sampler;
-        const id = this.materials.length;
+        const id = slot;
 
         const buffer = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         const atlas = spec.atlas;
@@ -599,13 +621,13 @@ export class ParticleSystem3D {
                 { binding: 5, resource: { buffer: this.root.unwrap(this.indices) as unknown as GPUBuffer } },
             ],
         });
-        this.materials.push({
-            key: `${spec.texture ?? ''}|${blend}`,
+        this.materials[slot] = {
+            key: `${spec.texture ?? ''}|${blend}|${spec.atlas ? `${spec.atlas.cols}x${spec.atlas.rows}@${spec.atlas.fps}` : ''}`,
             bindGroup,
             pipeline: blend === 'alpha' ? this.alphaPipeline : this.additivePipeline,
             buffer,
-        });
-        return id;
+        };
+        return slot;
     }
 
     private emitFrom(emitter: ParticleEmitter3D, deltaTime: number): void {
