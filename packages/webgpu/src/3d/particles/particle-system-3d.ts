@@ -4,6 +4,7 @@ import { attachShaderMetadata } from '../../shaders/runtime-transpile';
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotMap } from 'murow/core/slot-map';
+import type { RendererLogger } from 'murow/renderer';
 import { PARTICLE_3D_STRIDE, PARTICLE_3D_FRAME_FLOATS } from './shaders';
 
 /** Per-particle GPU record. Must match the raw WGSL `Particle` layout exactly. */
@@ -151,7 +152,12 @@ export interface ParticleSystem3DOptions {
     maxEmitters?: number;
     /** Resolves a material texture id to a GPU view + sampler. */
     resolveTexture?: (id: string) => { view: GPUTextureView; sampler: GPUSampler } | undefined;
+    /** Diagnostic logger for non-fatal warnings. Defaults to a no-op. */
+    logger?: RendererLogger;
 }
+
+/** No-op logger used when none is supplied. */
+const NOOP_LOGGER: RendererLogger = { warn() {} };
 
 interface ParticleMaterial {
     key: string;
@@ -182,6 +188,7 @@ export class ParticleSystem3D {
     private readonly maxMaterials: number;
     private readonly maxEmitters: number;
     private readonly resolveTexture: ((id: string) => { view: GPUTextureView; sampler: GPUSampler } | undefined) | undefined;
+    private readonly logger: RendererLogger;
     private readonly pool: TgpuBuffer<any>;
     private readonly spawns: TgpuBuffer<any>;
     private readonly computeFrame: TgpuBuffer<any>;
@@ -215,6 +222,8 @@ export class ParticleSystem3D {
     private totalSpawned = 0;
     private pending = 0;
     private time = 0;
+    private warnedPool = false;
+    private warnedSpawn = false;
     /** Global spawn-rate multiplier for quality scaling (0 stops spawning). */
     private _rateScale = 1;
     /** Global particle size multiplier for quality scaling. */
@@ -231,6 +240,7 @@ export class ParticleSystem3D {
         this.maxMaterials = options.maxMaterials ?? 16;
         this.maxEmitters = options.maxEmitters ?? 64;
         this.resolveTexture = options.resolveTexture;
+        this.logger = options.logger ?? NOOP_LOGGER;
         this.materialSlots = new SlotMap(this.maxMaterials);
         this.materials = new Array(this.maxMaterials).fill(null);
         this.emitterSlots = new SlotMap(this.maxEmitters);
@@ -644,7 +654,13 @@ export class ParticleSystem3D {
         emitter.budget += emitter.rate * this._rateScale * deltaTime;
         let n = Math.floor(emitter.budget);
         if (n <= 0) return;
-        if (this.pending + n > this.maxSpawns) n = this.maxSpawns - this.pending;
+        if (this.pending + n > this.maxSpawns) {
+            n = this.maxSpawns - this.pending;
+            if (!this.warnedSpawn) {
+                this.warnedSpawn = true;
+                this.logger.warn('particle spawn budget clamped for this frame', { maxSpawnsPerFrame: this.maxSpawns });
+            }
+        }
         if (n <= 0) {
             // Saturated this frame; drop the backlog so `budget` cannot grow forever.
             emitter.budget = 0;
@@ -691,6 +707,10 @@ export class ParticleSystem3D {
 
         this.head = (this.head + spawnCount) & this.mask;
         this.totalSpawned = Math.min(this.max, this.totalSpawned + spawnCount);
+        if (spawnCount > 0 && this.totalSpawned >= this.max && !this.warnedPool) {
+            this.warnedPool = true;
+            this.logger.warn('particle pool saturated; oldest particles are being overwritten', { maxParticles: this.max });
+        }
         this.pending = 0;
     }
 

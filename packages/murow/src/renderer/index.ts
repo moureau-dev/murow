@@ -1,6 +1,9 @@
 // Core types
 export * from "./types";
 
+// Diagnostics
+export * from "./logger";
+
 // Base renderer contracts (abstract)
 export * from "./base/renderer";
 export * from "./base/renderer-2d";

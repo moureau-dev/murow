@@ -8,6 +8,7 @@ import type {
     Prefab3DSpec,
     Prefab3D,
     TexturePrefab,
+    RendererLogger,
     Raycast as RaycastBase,
     RaycastMemo as RaycastMemoBase,
     RaycastHit as RaycastHitBase,
@@ -94,6 +95,11 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
     maxParticleMaterials?: number;
     /** Max live particle emitters. Defaults to 64. */
     maxParticleEmitters?: number;
+    /**
+     * Development diagnostics. `true` routes warnings to the console with a
+     * `[murow]` prefix; pass a `RendererLogger` to route them yourself.
+     */
+    debug?: boolean | RendererLogger;
     /**
      * Pre-loaded AssetBucket. When provided, the renderer uploads every
      * prefab (glTF, grid, cube, plane) and texture to the GPU during

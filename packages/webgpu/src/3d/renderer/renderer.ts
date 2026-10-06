@@ -29,6 +29,8 @@ import { MaterialLibrary, type MaterialHandle } from './materials';
 import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
 import { CameraEffectStack } from './camera-effects/stack';
+import { resolveRendererLogger } from './logger';
+import type { RendererLogger } from 'murow/renderer';
 import { ParticleSystem3D } from '../particles/particle-system-3d';
 import { TextureRegistry } from './textures';
 import { ResizeController } from './resize';
@@ -189,6 +191,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private elapsed = 0;
     private cameraEffects!: CameraEffectStack;
     private readonly maxCameraEffects: number;
+    private readonly logger: RendererLogger;
     private readonly _camRight = new Float32Array(3);
     private readonly _camUp = new Float32Array(3);
     /** GPU particle system. Add emitters via `renderer.particles.addEmitter(...)`. */
@@ -209,6 +212,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             ?? (options.assets ? options.assets.prefabs.size + 16 : 32);
         super(canvas, { ...options, maxInstances: resolvedMaxInstances });
         this.maxCameraEffects = options.maxCameraEffects ?? 20;
+        this.logger = resolveRendererLogger(options.debug);
         this.camera = new Camera3D({ maxEffects: this.maxCameraEffects });
         this.raycastController = new RaycastController({
             camera: this.camera,
@@ -322,6 +326,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             maxMaterials: particleOptions.maxParticleMaterials ?? 16,
             maxEmitters: particleOptions.maxParticleEmitters ?? 64,
             resolveTexture: (id) => this.textures.get(id),
+            logger: this.logger,
         });
 
         this.materials = new MaterialLibrary({
