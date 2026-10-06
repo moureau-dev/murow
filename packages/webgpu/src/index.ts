@@ -74,6 +74,8 @@ export { Spritesheet, createTextureFromBitmap } from './spritesheet/spritesheet'
 // Particle
 export { ParticleEmitter } from './particle/emitter';
 export type { ParticleEmitterConfig, Range } from './particle/emitter';
+export { ParticleSystem3D } from './3d/particles';
+export type { ParticleSystem3DOptions, ParticleEmitter3D, ParticleEmitter3DOptions, ParticleMaterialSpec, ParticleBlend } from './3d/particles';
 
 // Compute
 export { ComputeBuilder, ComputeKernel } from './compute/compute-builder';

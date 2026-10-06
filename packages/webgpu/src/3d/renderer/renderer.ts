@@ -29,6 +29,7 @@ import { MaterialLibrary, type MaterialHandle } from './materials';
 import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
 import { CameraEffectStack } from './camera-effects/stack';
+import { ParticleSystem3D } from '../particles/particle-system-3d';
 import { TextureRegistry } from './textures';
 import { ResizeController } from './resize';
 import { RaycastController } from './raycast';
@@ -119,6 +120,27 @@ function computeBucketStats(bucket: PrefabBucket3D): { maxSkinnedParts: number; 
 }
 
 
+/** Fill `outRight`/`outUp` with the camera basis (world space) and return `outRight`. */
+function cameraBasis(
+    position: readonly [number, number, number],
+    target: readonly [number, number, number],
+    up: readonly [number, number, number],
+    outRight: Float32Array,
+    outUp: Float32Array,
+): Float32Array {
+    let fx = target[0] - position[0], fy = target[1] - position[1], fz = target[2] - position[2];
+    const fl = Math.hypot(fx, fy, fz) || 1;
+    fx /= fl; fy /= fl; fz /= fl;
+    let rx = fy * up[2] - fz * up[1], ry = fz * up[0] - fx * up[2], rz = fx * up[1] - fy * up[0];
+    const rl = Math.hypot(rx, ry, rz) || 1;
+    rx /= rl; ry /= rl; rz /= rl;
+    outRight[0] = rx; outRight[1] = ry; outRight[2] = rz;
+    outUp[0] = ry * fz - rz * fy;
+    outUp[1] = rz * fx - rx * fz;
+    outUp[2] = rx * fy - ry * fx;
+    return outRight;
+}
+
 /** The WebGPU 3D renderer: instances, materials, lights, skinning, and camera effects. */
 export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Base3DRenderer {
     private root!: TgpuRoot;
@@ -167,6 +189,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private elapsed = 0;
     private cameraEffects!: CameraEffectStack;
     private readonly maxCameraEffects: number;
+    private readonly _camRight = new Float32Array(3);
+    private readonly _camUp = new Float32Array(3);
+    /** GPU particle system. Add emitters via `renderer.particles.addEmitter(...)`. */
+    particles!: ParticleSystem3D;
 
     private readonly _assets: AssetBucket<'3d', any, any> | null;
     private readonly _prefabs: PrefabBucket3D | null;
@@ -287,6 +313,13 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             const findTexture = this._assets.textures.find;
             this.textures.setResolver((id) => findTexture(id));
         }
+
+        this.particles = new ParticleSystem3D({
+            root: this.root,
+            format: this.format,
+            maxParticles: (this.options as WebGPU3DRendererOptions).maxParticles ?? 4096,
+            resolveTexture: (id) => this.textures.get(id),
+        });
 
         this.materials = new MaterialLibrary({
             root: this.root,
@@ -856,10 +889,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         // Advance skeletal animations at render framerate
         const now = performance.now();
+        let frameDelta = 0;
         if (this.lastRenderTime > 0) {
-            const deltaTime = (now - this.lastRenderTime) / 1000;
-            this.elapsed += deltaTime;
-            this.animation.update(deltaTime);
+            frameDelta = (now - this.lastRenderTime) / 1000;
+            this.elapsed += frameDelta;
+            this.animation.update(frameDelta);
         }
         this.lastRenderTime = now;
 
@@ -1185,6 +1219,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             this.drawDebugHitboxes(pass, vpMatrix);
         }
 
+        cameraBasis(this.camera.position, this.camera.target, this.camera.up, this._camRight, this._camUp);
+        this.particles.draw(pass, vpMatrix, this._camRight, this._camUp);
+
         pass.end();
 
         if (enabledEffects > 0) {
@@ -1254,6 +1291,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         // Detach from the bucket so it doesn't retain this dead renderer via the coordinator's closure.
         this.animation?.dispose();
         this.cameraEffects?.destroy();
+        this.particles?.destroy();
         this.pipelines?.destroy();
         this.models?.destroy();
         this.root?.destroy();

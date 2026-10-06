@@ -87,6 +87,10 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
      */
     maxCameraEffects?: number;
     /**
+     * Max live 3D particles (rounded up to a power of two). Defaults to 4096.
+     */
+    maxParticles?: number;
+    /**
      * Pre-loaded AssetBucket. When provided, the renderer uploads every
      * prefab (glTF, grid, cube, plane) and texture to the GPU during
      * `init()`. The bucket must have `load()` resolved before being passed in.
