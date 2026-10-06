@@ -2927,7 +2927,7 @@ const ground = renderer.createMaterial({ type: 'standard', shadow: { receive: tr
 | `shadow: { cast }` / `{ receive }` | `true` | Per material. Transparent and alpha-tested materials default to `cast: false` (the shadow pass ignores alpha) |
 | `WebGPU3DRendererOptions.shadowResolution` | `2048` | Initial map size |
 
-Limitations: casters are non-skinned opaque instances (skinned casting is not wired yet); one directional light; constant bias (no slope scale); a single fixed box around the camera, so casters beyond `distance` do not cast and detail falls off with distance. Custom `shader` fragments can read the map via the `shadow`, `shadowMap`, and `shadowSampler` free variables.
+Casters are opaque instances, including skinned meshes (skinned casters share the animated bone matrices). Limitations: one directional light; constant bias (no slope scale); a single fixed box around the camera, so casters beyond `distance` do not cast and detail falls off with distance. Custom `shader` fragments can read the map via the `shadow`, `shadowMap`, and `shadowSampler` free variables.
 
 ### Renderer shape
 
