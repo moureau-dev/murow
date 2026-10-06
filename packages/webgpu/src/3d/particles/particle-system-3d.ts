@@ -39,8 +39,8 @@ const FrameUniforms = d.struct({
 const MaterialUniforms = d.struct({
     matId: d.f32,
     useTexture: d.f32,
-    atlasCols: d.f32,
-    atlasRows: d.f32,
+    _pad0: d.f32,
+    _pad1: d.f32,
 });
 
 export type ParticleBlend = 'additive' | 'alpha';
@@ -80,7 +80,7 @@ export interface ParticleEmitter3DOptions {
     spin?: number;
     /** Particle material (texture + blend). Defaults to a soft additive disc. */
     material?: ParticleMaterialSpec;
-    /** Deterministic RNG seed. Default 1. */
+    /** Per-emitter RNG seed. Default 1. */
     seed?: number;
 }
 
@@ -109,6 +109,8 @@ export interface ParticleEmitter3D {
     material: number;
     /** @internal Fractional spawn budget carried between updates. */
     budget: number;
+    /** @internal Per-emitter RNG, seeded by `ParticleEmitter3DOptions.seed`. */
+    rng: SimpleRNG;
 }
 
 export interface ParticleSystem3DOptions {
@@ -169,12 +171,11 @@ export class ParticleSystem3D {
     private readonly computeFrameF32 = new Float32Array(this.computeFrameData);
     private readonly computeFrameU32 = new Uint32Array(this.computeFrameData);
     private readonly emitters: ParticleEmitter3D[] = [];
-    private readonly rng = new SimpleRNG(1);
+    private readonly _dir = new Float32Array(3);
+    private readonly _jitter = new Float32Array(3);
     private head = 0;
     private totalSpawned = 0;
     private pending = 0;
-    /** Coalesces multiple `emitter.update` calls into one simulate per frame. */
-    private simulatedThisFrame = false;
 
     constructor(options: ParticleSystem3DOptions) {
         const { root, format } = options;
@@ -361,12 +362,9 @@ export class ParticleSystem3D {
         this.createMaterial({ blend: 'additive' });
     }
 
+    /** Spawned high-water mark (draw instance count), not a live count. */
     get count(): number {
         return this.totalSpawned;
-    }
-
-    get emitterCount(): number {
-        return this.emitters.length;
     }
 
     /** Register an emitter and return its live handle. */
@@ -387,6 +385,7 @@ export class ParticleSystem3D {
             spin: options.spin ?? 0,
             material: this.materialIndex(options.material),
             budget: 0,
+            rng: new SimpleRNG(options.seed ?? 1),
             update: (deltaTime: number) => this.updateEmitter(emitter, deltaTime),
         };
         this.emitters.push(emitter);
@@ -399,32 +398,24 @@ export class ParticleSystem3D {
     }
 
     /**
-     * Spawn from one emitter. The GPU simulate pass runs at most once per frame
-     * (coalesced across emitters, reset in `draw`), so calling `update` on
-     * several emitters is safe.
+     * Spawn from one emitter. Only queues spawn records; the GPU simulate runs
+     * once in `simulate` (the renderer calls it each frame). Calling `update` on
+     * several emitters is therefore safe and costs no extra simulation.
      */
     updateEmitter(emitter: ParticleEmitter3D, deltaTime: number): void {
         if (emitter.enabled) this.emitFrom(emitter, deltaTime);
-        if (!this.simulatedThisFrame) {
-            this.simulate(deltaTime);
-            this.simulatedThisFrame = true;
-        }
     }
 
-    /** Spawn from every enabled emitter and run one GPU simulate pass. */
+    /** Spawn from every enabled emitter (queues records; see `simulate`). */
     update(deltaTime: number): void {
         for (let e = 0; e < this.emitters.length; e++) {
             const em = this.emitters[e]!;
             if (em.enabled) this.emitFrom(em, deltaTime);
         }
-        this.simulate(deltaTime);
-        this.simulatedThisFrame = true;
     }
 
     /** Draw every material batch into the current render pass. */
     draw(pass: GPURenderPassEncoder, viewProj: Float32Array, right: ArrayLike<number>, up: ArrayLike<number>): void {
-        // A draw marks the frame boundary: next frame's first update simulates.
-        this.simulatedThisFrame = false;
         if (this.totalSpawned === 0) return;
 
         const f = this.frameData;
@@ -473,7 +464,7 @@ export class ParticleSystem3D {
         const id = this.materials.length;
 
         const buffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        this.device.queue.writeBuffer(buffer, 0, new Float32Array([id, useTexture, 1, 1]));
+        this.device.queue.writeBuffer(buffer, 0, new Float32Array([id, useTexture, 0, 0]));
         const bindGroup = this.device.createBindGroup({
             layout: this.root.unwrap(this.layout) as unknown as GPUBindGroupLayout,
             entries: [
@@ -498,13 +489,19 @@ export class ParticleSystem3D {
         let n = Math.floor(emitter.budget);
         if (n <= 0) return;
         if (this.pending + n > this.maxSpawns) n = this.maxSpawns - this.pending;
-        if (n <= 0) return;
+        if (n <= 0) {
+            // Saturated this frame; drop the backlog so `budget` cannot grow forever.
+            emitter.budget = 0;
+            return;
+        }
         emitter.budget -= n;
+        if (emitter.budget > 8) emitter.budget = 8;
         for (let k = 0; k < n; k++) this.writeSpawn(emitter, this.pending + k);
         this.pending += n;
     }
 
-    private simulate(deltaTime: number): void {
+    /** Upload queued spawns and advance the pool (call once per frame). */
+    simulate(deltaTime: number): void {
         const spawnCount = this.pending;
         if (spawnCount === 0 && this.totalSpawned === 0) return;
 
@@ -537,19 +534,22 @@ export class ParticleSystem3D {
     }
 
     private writeSpawn(em: ParticleEmitter3D, index: number): void {
-        const rng = this.rng;
+        const rng = em.rng;
         const base = index * PARTICLE_3D_STRIDE;
         const s = this.spawnStaging;
-        const life = rng.range(em.lifetime[0], em.lifetime[1]);
+        const life = Math.max(rng.range(em.lifetime[0], em.lifetime[1]), 1e-3);
         const speed = rng.range(em.speed[0], em.speed[1]);
         const size = rng.range(em.size[0], em.size[1]);
-        const [dx, dy, dz] = randomDirectionInCone(rng, em.direction, em.spread);
+        const dir = this._dir;
+        randomDirectionInCone(rng, em.direction, em.spread, dir);
         let ox = 0, oy = 0, oz = 0;
         if (em.spawnRadius > 0) {
-            const [jx, jy, jz] = randomDirectionInCone(rng, [0, 1, 0], Math.PI);
+            const jit = this._jitter;
+            randomDirectionInCone(rng, UP, Math.PI, jit);
             const r = em.spawnRadius * Math.cbrt(rng.rand());
-            ox = jx * r; oy = jy * r; oz = jz * r;
+            ox = jit[0]! * r; oy = jit[1]! * r; oz = jit[2]! * r;
         }
+        const dx = dir[0]!, dy = dir[1]!, dz = dir[2]!;
         s[base + 0] = em.position[0] + ox;
         s[base + 1] = em.position[1] + oy;
         s[base + 2] = em.position[2] + oz;
@@ -573,9 +573,12 @@ export class ParticleSystem3D {
     }
 }
 
-/** Random unit vector within `spread` radians of `axis`. */
-function randomDirectionInCone(rng: SimpleRNG, axis: readonly number[], spread: number): [number, number, number] {
-    let [ax, ay, az] = axis as [number, number, number];
+/** Up axis, reused by the jitter call (avoids an allocation). */
+const UP: readonly [number, number, number] = [0, 1, 0];
+
+/** Write a random unit vector within `spread` radians of `axis` into `out`. */
+function randomDirectionInCone(rng: SimpleRNG, axis: readonly number[], spread: number, out: Float32Array): void {
+    let ax = axis[0]!, ay = axis[1]!, az = axis[2]!;
     const len = Math.hypot(ax, ay, az) || 1;
     ax /= len; ay /= len; az /= len;
     let ux = 0, uy = 1, uz = 0;
@@ -588,11 +591,12 @@ function randomDirectionInCone(rng: SimpleRNG, axis: readonly number[], spread: 
     const bx = ay * rz - az * ry;
     const by = az * rx - ax * rz;
     const bz = ax * ry - ay * rx;
-    const cosSpread = Math.cos(spread);
-    const cosTheta = rng.range(cosSpread, 1);
+    const cosTheta = rng.range(Math.cos(spread), 1);
     const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta));
     const phi = rng.rand() * Math.PI * 2;
     const cp = Math.cos(phi) * sinTheta;
     const sp = Math.sin(phi) * sinTheta;
-    return [ax * cosTheta + rx * cp + bx * sp, ay * cosTheta + ry * cp + by * sp, az * cosTheta + rz * cp + bz * sp];
+    out[0] = ax * cosTheta + rx * cp + bx * sp;
+    out[1] = ay * cosTheta + ry * cp + by * sp;
+    out[2] = az * cosTheta + rz * cp + bz * sp;
 }

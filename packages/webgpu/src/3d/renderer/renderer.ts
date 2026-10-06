@@ -1066,6 +1066,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const effectList = this.camera.effects;
         const enabledEffects = effectList.enableCount();
         const targetView = enabledEffects > 0 ? this.cameraEffects.sceneTarget(this._width, this._height) : swapchainView;
+        // Flush queued particle spawns and advance the pool once per frame.
+        this.particles.simulate(frameDelta);
         const encoder = this.device.createCommandEncoder();
 
         const pass = encoder.beginRenderPass({
