@@ -90,6 +90,10 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
      * Max live 3D particles (rounded up to a power of two). Defaults to 4096.
      */
     maxParticles?: number;
+    /** Max distinct particle materials. Defaults to 16. */
+    maxParticleMaterials?: number;
+    /** Max live particle emitters. Defaults to 64. */
+    maxParticleEmitters?: number;
     /**
      * Pre-loaded AssetBucket. When provided, the renderer uploads every
      * prefab (glTF, grid, cube, plane) and texture to the GPU during

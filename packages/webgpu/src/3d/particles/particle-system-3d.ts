@@ -58,10 +58,7 @@ const DrawArgs = d.struct({
     firstInstance: d.u32,
 });
 
-/** Fixed material capacity: sizes the per-material counters/indices/args. */
-const MAX_MATERIALS = 16;
-/** Fixed emitter capacity. */
-const MAX_EMITTERS = 64;
+
 
 export type ParticleBlend = 'additive' | 'alpha';
 
@@ -148,6 +145,10 @@ export interface ParticleSystem3DOptions {
     maxParticles?: number;
     /** Max particles spawned per frame. Default 512. */
     maxSpawnsPerFrame?: number;
+    /** Max distinct particle materials. Default 16. */
+    maxMaterials?: number;
+    /** Max live emitters. Default 64. */
+    maxEmitters?: number;
     /** Resolves a material texture id to a GPU view + sampler. */
     resolveTexture?: (id: string) => { view: GPUTextureView; sampler: GPUSampler } | undefined;
 }
@@ -178,6 +179,8 @@ export class ParticleSystem3D {
     private readonly max: number;
     private readonly mask: number;
     private readonly maxSpawns: number;
+    private readonly maxMaterials: number;
+    private readonly maxEmitters: number;
     private readonly resolveTexture: ((id: string) => { view: GPUTextureView; sampler: GPUSampler } | undefined) | undefined;
     private readonly pool: TgpuBuffer<any>;
     private readonly spawns: TgpuBuffer<any>;
@@ -190,22 +193,22 @@ export class ParticleSystem3D {
     private readonly counts: TgpuBuffer<any>;
     private readonly indices: TgpuBuffer<any>;
     private readonly args: TgpuBuffer<any>;
-    private readonly countsZero = new Uint32Array(MAX_MATERIALS);
+    private readonly countsZero: Uint32Array<ArrayBuffer>;
     private readonly layout: TgpuBindGroupLayout;
     private readonly whiteTexture: GPUTexture;
     private readonly whiteView: GPUTextureView;
     private readonly sampler: GPUSampler;
     private readonly additivePipeline: GPURenderPipeline;
     private readonly alphaPipeline: GPURenderPipeline;
-    private readonly materialSlots = new SlotMap(MAX_MATERIALS);
-    private readonly materials: (ParticleMaterial | null)[] = new Array(MAX_MATERIALS).fill(null);
+    private readonly materialSlots: SlotMap;
+    private readonly materials: (ParticleMaterial | null)[];
     private readonly spawnStaging: Float32Array;
     private readonly frameData = new Float32Array(PARTICLE_3D_FRAME_FLOATS);
     private readonly computeFrameData = new ArrayBuffer(32);
     private readonly computeFrameF32 = new Float32Array(this.computeFrameData);
     private readonly computeFrameU32 = new Uint32Array(this.computeFrameData);
-    private readonly emitterSlots = new SlotMap(MAX_EMITTERS);
-    private readonly emitters: (ParticleEmitter3D | null)[] = new Array(MAX_EMITTERS).fill(null);
+    private readonly emitterSlots: SlotMap;
+    private readonly emitters: (ParticleEmitter3D | null)[];
     private readonly _dir = new Float32Array(3);
     private readonly _jitter = new Float32Array(3);
     private head = 0;
@@ -225,7 +228,14 @@ export class ParticleSystem3D {
         this.max = nextPowerOfTwo(options.maxParticles ?? 4096);
         this.mask = this.max - 1;
         this.maxSpawns = options.maxSpawnsPerFrame ?? 512;
+        this.maxMaterials = options.maxMaterials ?? 16;
+        this.maxEmitters = options.maxEmitters ?? 64;
         this.resolveTexture = options.resolveTexture;
+        this.materialSlots = new SlotMap(this.maxMaterials);
+        this.materials = new Array(this.maxMaterials).fill(null);
+        this.emitterSlots = new SlotMap(this.maxEmitters);
+        this.emitters = new Array(this.maxEmitters).fill(null);
+        this.countsZero = new Uint32Array(this.maxMaterials);
 
         this.pool = root.createBuffer(d.arrayOf(Particle3D, this.max)).$usage('storage');
         this.spawns = root.createBuffer(d.arrayOf(Particle3D, this.maxSpawns)).$usage('storage');
@@ -308,9 +318,9 @@ export class ParticleSystem3D {
 
         // Per-material compaction: atomic counters + a compacted index list, then
         // an indirect-args buffer, so each material draws only its live particles.
-        this.counts = root.createBuffer(d.arrayOf(d.atomic(d.u32), MAX_MATERIALS)).$usage('storage');
-        this.indices = root.createBuffer(d.arrayOf(d.u32, MAX_MATERIALS * this.max)).$usage('storage');
-        this.args = root.createBuffer(d.arrayOf(DrawArgs, MAX_MATERIALS)).$usage('storage', 'indirect');
+        this.counts = root.createBuffer(d.arrayOf(d.atomic(d.u32), this.maxMaterials)).$usage('storage');
+        this.indices = root.createBuffer(d.arrayOf(d.u32, this.maxMaterials * this.max)).$usage('storage');
+        this.args = root.createBuffer(d.arrayOf(DrawArgs, this.maxMaterials)).$usage('storage', 'indirect');
         const counts = this.counts;
         const indices = this.indices;
         const args = this.args;
@@ -318,8 +328,8 @@ export class ParticleSystem3D {
         this.compactKernel = new ComputeBuilder('particles-compact', { workgroupSize: 64 }, root)
             .buffers({
                 particles: { storage: d.arrayOf(Particle3D, this.max), external: pool },
-                counts: { storage: d.arrayOf(d.atomic(d.u32), MAX_MATERIALS), readwrite: true, external: counts },
-                indices: { storage: d.arrayOf(d.u32, MAX_MATERIALS * this.max), readwrite: true, external: indices },
+                counts: { storage: d.arrayOf(d.atomic(d.u32), this.maxMaterials), readwrite: true, external: counts },
+                indices: { storage: d.arrayOf(d.u32, this.maxMaterials * this.max), readwrite: true, external: indices },
                 frame: { uniform: ComputeFrame, external: frame },
             })
             .shader(({ particles, counts, indices, frame }, { globalId }) => {
@@ -336,10 +346,10 @@ export class ParticleSystem3D {
             })
             .build();
 
-        this.argsKernel = new ComputeBuilder('particles-args', { workgroupSize: MAX_MATERIALS }, root)
+        this.argsKernel = new ComputeBuilder('particles-args', { workgroupSize: this.maxMaterials }, root)
             .buffers({
-                counts: { storage: d.arrayOf(d.atomic(d.u32), MAX_MATERIALS), readwrite: true, external: counts },
-                args: { storage: d.arrayOf(DrawArgs, MAX_MATERIALS), readwrite: true, external: args },
+                counts: { storage: d.arrayOf(d.atomic(d.u32), this.maxMaterials), readwrite: true, external: counts },
+                args: { storage: d.arrayOf(DrawArgs, this.maxMaterials), readwrite: true, external: args },
                 frame: { uniform: ComputeFrame, external: frame },
             })
             .shader(({ counts, args, frame }, { globalId }) => {
@@ -370,7 +380,7 @@ export class ParticleSystem3D {
             tex: { texture: 'float' },
             sampler: { sampler: 'filtering' },
             material: { uniform: MaterialUniforms },
-            indices: { storage: d.arrayOf(d.u32, MAX_MATERIALS * this.max) },
+            indices: { storage: d.arrayOf(d.u32, this.maxMaterials * this.max) },
         });
         this.layout = layout;
 
@@ -489,7 +499,7 @@ export class ParticleSystem3D {
     /** Register an emitter and return its live handle. */
     addEmitter(options: ParticleEmitter3DOptions = {}): ParticleEmitter3D {
         const slot = this.emitterSlots.add();
-        if (slot === -1) throw new Error(`ParticleSystem3D: max emitters (${MAX_EMITTERS}) reached`);
+        if (slot === -1) throw new Error(`ParticleSystem3D: max emitters (${this.maxEmitters}) reached`);
         const emitter: ParticleEmitter3D = {
             enabled: true,
             position: options.position ?? [0, 0, 0],
@@ -598,7 +608,7 @@ export class ParticleSystem3D {
     private createMaterial(spec: ParticleMaterialSpec): number {
         const slot = this.materialSlots.add();
         if (slot === -1) {
-            throw new Error(`ParticleSystem3D: max materials (${MAX_MATERIALS}) reached`);
+            throw new Error(`ParticleSystem3D: max materials (${this.maxMaterials}) reached`);
         }
         const blend: ParticleBlend = spec.blend ?? 'additive';
         const resolved = spec.texture ? this.resolveTexture?.(spec.texture) : undefined;
@@ -676,7 +686,7 @@ export class ParticleSystem3D {
         if (spawnCount > 0) this.spawnKernel.encode(encoder, spawnCount);
         this.integrateKernel.encode(encoder, this.max);
         this.compactKernel.encode(encoder, this.max);
-        this.argsKernel.encode(encoder, MAX_MATERIALS);
+        this.argsKernel.encode(encoder, this.maxMaterials);
         this.device.queue.submit([encoder.finish()]);
 
         this.head = (this.head + spawnCount) & this.mask;

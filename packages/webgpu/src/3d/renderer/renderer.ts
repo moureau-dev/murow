@@ -314,10 +314,13 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             this.textures.setResolver((id) => findTexture(id));
         }
 
+        const particleOptions = this.options as WebGPU3DRendererOptions;
         this.particles = new ParticleSystem3D({
             root: this.root,
             format: this.format,
-            maxParticles: (this.options as WebGPU3DRendererOptions).maxParticles ?? 4096,
+            maxParticles: particleOptions.maxParticles ?? 4096,
+            maxMaterials: particleOptions.maxParticleMaterials ?? 16,
+            maxEmitters: particleOptions.maxParticleEmitters ?? 64,
             resolveTexture: (id) => this.textures.get(id),
         });
 
