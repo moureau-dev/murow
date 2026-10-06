@@ -42,7 +42,11 @@ const MaterialUniforms = d.struct({
     useTexture: d.f32,
     /** Base into the compacted index list for this material (id * maxSlots). */
     baseOffset: d.f32,
+    atlasCols: d.f32,
+    atlasRows: d.f32,
+    atlasFps: d.f32,
     _pad0: d.f32,
+    _pad1: d.f32,
 });
 
 /** Indirect draw arguments written by the compaction pass. */
@@ -64,6 +68,8 @@ export interface ParticleMaterialSpec {
     readonly texture?: string;
     /** Blend mode. Default `'additive'`. */
     readonly blend?: ParticleBlend;
+    /** Sprite-sheet grid + playback rate for animated particles. */
+    readonly atlas?: { readonly cols: number; readonly rows: number; readonly fps: number };
 }
 
 export interface ParticleEmitter3DOptions {
@@ -380,9 +386,14 @@ export class ParticleSystem3D {
                 p.py + rx.y * (cx * size) + uy.y * (cy * size),
                 p.pz + rx.z * (cx * size) + uy.z * (cy * size),
             );
+            const cols = layout.$.material.atlasCols;
+            const rows = layout.$.material.atlasRows;
+            const frameIdx = std.mod(std.floor(p.age * layout.$.material.atlasFps), cols * rows);
+            const col = std.mod(frameIdx, cols);
+            const row = std.floor(frameIdx / cols);
             return {
                 pos: std.mul(layout.$.frame.viewProj, d.vec4f(world.x, world.y, world.z, 1.0)),
-                uv: d.vec2f(cx * 0.5 + 0.5, cy * 0.5 + 0.5),
+                uv: d.vec2f((cx * 0.5 + 0.5 + col) / cols, (cy * 0.5 + 0.5 + row) / rows),
                 color: d.vec4f(p.r, p.g, p.b, p.a * (1.0 - frac)),
             };
         };
@@ -393,7 +404,8 @@ export class ParticleSystem3D {
         })(vfn);
 
         const ffn = function(input: { uv: { x: number; y: number }; color: { x: number; y: number; z: number; w: number } }) {
-            const sampled = std.textureSample(layout.$.tex, layout.$.sampler, d.vec2f(input.uv.x, input.uv.y));
+            // Explicit LOD 0: mipmaps average across atlas cells and dilute alpha.
+            const sampled = std.textureSampleLevel(layout.$.tex, layout.$.sampler, d.vec2f(input.uv.x, input.uv.y), 0.0);
             const dd = std.length(d.vec2f(input.uv.x * 2.0 - 1.0, input.uv.y * 2.0 - 1.0));
             const disc = d.vec4f(1.0, 1.0, 1.0, std.smoothstep(1.0, 0.15, dd));
             const base = std.mix(disc, sampled, layout.$.material.useTexture);
@@ -532,7 +544,7 @@ export class ParticleSystem3D {
     // --- internals ---
 
     private materialIndex(spec: ParticleMaterialSpec | undefined): number {
-        const key = `${spec?.texture ?? ''}|${spec?.blend ?? 'additive'}`;
+        const key = `${spec?.texture ?? ''}|${spec?.blend ?? 'additive'}|${spec?.atlas ? `${spec.atlas.cols}x${spec.atlas.rows}@${spec.atlas.fps}` : ''}`;
         for (let m = 0; m < this.materials.length; m++) {
             if (this.materials[m]!.key === key) return m;
         }
@@ -550,8 +562,9 @@ export class ParticleSystem3D {
         const sampler = resolved?.sampler ?? this.sampler;
         const id = this.materials.length;
 
-        const buffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        this.device.queue.writeBuffer(buffer, 0, new Float32Array([id, useTexture, id * this.max, 0]));
+        const buffer = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const atlas = spec.atlas;
+        this.device.queue.writeBuffer(buffer, 0, new Float32Array([id, useTexture, id * this.max, atlas?.cols ?? 1, atlas?.rows ?? 1, atlas?.fps ?? 0, 0, 0]));
         const bindGroup = this.device.createBindGroup({
             layout: this.root.unwrap(this.layout) as unknown as GPUBindGroupLayout,
             entries: [
