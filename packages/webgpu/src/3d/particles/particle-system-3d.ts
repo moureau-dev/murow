@@ -1,8 +1,9 @@
-import type { TgpuRoot, TgpuBuffer } from 'typegpu';
-import { d } from '../../shaders/typegpu';
+import type { TgpuRoot, TgpuBuffer, TgpuBindGroupLayout } from 'typegpu';
+import { tgpu, d, std } from '../../shaders/typegpu';
+import { attachShaderMetadata } from '../../shaders/runtime-transpile';
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { SimpleRNG } from 'murow/core/simple-rng';
-import { PARTICLE_3D_WGSL, PARTICLE_3D_STRIDE, PARTICLE_3D_FRAME_FLOATS } from './shaders';
+import { PARTICLE_3D_STRIDE, PARTICLE_3D_FRAME_FLOATS } from './shaders';
 
 /** Per-particle GPU record. Must match the raw WGSL `Particle` layout exactly. */
 const Particle3D = d.struct({
@@ -23,6 +24,23 @@ const ComputeFrame = d.struct({
     params: d.vec4f,
     /** x = ring head, y = spawn count, z = unused, w = ring mask (power-of-two - 1). */
     counts: d.vec4u,
+});
+
+/** Render-time frame data, read by the billboard vertex shader. */
+const FrameUniforms = d.struct({
+    viewProj: d.mat4x4f,
+    right: d.vec4f,
+    up: d.vec4f,
+    params: d.vec4f,
+    counts: d.vec4f,
+});
+
+/** Per-material constants: which id this draw owns, and whether it uses a texture. */
+const MaterialUniforms = d.struct({
+    matId: d.f32,
+    useTexture: d.f32,
+    atlasCols: d.f32,
+    atlasRows: d.f32,
 });
 
 export type ParticleBlend = 'additive' | 'alpha';
@@ -138,7 +156,7 @@ export class ParticleSystem3D {
     private readonly renderFrame: GPUBuffer;
     private readonly spawnKernel: ComputeKernel<any>;
     private readonly integrateKernel: ComputeKernel<any>;
-    private readonly layout: GPUBindGroupLayout;
+    private readonly layout: TgpuBindGroupLayout;
     private readonly whiteTexture: GPUTexture;
     private readonly whiteView: GPUTextureView;
     private readonly sampler: GPUSampler;
@@ -208,6 +226,9 @@ export class ParticleSystem3D {
                 particles[slot].gy = src.gy;
                 particles[slot].gz = src.gz;
                 particles[slot].mat = src.mat;
+                particles[slot].grow = src.grow;
+                particles[slot].rot = src.rot;
+                particles[slot].spin = src.spin;
             })
             .build();
 
@@ -250,17 +271,63 @@ export class ParticleSystem3D {
         this.whiteView = this.whiteTexture.createView();
         this.sampler = this.device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
 
-        this.layout = this.device.createBindGroupLayout({
-            entries: [
-                { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
-                { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
-                { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-                { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
-                { binding: 4, visibility: GPUShaderStage.FRAGMENT | GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
-            ],
+        const layout = tgpu.bindGroupLayout({
+            frame: { uniform: FrameUniforms },
+            particles: { storage: d.arrayOf(Particle3D, this.max) },
+            tex: { texture: 'float' },
+            sampler: { sampler: 'filtering' },
+            material: { uniform: MaterialUniforms },
         });
-        const module = this.device.createShaderModule({ code: PARTICLE_3D_WGSL, label: 'particles-3d' });
-        const pipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
+        this.layout = layout;
+
+        const vfn = function(input: { vertexIndex: number; instanceIndex: number }) {
+            const vi = d.f32(input.vertexIndex);
+            const x = (vi - 2.0 * std.floor(vi * 0.5)) * 2.0 - 1.0;
+            const y = std.floor(vi * 0.5) * 2.0 - 1.0;
+            const p = layout.$.particles[input.instanceIndex];
+            if (p.life <= 0.0 || p.mat != layout.$.material.matId) {
+                return { pos: d.vec4f(0.0, 0.0, 0.0, 0.0), uv: d.vec2f(0.0, 0.0), color: d.vec4f(0.0, 0.0, 0.0, 0.0) };
+            }
+            const frac = p.age / p.life;
+            const size = p.size * std.mix(1.0, p.grow, frac) * layout.$.frame.params.w;
+            const ang = p.rot + p.spin * p.age;
+            const cs = std.cos(ang);
+            const sn = std.sin(ang);
+            const cx = x * cs - y * sn;
+            const cy = x * sn + y * cs;
+            const rx = layout.$.frame.right;
+            const uy = layout.$.frame.up;
+            const world = d.vec3f(
+                p.px + rx.x * (cx * size) + uy.x * (cy * size),
+                p.py + rx.y * (cx * size) + uy.y * (cy * size),
+                p.pz + rx.z * (cx * size) + uy.z * (cy * size),
+            );
+            return {
+                pos: std.mul(layout.$.frame.viewProj, d.vec4f(world.x, world.y, world.z, 1.0)),
+                uv: d.vec2f(cx * 0.5 + 0.5, cy * 0.5 + 0.5),
+                color: d.vec4f(p.r, p.g, p.b, p.a * (1.0 - frac)),
+            };
+        };
+        attachShaderMetadata(vfn, () => ({ d, std }), false, { d, std, layout });
+        const vertex = tgpu.vertexFn({
+            in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
+            out: { pos: d.builtin.position, uv: d.vec2f, color: d.vec4f },
+        })(vfn);
+
+        const ffn = function(input: { uv: { x: number; y: number }; color: { x: number; y: number; z: number; w: number } }) {
+            const sampled = std.textureSample(layout.$.tex, layout.$.sampler, d.vec2f(input.uv.x, input.uv.y));
+            const dd = std.length(d.vec2f(input.uv.x * 2.0 - 1.0, input.uv.y * 2.0 - 1.0));
+            const disc = d.vec4f(1.0, 1.0, 1.0, std.smoothstep(1.0, 0.15, dd));
+            const base = std.mix(disc, sampled, layout.$.material.useTexture);
+            const a = base.w * input.color.w;
+            return d.vec4f(input.color.x * base.x * a, input.color.y * base.y * a, input.color.z * base.z * a, a);
+        };
+        attachShaderMetadata(ffn, () => ({ d, std }), false, { d, std, layout });
+        const fragment = tgpu.fragmentFn({ in: { uv: d.vec2f, color: d.vec4f }, out: d.vec4f })(ffn);
+
+        const { code } = tgpu.resolveWithContext([vertex, fragment]);
+        const module = this.device.createShaderModule({ code, label: 'particles-3d' });
+        const pipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.root.unwrap(layout) as unknown as GPUBindGroupLayout] });
         const target = (blend: GPUBlendState | undefined): GPUColorTargetState => ({ format, blend });
         this.additivePipeline = this.device.createRenderPipeline({
             label: 'particles-3d-additive',
@@ -270,7 +337,7 @@ export class ParticleSystem3D {
                 color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
                 alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
             })] },
-            primitive: { topology: 'triangle-list' },
+            primitive: { topology: 'triangle-strip' },
             depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
         });
         this.alphaPipeline = this.device.createRenderPipeline({
@@ -281,7 +348,7 @@ export class ParticleSystem3D {
                 color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
                 alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
             })] },
-            primitive: { topology: 'triangle-list' },
+            primitive: { topology: 'triangle-strip' },
             depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
         });
 
@@ -372,7 +439,7 @@ export class ParticleSystem3D {
             const material = this.materials[m]!;
             pass.setPipeline(material.pipeline);
             pass.setBindGroup(0, material.bindGroup);
-            pass.draw(6, this.totalSpawned);
+            pass.draw(4, this.totalSpawned);
         }
     }
 
@@ -408,7 +475,7 @@ export class ParticleSystem3D {
         const buffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.device.queue.writeBuffer(buffer, 0, new Float32Array([id, useTexture, 1, 1]));
         const bindGroup = this.device.createBindGroup({
-            layout: this.layout,
+            layout: this.root.unwrap(this.layout) as unknown as GPUBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.renderFrame } },
                 { binding: 1, resource: { buffer: this.root.unwrap(this.pool) as unknown as GPUBuffer } },
