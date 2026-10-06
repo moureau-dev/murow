@@ -39,9 +39,21 @@ const FrameUniforms = d.struct({
 const MaterialUniforms = d.struct({
     matId: d.f32,
     useTexture: d.f32,
+    /** Base into the compacted index list for this material (id * maxSlots). */
+    baseOffset: d.f32,
     _pad0: d.f32,
-    _pad1: d.f32,
 });
+
+/** Indirect draw arguments written by the compaction pass. */
+const DrawArgs = d.struct({
+    vertexCount: d.u32,
+    instanceCount: d.u32,
+    firstVertex: d.u32,
+    firstInstance: d.u32,
+});
+
+/** Fixed material capacity: sizes the per-material counters/indices/args. */
+const MAX_MATERIALS = 16;
 
 export type ParticleBlend = 'additive' | 'alpha';
 
@@ -158,6 +170,12 @@ export class ParticleSystem3D {
     private readonly renderFrame: GPUBuffer;
     private readonly spawnKernel: ComputeKernel<any>;
     private readonly integrateKernel: ComputeKernel<any>;
+    private readonly compactKernel: ComputeKernel<any>;
+    private readonly argsKernel: ComputeKernel<any>;
+    private readonly counts: TgpuBuffer<any>;
+    private readonly indices: TgpuBuffer<any>;
+    private readonly args: TgpuBuffer<any>;
+    private readonly countsZero = new Uint32Array(MAX_MATERIALS);
     private readonly layout: TgpuBindGroupLayout;
     private readonly whiteTexture: GPUTexture;
     private readonly whiteView: GPUTextureView;
@@ -262,6 +280,54 @@ export class ParticleSystem3D {
             })
             .build();
 
+        // Per-material compaction: atomic counters + a compacted index list, then
+        // an indirect-args buffer, so each material draws only its live particles.
+        this.counts = root.createBuffer(d.arrayOf(d.atomic(d.u32), MAX_MATERIALS)).$usage('storage');
+        this.indices = root.createBuffer(d.arrayOf(d.u32, MAX_MATERIALS * this.max)).$usage('storage');
+        this.args = root.createBuffer(d.arrayOf(DrawArgs, MAX_MATERIALS)).$usage('storage', 'indirect');
+        const counts = this.counts;
+        const indices = this.indices;
+        const args = this.args;
+
+        this.compactKernel = new ComputeBuilder('particles-compact', { workgroupSize: 64 }, root)
+            .buffers({
+                particles: { storage: d.arrayOf(Particle3D, this.max), external: pool },
+                counts: { storage: d.arrayOf(d.atomic(d.u32), MAX_MATERIALS), readwrite: true, external: counts },
+                indices: { storage: d.arrayOf(d.u32, MAX_MATERIALS * this.max), readwrite: true, external: indices },
+                frame: { uniform: ComputeFrame, external: frame },
+            })
+            .shader(({ particles, counts, indices, frame }, { globalId }) => {
+                'use gpu';
+                const i = globalId.x;
+                const p = particles[i];
+                if (p.life <= 0.0) { return; }
+                // @ts-ignore — TGSL uniform struct access
+                const mat = d.u32(p.mat);
+                // @ts-ignore — atomic on a storage array element
+                const slot = std.atomicAdd(counts[mat], d.u32(1));
+                // @ts-ignore — TGSL uniform struct access
+                indices[mat * frame.counts.z + slot] = i;
+            })
+            .build();
+
+        this.argsKernel = new ComputeBuilder('particles-args', { workgroupSize: MAX_MATERIALS }, root)
+            .buffers({
+                counts: { storage: d.arrayOf(d.atomic(d.u32), MAX_MATERIALS), readwrite: true, external: counts },
+                args: { storage: d.arrayOf(DrawArgs, MAX_MATERIALS), readwrite: true, external: args },
+                frame: { uniform: ComputeFrame, external: frame },
+            })
+            .shader(({ counts, args, frame }, { globalId }) => {
+                'use gpu';
+                const m = globalId.x;
+                // @ts-ignore — atomic on a storage array element
+                args[m].vertexCount = d.u32(4);
+                // @ts-ignore — atomic on a storage array element
+                args[m].instanceCount = std.atomicLoad(counts[m]);
+                args[m].firstVertex = d.u32(0);
+                args[m].firstInstance = d.u32(0);
+            })
+            .build();
+
         // 1x1 white fallback.
         this.whiteTexture = this.device.createTexture({
             size: [1, 1, 1],
@@ -278,6 +344,7 @@ export class ParticleSystem3D {
             tex: { texture: 'float' },
             sampler: { sampler: 'filtering' },
             material: { uniform: MaterialUniforms },
+            indices: { storage: d.arrayOf(d.u32, MAX_MATERIALS * this.max) },
         });
         this.layout = layout;
 
@@ -285,8 +352,9 @@ export class ParticleSystem3D {
             const vi = d.f32(input.vertexIndex);
             const x = (vi - 2.0 * std.floor(vi * 0.5)) * 2.0 - 1.0;
             const y = std.floor(vi * 0.5) * 2.0 - 1.0;
-            const p = layout.$.particles[input.instanceIndex];
-            if (p.life <= 0.0 || p.mat != layout.$.material.matId) {
+            const base = d.u32(layout.$.material.baseOffset);
+            const p = layout.$.particles[layout.$.indices[base + input.instanceIndex]];
+            if (p.life <= 0.0) {
                 return { pos: d.vec4f(0.0, 0.0, 0.0, 0.0), uv: d.vec2f(0.0, 0.0), color: d.vec4f(0.0, 0.0, 0.0, 0.0) };
             }
             const frac = p.age / p.life;
@@ -426,11 +494,12 @@ export class ParticleSystem3D {
         f[28] = this.totalSpawned; f[29] = 0; f[30] = 0; f[31] = 0;
         this.device.queue.writeBuffer(this.renderFrame, 0, f);
 
+        const args = this.root.unwrap(this.args) as unknown as GPUBuffer;
         for (let m = 0; m < this.materials.length; m++) {
             const material = this.materials[m]!;
             pass.setPipeline(material.pipeline);
             pass.setBindGroup(0, material.bindGroup);
-            pass.draw(4, this.totalSpawned);
+            pass.drawIndirect(args, m * 16);
         }
     }
 
@@ -440,8 +509,13 @@ export class ParticleSystem3D {
         this.computeFrame.destroy();
         this.renderFrame.destroy();
         for (let m = 0; m < this.materials.length; m++) this.materials[m]!.buffer.destroy();
+        this.counts.destroy();
+        this.indices.destroy();
+        this.args.destroy();
         this.spawnKernel.destroy();
         this.integrateKernel.destroy();
+        this.compactKernel.destroy();
+        this.argsKernel.destroy();
         this.whiteTexture.destroy();
     }
 
@@ -456,6 +530,9 @@ export class ParticleSystem3D {
     }
 
     private createMaterial(spec: ParticleMaterialSpec): number {
+        if (this.materials.length >= MAX_MATERIALS) {
+            throw new Error(`ParticleSystem3D: max materials (${MAX_MATERIALS}) reached`);
+        }
         const blend: ParticleBlend = spec.blend ?? 'additive';
         const resolved = spec.texture ? this.resolveTexture?.(spec.texture) : undefined;
         const useTexture = resolved ? 1 : 0;
@@ -464,7 +541,7 @@ export class ParticleSystem3D {
         const id = this.materials.length;
 
         const buffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        this.device.queue.writeBuffer(buffer, 0, new Float32Array([id, useTexture, 0, 0]));
+        this.device.queue.writeBuffer(buffer, 0, new Float32Array([id, useTexture, id * this.max, 0]));
         const bindGroup = this.device.createBindGroup({
             layout: this.root.unwrap(this.layout) as unknown as GPUBindGroupLayout,
             entries: [
@@ -473,6 +550,7 @@ export class ParticleSystem3D {
                 { binding: 2, resource: view },
                 { binding: 3, resource: sampler },
                 { binding: 4, resource: { buffer } },
+                { binding: 5, resource: { buffer: this.root.unwrap(this.indices) as unknown as GPUBuffer } },
             ],
         });
         this.materials.push({
@@ -517,15 +595,19 @@ export class ParticleSystem3D {
         this.computeFrameF32[3] = 0;
         this.computeFrameU32[4] = this.head;
         this.computeFrameU32[5] = spawnCount;
-        this.computeFrameU32[6] = 0;
+        this.computeFrameU32[6] = this.max;   // per-material index region stride
         this.computeFrameU32[7] = this.mask;
         this.device.queue.writeBuffer(
             this.root.unwrap(this.computeFrame) as unknown as GPUBuffer, 0, this.computeFrameData,
         );
+        // Reset the per-material counters before compaction.
+        this.device.queue.writeBuffer(this.root.unwrap(this.counts) as unknown as GPUBuffer, 0, this.countsZero);
 
         const encoder = this.device.createCommandEncoder();
         if (spawnCount > 0) this.spawnKernel.encode(encoder, spawnCount);
         this.integrateKernel.encode(encoder, this.max);
+        this.compactKernel.encode(encoder, this.max);
+        this.argsKernel.encode(encoder, MAX_MATERIALS);
         this.device.queue.submit([encoder.finish()]);
 
         this.head = (this.head + spawnCount) & this.mask;
