@@ -117,9 +117,10 @@ export const SkinnedStaticMesh = d.struct({
     colorG: d.f32,
     colorB: d.f32,
     boneOffset: d.u32,
+    materialId: d.f32,
 });
 
-export const SKINNED_STATIC_MESH_FLOATS = 7;
+export const SKINNED_STATIC_MESH_FLOATS = 8;
 
 export const MeshUniforms = d.struct({
     viewProjection: d.mat4x4f,

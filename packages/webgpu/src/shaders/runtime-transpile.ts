@@ -77,7 +77,7 @@ export function attachShaderMetadata(
     // Lazily apply the GPUDevice shader patch on first call
     (globalThis as any).__murow_ensureShaderPatch?.();
 
-    let source = sourceOverride ?? fn.toString();
+    let source = sourceOverride ?? fn?.toString?.() ?? '';
 
     // Handle method shorthand: `name(...) { }` → `function(...) { }`
     if (!source.startsWith('function') && !source.startsWith('(') && !source.startsWith('async')) {
@@ -358,7 +358,7 @@ export function attachShaderMetadata(
     // find which variable names map to which keys.
     if (externalNames.some(n => !resolvedAliases[n] && !resolvedMembers[n] && !(n in baseExternals))) {
         try {
-            const getterSrc = getExternals.toString();
+            const getterSrc = typeof getExternals === 'function' ? getExternals.toString() : '';
             // Collect every `{ canonicalKey: renamedBinding }` pair. This works
             // for object-literal arrows and for block-bodied getters that build
             // an externals object and return it.

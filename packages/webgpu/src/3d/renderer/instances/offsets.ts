@@ -16,3 +16,4 @@ export const STAT_CUSTOM0 = 7, STAT_CUSTOM1 = 8;
 export const SSTAT_SX = 0, SSTAT_SY = 1, SSTAT_SZ = 2;
 export const SSTAT_CR = 3, SSTAT_CG = 4, SSTAT_CB = 5;
 export const SSTAT_BONE_OFFSET = 6;
+export const SSTAT_MATERIAL_ID = 7;

@@ -41,7 +41,7 @@ import { ModelLibrary } from './models';
 import {
     DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ,
     STAT_SX, STAT_SY, STAT_SZ,
-    SSTAT_SX, SSTAT_SY, SSTAT_SZ,
+    SSTAT_SX, SSTAT_SY, SSTAT_SZ, SSTAT_MATERIAL_ID,
 } from './instances/offsets';
 import { MAX_LIGHTS } from '../shader';
 import {
@@ -335,6 +335,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             pipelines: this.pipelines,
             textures: this.textures,
             meshLayout: this.pipelines.meshLayout,
+            skinnedLayout: this.pipelines.skinnedMeshLayout,
             maxMaterials: (this.options as WebGPU3DRendererOptions).maxMaterials ?? 64,
         });
 
@@ -1183,6 +1184,43 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         for (const batch of skinnedBatchOffsets) {
             const model = this.models.get(batch.modelId);
             if (!model) continue;
+
+            // Material support: if any instance in the batch has a compiled skinned
+            // material, draw per instance (materials can differ within a batch).
+            let hasMaterial = false;
+            for (let i = 0; i < batch.count; i++) {
+                const slot = this.skinned.slotIndexData[batch.offset + i];
+                const mid = this.skinned.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
+                if (mid > 0) {
+                    const m = this.materials.get(mid);
+                    if (m && m.skinnedPipeline) { hasMaterial = true; break; }
+                }
+            }
+            if (hasMaterial) {
+                pass.setVertexBuffer(0, model.rawVertexBuffer);
+                if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
+                const whiteBG = this.textures.white;
+                for (let i = 0; i < batch.count; i++) {
+                    const slot = this.skinned.slotIndexData[batch.offset + i];
+                    const mid = this.skinned.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
+                    const material = mid > 0 ? this.materials.get(mid) : null;
+                    if (material && material.skinnedPipeline) {
+                        pass.setPipeline(material.skinnedPipeline);
+                        pass.setBindGroup(0, this.pipelines.rawSkinnedBindGroup);
+                        pass.setBindGroup(1, material.bindGroup);
+                    } else {
+                        const customBG = this.skinned.textureBindGroup(slot);
+                        const needsTex = model.hasTexture || customBG !== undefined;
+                        pass.setPipeline(needsTex ? this.pipelines.rawSkinnedTexturedPipeline : this.pipelines.rawSkinnedPipeline);
+                        pass.setBindGroup(0, this.pipelines.rawSkinnedBindGroup);
+                        if (needsTex) pass.setBindGroup(1, customBG ?? model.textureBindGroup ?? whiteBG);
+                    }
+                    if (model.rawIndexBuffer) pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
+                    else pass.draw(model.vertexCount, 1, 0, batch.offset + i);
+                }
+                currentPipeline = null;
+                continue;
+            }
 
             // Check for per-instance texture overrides in this batch
             let hasCustomTex = false;

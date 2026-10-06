@@ -8,7 +8,7 @@ import {
     DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ,
     DYN_PREV_RX, DYN_PREV_RY, DYN_PREV_RZ,
     DYN_CURR_RX, DYN_CURR_RY, DYN_CURR_RZ,
-    SSTAT_SX, SSTAT_SY, SSTAT_SZ, SSTAT_CR, SSTAT_CG, SSTAT_CB, SSTAT_BONE_OFFSET,
+    SSTAT_SX, SSTAT_SY, SSTAT_SZ, SSTAT_CR, SSTAT_CG, SSTAT_CB, SSTAT_BONE_OFFSET, SSTAT_MATERIAL_ID,
 } from '../instances/offsets';
 import { resolveTransform } from '../instances/transform';
 
@@ -164,6 +164,7 @@ export class SkinnedInstanceStore {
 
         // boneOffset is u32 stored inside the Float32 buffer — reusable DataView.
         this.staticDV.setUint32((statBase + SSTAT_BONE_OFFSET) * 4, boneOffset, true);
+        stat[statBase + SSTAT_MATERIAL_ID] = opts.material ? opts.material.slot + 1 : 0;
 
         this.staticDirty = true;
         this.instanceModelIds[slot] = modelHandle.id;

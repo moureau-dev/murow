@@ -6,7 +6,7 @@ import { lightContribution, tonemap } from '../../../shaders/utils';
 import { SlotMap } from 'murow/core/slot-map';
 import type { MeshPipelines } from '../pipelines/mesh-pipelines';
 import type { TextureRegistry } from '../textures';
-import { createUnlitMeshVertex, type MeshDataLayout } from '../../shader';
+import { createUnlitMeshVertex, createSkinnedMeshVertex, type MeshDataLayout, type SkinnedMeshDataLayout } from '../../shader';
 import type { MaterialSpec, ResolvedRenderState } from './specs';
 import { resolveRenderState, isTransparent } from './specs';
 import {
@@ -34,6 +34,8 @@ export interface MaterialHandle<U extends UniformSchema = UniformSchema> {
 
 export interface CompiledMaterial {
     readonly pipeline: GPURenderPipeline;
+    /** Pipeline variant for skinned instances, when a skinned layout is available. */
+    readonly skinnedPipeline: GPURenderPipeline | null;
     readonly bindGroup: GPUBindGroup;
     readonly renderState: ResolvedRenderState;
     readonly transparent: boolean;
@@ -45,6 +47,8 @@ export interface MaterialLibraryDeps {
     pipelines: MeshPipelines;
     textures: TextureRegistry;
     meshLayout: MeshDataLayout;
+    /** Optional skinned layout; enables skinned pipeline variants. */
+    skinnedLayout?: SkinnedMeshDataLayout;
     maxMaterials: number;
 }
 
@@ -63,6 +67,7 @@ export class MaterialLibrary {
     private readonly entries: (MaterialEntry | null)[];
     private readonly deps: MaterialLibraryDeps;
     private engineVertex: ReturnType<typeof createTexturedMeshVertex> | null = null;
+    private engineSkinnedVertex: ReturnType<typeof createSkinnedMeshVertex> | null = null;
     private engineUnlitVertex: ReturnType<typeof createUnlitMeshVertex> | null = null;
     private readonly samplers: { key: string; sampler: GPUSampler }[] = [];
 
@@ -153,8 +158,9 @@ export class MaterialLibrary {
             depthBiasSlopeScale: state.depthBiasSlopeScale, depthBiasClamp: state.depthBiasClamp,
             label: spec.id,
         });
+        const skinnedPipeline = this.buildEngineSkinnedPipeline(spec, layout, state);
         const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds, samplerOverrides);
-        return { compiled: { pipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, write: () => buffer.write(mirror as never) };
+        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, write: () => buffer.write(mirror as never) };
     }
 
     private createShaderMaterial(slot: number, spec: Extract<MaterialSpec, { type: 'shader' }>, state: ResolvedRenderState): MaterialEntry {
@@ -200,12 +206,16 @@ export class MaterialLibrary {
             depthBiasSlopeScale: state.depthBiasSlopeScale, depthBiasClamp: state.depthBiasClamp,
             label: spec.id,
         });
+        const skinnedPipeline = this.buildShaderSkinnedPipeline(spec, layout, state, textureNames);
         const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds);
-        return { compiled: { pipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, write: writeMirror };
+        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, write: writeMirror };
     }
 
-    private compileDeclarative(spec: Extract<MaterialSpec, { type: 'shader' }>, meshLayout: MeshDataLayout, matLayout: any, textureNames: string[]) {
+    private compileDeclarative(spec: Extract<MaterialSpec, { type: 'shader' }>, meshLayout: MeshDataLayout | SkinnedMeshDataLayout, matLayout: any, textureNames: string[], skinned = false) {
         const decl = spec.shaders;
+        if (!decl.fragment || typeof decl.fragment.fn !== 'function') {
+            throw new Error('createMaterial: shader materials require `shaders.fragment: { fn }`');
+        }
         const noiseFn = createNoiseFn(matLayout);
         const snoiseFn = createSnoiseFn(matLayout);
 
@@ -251,20 +261,75 @@ export class MaterialLibrary {
                 },
                 out: vertexOut,
             } as any)(decl.vertex.fn as any);
+        } else if (skinned) {
+            if (!this.engineSkinnedVertex) this.engineSkinnedVertex = createSkinnedMeshVertex(meshLayout as SkinnedMeshDataLayout);
+            vertex = this.engineSkinnedVertex;
+            fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position };
         } else if (spec.lit === false) {
-            if (!this.engineUnlitVertex) this.engineUnlitVertex = createUnlitMeshVertex(meshLayout);
+            if (!this.engineUnlitVertex) this.engineUnlitVertex = createUnlitMeshVertex(meshLayout as MeshDataLayout);
             vertex = this.engineUnlitVertex;
             fragmentIn = { vColor: d.vec3f, vUV: d.vec2f };
         } else {
-            if (!this.engineVertex) this.engineVertex = createTexturedMeshVertex(meshLayout);
+            if (!this.engineVertex) this.engineVertex = createTexturedMeshVertex(meshLayout as MeshDataLayout);
             vertex = this.engineVertex;
             fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position };
         }
 
-        attachShaderMetadata(decl.fragment.fn as any, resolveExternals(), false, { d, std, meshLayout, matLayout } as any);
-        const fragment = tgpu.fragmentFn({ in: fragmentIn, out: d.vec4f } as any)(decl.fragment.fn as any);
+        // The skinned variant attaches independent metadata to a placeholder fn
+        // (via `sourceOverride`), so it does not clobber the main fragment's
+        // metadata on the shared user function.
+        const userFragmentFn = decl.fragment.fn as Function;
+        const fragmentTarget: Function = skinned ? function() {} : userFragmentFn;
+        attachShaderMetadata(
+            fragmentTarget as any,
+            resolveExternals(),
+            false,
+            { d, std, meshLayout, matLayout } as any,
+            undefined,
+            skinned ? userFragmentFn.toString() : undefined,
+        );
+        const fragment = tgpu.fragmentFn({ in: fragmentIn, out: d.vec4f } as any)(fragmentTarget as any);
 
         return { vertex, fragment };
+    }
+
+    private buildEngineSkinnedPipeline(spec: Extract<MaterialSpec, { type: 'standard' | 'unlit' | 'emissive' }>, layout: any, state: ResolvedRenderState): GPURenderPipeline | null {
+        const skinnedLayout = this.deps.skinnedLayout;
+        if (!skinnedLayout) return null;
+        if (!this.engineSkinnedVertex) this.engineSkinnedVertex = createSkinnedMeshVertex(skinnedLayout);
+        const fragment = spec.type === 'unlit'
+            ? createUnlitMaterialFragment(skinnedLayout as any, layout)
+            : spec.type === 'emissive'
+                ? createEmissiveMaterialFragment(skinnedLayout as any, layout)
+                : createStandardMaterialFragment(skinnedLayout as any, layout);
+        return this.deps.pipelines.buildMaterialPipeline({
+            vertex: this.engineSkinnedVertex,
+            fragment,
+            materialLayout: layout,
+            blendState: state.blendState, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
+            colorWrite: state.colorWrite, depthBias: state.depthBias,
+            depthBiasSlopeScale: state.depthBiasSlopeScale, depthBiasClamp: state.depthBiasClamp,
+            buffers: [this.deps.pipelines.skinnedVertexBufferLayout],
+            meshBGL: this.deps.pipelines.rawSkinnedBGL,
+            label: spec.id,
+        });
+    }
+
+    private buildShaderSkinnedPipeline(spec: Extract<MaterialSpec, { type: 'shader' }>, layout: any, state: ResolvedRenderState, textureNames: string[]): GPURenderPipeline | null {
+        const skinnedLayout = this.deps.skinnedLayout;
+        if (!skinnedLayout || spec.shaders.vertex) return null;
+        const { vertex, fragment } = this.compileDeclarative(spec, skinnedLayout, layout, textureNames, true);
+        return this.deps.pipelines.buildMaterialPipeline({
+            vertex: vertex as any,
+            fragment: fragment as any,
+            materialLayout: layout,
+            blendState: state.blendState, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
+            colorWrite: state.colorWrite, depthBias: state.depthBias,
+            depthBiasSlopeScale: state.depthBiasSlopeScale, depthBiasClamp: state.depthBiasClamp,
+            buffers: [this.deps.pipelines.skinnedVertexBufferLayout],
+            meshBGL: this.deps.pipelines.rawSkinnedBGL,
+            label: spec.id,
+        });
     }
 
     private createBindGroup(

@@ -71,11 +71,13 @@ export class MeshPipelines {
 
     rawBindGroup!: GPUBindGroup;
     rawSkinnedBindGroup!: GPUBindGroup;
+    rawSkinnedBGL!: GPUBindGroupLayout;
 
     private device!: GPUDevice;
     private root!: TgpuRoot;
     private format!: GPUTextureFormat;
     private vertexBufferLayout!: GPUVertexBufferLayout;
+    skinnedVertexBufferLayout!: GPUVertexBufferLayout;
     private rawMeshBGL!: GPUBindGroupLayout;
 
     build(opts: MeshPipelinesOptions): void {
@@ -201,7 +203,9 @@ export class MeshPipelines {
         const { code: skinnedWgsl } = tgpu.resolveWithContext([skinnedVertex, skinnedFragment]);
         const skinnedShaderModule = device.createShaderModule({ code: skinnedWgsl });
         const rawSkinnedBGL = root.unwrap(this.skinnedMeshLayout);
+        this.rawSkinnedBGL = rawSkinnedBGL;
 
+        this.skinnedVertexBufferLayout = skinnedVertexBufferLayout;
         this.rawSkinnedPipeline = device.createRenderPipeline({
             layout: device.createPipelineLayout({ bindGroupLayouts: [rawSkinnedBGL] }),
             vertex: { module: skinnedShaderModule, buffers: [skinnedVertexBufferLayout] },
@@ -264,6 +268,8 @@ export class MeshPipelines {
         depthWrite: boolean;
         depthTest: boolean;
         cull: 'back' | 'front' | 'none';
+        buffers?: GPUVertexBufferLayout[];
+        meshBGL?: GPUBindGroupLayout;
         colorWrite?: number;
         depthBias?: number;
         depthBiasSlopeScale?: number;
@@ -295,8 +301,8 @@ export class MeshPipelines {
 
         return this.device.createRenderPipeline({
             label: opts.label,
-            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.rawMeshBGL, rawMaterialBGL] }),
-            vertex: { module, buffers: [this.vertexBufferLayout] },
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [opts.meshBGL ?? this.rawMeshBGL, rawMaterialBGL] }),
+            vertex: { module, buffers: opts.buffers ?? [this.vertexBufferLayout] },
             fragment: { module, targets: [target] },
             primitive: { topology: 'triangle-list', cullMode: opts.cull },
             depthStencil,
