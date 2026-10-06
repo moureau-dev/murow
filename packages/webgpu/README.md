@@ -42,6 +42,7 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **Materials** — `renderer.createMaterial(spec)` with `standard` (lit), `unlit`, `emissive`, and custom `shader` types; per-material uniforms, named textures (mipmapped), `alphaTest` cutout, UV scale/offset, per-material samplers, two-sided normals, and render state (blend modes / depth / cull / colorWrite / depthBias)
 - **Camera effects** — an ordered fullscreen post chain on `renderer.camera.effects` (fxaa, vignette, grade, chromatic, scanlines, posterize, motionBlur) plus custom declarative shader effects, rendered through off-screen targets
 - **3D particles** — GPU-first `renderer.particles`: emitters, atlas animation, turbulence, additive/alpha materials, and per-material `drawIndirect` batching
+- **Shadows** — a single directional shadow map cast by the sun, controlled at runtime via `renderer.shadows` (`enabled`, `softness`, `bias`, `distance`); `standard` materials PCF-sample it, per-material `shadow: { cast, receive }`
 
 ## Usage
 
@@ -241,6 +242,10 @@ from `'murow'`.
 ### Materials (3D)
 - `WebGPU3DRenderer.createMaterial(spec)` — `standard` (lit), `unlit`, `emissive`, and custom `shader` materials; returns a typed `MaterialHandle<U>` (`slot`, `uniforms`, `setTexture`, `destroy`)
 - `MaterialSpec` / `EngineMaterialSpec` / `ShaderMaterialSpec` / `BlendMode` / `CullMode` — material spec types, exported from `murow/webgpu`
+
+### Shadows
+- [`ShadowSystem`](./src/3d/renderer/shadows/shadow-system.ts) — directional shadow map control (`renderer.shadows`): `enabled`, `softness`, `bias`, `distance`; `renderer.setShadowResolution(px)` rebuilds the map
+- Per material: `shadow: { cast?: boolean; receive?: boolean }` (transparent materials never cast)
 
 ### Camera effects
 - [`CameraEffectStack`](./src/3d/renderer/camera-effects/stack.ts) — off-screen targets + ping-pong fullscreen passes

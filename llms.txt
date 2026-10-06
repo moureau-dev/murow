@@ -2772,7 +2772,7 @@ You don't write any of this. The renderer handles it under the hood as long as y
 | **Auto canvas resize** | With `autoResize: true`, the renderer attaches a `ResizeObserver`, updates the swap chain, and reprojects the camera. |
 | **Buffer self-sizing from `PrefabBucket`** | The bucket reports total vertex count, joint count, skinned-part count etc. The renderer allocates GPU buffers from those numbers — no magic constants. |
 | **glTF skeletal animation** | Crossfading, looping, `onEnd` callbacks, typed animation names. On-demand load/unload via `hero.loadAnimations(['Attack'])`. |
-| **Dynamic point + spot lights + sun** | Point and spot lights with live-mutable properties per frame. Configurable directional light and ambient. Up to 16 dynamic lights. GPU-side interpolation for moving lights. No shadows or PBR. |
+| **Dynamic point + spot lights + sun** | Point and spot lights with live-mutable properties per frame. Configurable directional light and ambient. Up to 16 dynamic lights. GPU-side interpolation for moving lights. Single directional shadow map (the sun). No PBR. |
 | **Zero-GC hot path** | `Float32Array` buffers + `FreeList` slot allocation. No per-frame object creation. |
 
 ### Lighting (3D)
@@ -2828,7 +2828,7 @@ loop.events.on('pre-tick', () => renderer.storePreviousState());
 spot.destroy();                 // free the slot
 ```
 
-The 3D renderer is **not a PBR engine** — there are no shadows, no skybox, and no metalness/roughness/IBL. Surface shading comes from the material system (`standard` / `unlit` / `emissive` / custom `shader`; see "Materials (3D)"). Lighting is per-vertex diffuse with the dynamic lights plus the directional + ambient globals.
+The 3D renderer is **not a PBR engine** — no skybox, no metalness/roughness/IBL. Surface shading comes from the material system (`standard` / `unlit` / `emissive` / custom `shader`; see "Materials (3D)"). Lighting is per-vertex diffuse with the dynamic lights plus the directional + ambient globals. A single **directional shadow map** (the sun) is supported; see "Shadows (3D)".
 
 ### Materials (3D)
 
@@ -2876,6 +2876,7 @@ holo.destroy();                      // free the slot + uniform buffer
 | `slot: number` | Material identity. An instance's `materialId` is `slot + 1` (`0` = engine default). |
 | `uniforms` | Typed read/write over this material's uniform buffer. `holo.uniforms.scan = v` and `+=` both work. |
 | `setTexture(name, texture)` | Re-binds a declared texture by name. |
+| `setCastShadow(bool)` / `setReceiveShadow(bool)` | Runtime shadow toggles (receive is engine materials only). |
 | `destroy()` | Frees the slot and uniform buffer. |
 
 Spec fields:
@@ -2889,6 +2890,7 @@ Spec fields:
 | `uniforms`, `defaultUniforms`, `textures`, `shaders`, `lit` | `shader` | `uniforms` is a TGSL schema; `textures: { map: 'id', mask: 'id' }` (named); `shaders.fragment` required, `shaders.vertex` optional; `lit:false` selects the unlit vertex |
 | `blend`, `blendState`, `depthWrite`, `depthTest`, `cull`, `colorWrite`, `depthBias` | all | render state. `blend` (see above) or `blendState` (raw `GPUBlendComponent`s); `colorWrite` boolean or `{r,g,b,a}`; `depthBias` `{constant, slopeScale, clamp}`. Defaults: `'opaque'`, depthWrite true, depthTest true, `cull:'none'`; `emissive` defaults to additive + no depth write |
 | `id` | all | debug label on the GPU pipeline |
+| `shadow` | all | `{ cast?, receive? }`; participate in the directional shadow map (both default `true`; transparent never casts) |
 
 Free variables inside a `shader` fragment (and custom vertex): `scene` (engine uniforms: `viewProjection`, `alpha`, sun direction/ambient, `lightCount`, `cameraX/Y/Z`, `time`, `resolutionX/Y`), `material` (this material's uniforms), `textures` (one key per declared texture name, plus a `<name>Sampler` and a convenience `sampler`), `lights`, `dynamic`, `statics`, `slotIndices`; plus `d`, `std`, and the helpers `lightContribution`, `tonemap`. The fragment also receives `input.position` (fragment coords) for screen-space UV: `input.position.xy / vec2(scene.resolutionX, scene.resolutionY)`. Engine fragments flip the normal on back faces, so `cull:'none'` lights both sides.
 
@@ -2898,6 +2900,34 @@ Caveats:
 - Skinned meshes still use the engine default material; `addInstance({ material })` applies to non-skinned models only.
 - Textures get a mip chain on upload (good minification); atlas sprites must sample LOD 0 to avoid cross-cell bleed (the 3D particle path does).
 - `standard` is Lambert + two-sided; no PBR/specular/normal maps yet.
+
+### Shadows (3D)
+
+Cast by the global sun (`renderer.setDirectionalLight`). A single `rgba16float` linear-depth ortho map is fitted around the camera position (half-extent `renderer.shadows.distance`), texel-snapped, and `standard` materials PCF-sample it.
+
+```ts
+renderer.shadows.enabled = true;   // off = skips the shadow pass AND receiver sampling
+renderer.shadows.softness = 1.0;   // PCF radius in texels
+renderer.shadows.bias = 0.001;
+renderer.shadows.distance = 45;    // ortho half-extent around the camera position
+
+renderer.setShadowResolution(2048); // rebuild + rebind (not per-frame)
+
+// Per material:
+const ground = renderer.createMaterial({ type: 'standard', shadow: { receive: true, cast: false } });
+```
+
+| Control | Default | Notes |
+|---|---|---|
+| `renderer.shadows.enabled` | `true` | Truthful toggle: disabled skips the pass and the fragment branch |
+| `renderer.shadows.softness` | `1` | PCF tap spacing, in texels |
+| `renderer.shadows.bias` | `0.003` | Depth compare bias (plus a normal-offset bias) |
+| `renderer.shadows.distance` | `45` | Ortho half-extent of the box fitted around the camera position |
+| `renderer.shadows.resolution` | `2048` | Assignable at runtime; rebuilds the map and rebinds materials. `setShadowResolution(px)` is an alias |
+| `shadow: { cast }` / `{ receive }` | `true` | Per material. Transparent and alpha-tested materials default to `cast: false` (the shadow pass ignores alpha) |
+| `WebGPU3DRendererOptions.shadowResolution` | `2048` | Initial map size |
+
+Limitations: casters are non-skinned opaque instances (skinned casting is not wired yet); one directional light; constant bias (no slope scale); a single fixed box around the camera, so casters beyond `distance` do not cast and detail falls off with distance. Custom `shader` fragments can read the map via the `shadow`, `shadowMap`, and `shadowSampler` free variables.
 
 ### Renderer shape
 
@@ -3536,7 +3566,7 @@ inverseLerp(min: number, max: number, value: number): number;
 | Calling `server.on('intent', handler)` to implement gameplay | That event is **observe-only** telemetry. Gameplay belongs in `defineHandlers(intents, {...})`. Both can coexist |
 | Casting `world.fields(C)` results to specific typed arrays | Don't - the return type is precisely inferred from the schema (`f32 -> Float32Array`, `u8 -> Uint8Array`, etc.). Casts only mask bugs |
 | Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `addInstance({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
-| Expecting shadows, a skybox, or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient and a material system (`standard` / `unlit` / `emissive` / custom `shader`), but no shadows, skybox, or PBR. Write a custom `Base3DRenderer` backend if you need more |
+| Expecting a skybox or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and a material system (`standard` / `unlit` / `emissive` / custom `shader`), but no skybox or PBR. Write a custom `Base3DRenderer` backend if you need more |
 | `addInstance({ model: ... })` | The option key is `prefab`, not `model`. Use `addInstance({ prefab: assets.prefabs.get(id) })` |
 | `renderer.createCube({ size: 1 })` for the player / obstacles / ground | Declare reusable models as `AssetBucket` prefabs (`assets.prefabs.get('id')`) — the renderer `create*` / `load*` factories are one-off/debug conveniences: no parallel load, no typed ids, no bucket GPU sizing |
 | `.prefabs(({ bucket }) => { bucket.add(...); })` — block body doesn't return the bucket | `textures()` / `prefabs()` callbacks MUST return the bucket: expression body (`({ bucket }) => bucket.add(...)`) or explicit `return bucket.add(...)`. A block that only calls `.add(...)` returns `undefined` and registers nothing |
