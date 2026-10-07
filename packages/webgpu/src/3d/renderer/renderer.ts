@@ -675,6 +675,25 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     }
 
     /**
+     * Project a world point to canvas CSS pixels (for HTML overlays like
+     * nameplates/damage numbers). Writes `[x, y, w]` into `out` (CSS px + clip
+     * w) and returns `false` when the point is behind the camera. Zero-alloc.
+     */
+    worldToScreen(x: number, y: number, z: number, out: Float32Array): boolean {
+        const m = this.camera.getViewProjectionMatrix();
+        const cx = m[0]! * x + m[4]! * y + m[8]! * z + m[12]!;
+        const cy = m[1]! * x + m[5]! * y + m[9]! * z + m[13]!;
+        const cw = m[3]! * x + m[7]! * y + m[11]! * z + m[15]!;
+        if (cw <= 0) { out[0] = 0; out[1] = 0; out[2] = 0; return false; }
+        const w = this.canvas.clientWidth || this._width;
+        const h = this.canvas.clientHeight || this._height;
+        out[0] = (cx / cw * 0.5 + 0.5) * w;
+        out[1] = (0.5 - cy / cw * 0.5) * h;
+        out[2] = cw;
+        return true;
+    }
+
+    /**
      * Change the shadow map resolution and rebind materials to the new map.
      * Alias for assigning `renderer.shadows.resolution`.
      */
