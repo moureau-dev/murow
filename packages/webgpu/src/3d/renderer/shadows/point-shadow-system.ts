@@ -5,29 +5,27 @@ import { DynamicMesh, StaticMesh } from '../../../core/types';
 import type { ShadowDrawBatch, ShadowModelLike } from './shadow-system';
 import { createSkinnedLightLayout, createSkinnedLightVertex, createLightDistanceFragment } from './light-shadow-shaders';
 
-/** Fixed number of spot lights that can cast a shadow in a frame. */
-export const MAX_SPOT_SHADOWS = 4;
+/** Fixed number of point lights that can cast a cube shadow in a frame. */
+export const MAX_POINT_SHADOWS = 2;
 
-/** Per-light matrices + position/far + tunables, read by receiving materials. */
-export const SpotShadowUniforms = d.struct({
-    matrices: d.arrayOf(d.mat4x4f, MAX_SPOT_SHADOWS),
+/** Per-light position/far + tunables, read by receiving materials. */
+export const PointShadowUniforms = d.struct({
     /** xyz = light position, w = far distance. */
-    lights: d.arrayOf(d.vec4f, MAX_SPOT_SHADOWS),
-    /** x = active caster count, y = bias, z = 1/resolution, w unused. */
+    lights: d.arrayOf(d.vec4f, MAX_POINT_SHADOWS),
+    /** x = active caster count, y = bias, z/w unused. */
     params: d.vec4f,
 });
 
-/** Per-light uniform for the spot shadow pass. */
-const SpotPassUniforms = d.struct({
+/** Per-face uniform for the point shadow pass. */
+const PointPassUniforms = d.struct({
     viewProjection: d.mat4x4f,
     /** xyz = light position, w = far. */
     lightPosFar: d.vec4f,
 });
 
 const PASS_FLOATS = 20;
-const FLOATS = MAX_SPOT_SHADOWS * 16 + MAX_SPOT_SHADOWS * 4 + 4;
 
-export interface SpotShadowSystemDeps {
+export interface PointShadowSystemDeps {
     root: TgpuRoot;
     dynamicBuffer: GPUBuffer;
     staticBuffer: GPUBuffer;
@@ -43,34 +41,39 @@ export interface SpotShadowSystemDeps {
     };
 }
 
-export interface SpotShadowOptions {
-    /** Max casting spot lights per frame. Defaults to `MAX_SPOT_SHADOWS`, clamped to it. */
+export interface PointShadowOptions {
+    /** Max casting point lights per frame. Defaults to `MAX_POINT_SHADOWS`. */
     maxShadows?: number;
+    /** Per-cube-face resolution. Default 512. */
+    resolution?: number;
 }
 
-/** Per-frame pose of a shadow-casting spot light. */
-export interface SpotLightInput {
-    px: number; py: number; pz: number;
-    dx: number; dy: number; dz: number;
-    /** Cone half-angle (radians). */
-    angle: number;
-    range: number;
-}
+export interface PointLightInput { px: number; py: number; pz: number; range: number; }
+
+// Cube-face camera basis matching the D3D/WebGPU cube sampling convention:
+// `f` = look direction, `r` = screen-right (so up = r x f).
+const FACES: { f: [number, number, number]; r: [number, number, number] }[] = [
+    { f: [1, 0, 0], r: [0, 0, -1] },   // +X
+    { f: [-1, 0, 0], r: [0, 0, 1] },   // -X
+    { f: [0, 1, 0], r: [1, 0, 0] },    // +Y
+    { f: [0, -1, 0], r: [1, 0, 0] },   // -Y
+    { f: [0, 0, 1], r: [1, 0, 0] },    // +Z
+    { f: [0, 0, -1], r: [-1, 0, 0] },  // -Z
+];
 
 /**
- * Spot-light shadow maps. Renders casters into a `texture_2d_array` (one
- * perspective layer per casting spot), storing **linear distance / far** so the
- * comparison is well-conditioned. Lit materials project into it and PCF-sample.
+ * Point-light cube shadow maps. Renders casters into a `texture_cube_array`
+ * (one cube per casting point light, up to `MAX_POINT_SHADOWS`), storing linear
+ * distance / far. Lit materials sample by light direction and compare distance.
  */
-export class SpotShadowSystem {
-    private readonly root: TgpuRoot;
+export class PointShadowSystem {
     private readonly device: GPUDevice;
-    private readonly maxInstances: number;
+    private readonly root: TgpuRoot;
     private readonly slotIndexBuffer: GPUBuffer;
     private readonly sampler: GPUSampler;
     private readonly uniformBuffer: GPUBuffer;
-    private readonly uniformData = new Float32Array(FLOATS);
-    private readonly layout: ReturnType<typeof createSpotLayout>;
+    private readonly uniformData = new Float32Array(MAX_POINT_SHADOWS * 4 + 4);
+    private readonly layout: ReturnType<typeof createPointLayout>;
     private readonly pipeline: GPURenderPipeline;
     private readonly passBuffers: GPUBuffer[] = [];
     private readonly passBindGroups: GPUBindGroup[] = [];
@@ -85,36 +88,37 @@ export class SpotShadowSystem {
     private readonly mapView: GPUTextureView;
 
     readonly maxShadows: number;
-    resolution = 1024;
-    bias = 0.002;
-    enabled = true;
+    readonly resolution: number;
+    bias = 0.008;
+    /** Off by default: cube shadows cost 6 passes per light. Opt in explicitly. */
+    enabled = false;
 
-    constructor(deps: SpotShadowSystemDeps, options: SpotShadowOptions = {}) {
+    constructor(deps: PointShadowSystemDeps, options: PointShadowOptions = {}) {
         this.root = deps.root;
         this.device = deps.root.device;
-        this.maxInstances = deps.maxInstances;
-        this.maxShadows = Math.max(1, Math.min(options.maxShadows ?? MAX_SPOT_SHADOWS, MAX_SPOT_SHADOWS));
+        this.maxShadows = Math.max(1, Math.min(options.maxShadows ?? MAX_POINT_SHADOWS, MAX_POINT_SHADOWS));
+        this.resolution = options.resolution ?? 512;
         this.slotIndexBuffer = this.device.createBuffer({
             size: Math.max(4, deps.maxInstances * 4),
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         this.sampler = this.device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
 
-        const targets = this.createTargets(this.resolution);
+        const targets = this.createTargets(this.resolution, this.maxShadows);
         this.map = targets.map;
         this.depth = targets.depth;
         this.mapView = targets.mapView;
 
-        this.uniformBuffer = this.device.createBuffer({ size: FLOATS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        this.uniformBuffer = this.device.createBuffer({ size: this.uniformData.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
-        this.layout = createSpotLayout(deps.maxInstances);
-        const vertex = createSpotShadowVertex(this.layout);
-        const fragment = createSpotShadowFragment(this.layout);
+        this.layout = createPointLayout(deps.maxInstances);
+        const vertex = createPointShadowVertex(this.layout);
+        const fragment = createPointShadowFragment(this.layout);
         const { code } = tgpu.resolveWithContext([vertex, fragment]);
-        const module = this.device.createShaderModule({ code, label: 'spot-shadow' });
+        const module = this.device.createShaderModule({ code, label: 'point-shadow' });
         const bgl = this.root.unwrap(this.layout) as unknown as GPUBindGroupLayout;
         this.pipeline = this.device.createRenderPipeline({
-            label: 'spot-shadow',
+            label: 'point-shadow',
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
             vertex: {
                 module,
@@ -133,7 +137,7 @@ export class SpotShadowSystem {
             depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
         });
 
-        for (let i = 0; i < this.maxShadows; i++) {
+        for (let i = 0; i < this.maxShadows * 6; i++) {
             const buf = this.device.createBuffer({ size: PASS_FLOATS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
             this.passBuffers.push(buf);
             this.passBindGroups.push(this.device.createBindGroup({
@@ -150,21 +154,21 @@ export class SpotShadowSystem {
         if (deps.skinned) {
             const s = deps.skinned;
             this.skinnedSlotIndexBuffer = this.device.createBuffer({ size: Math.max(4, s.maxInstances * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-            const skinnedLayout = createSkinnedLightLayout(SpotPassUniforms, s.maxInstances, s.maxBones);
+            const skinnedLayout = createSkinnedLightLayout(PointPassUniforms, s.maxInstances, s.maxBones);
             const sVertex = createSkinnedLightVertex(skinnedLayout);
             const sFragment = createLightDistanceFragment(skinnedLayout as never);
             const { code: skinnedCode } = tgpu.resolveWithContext([sVertex, sFragment]);
-            const skinnedModule = this.device.createShaderModule({ code: skinnedCode, label: 'spot-shadow-skinned' });
+            const skinnedModule = this.device.createShaderModule({ code: skinnedCode, label: 'point-shadow-skinned' });
             const skinnedBgl = this.root.unwrap(skinnedLayout) as unknown as GPUBindGroupLayout;
             this.skinnedPipeline = this.device.createRenderPipeline({
-                label: 'spot-shadow-skinned',
+                label: 'point-shadow-skinned',
                 layout: this.device.createPipelineLayout({ bindGroupLayouts: [skinnedBgl] }),
                 vertex: { module: skinnedModule, buffers: [s.vertexBufferLayout] },
                 fragment: { module: skinnedModule, targets: [{ format: 'rgba16float' }] },
                 primitive: { topology: 'triangle-list', cullMode: 'none' },
                 depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
             });
-            for (let i = 0; i < this.maxShadows; i++) {
+            for (let i = 0; i < this.maxShadows * 6; i++) {
                 this.skinnedBindGroups.push(this.device.createBindGroup({
                     layout: skinnedBgl,
                     entries: [
@@ -194,47 +198,30 @@ export class SpotShadowSystem {
         if (count > 0 && this.skinnedSlotIndexBuffer) this.device.queue.writeBuffer(this.skinnedSlotIndexBuffer, 0, slots, 0, count);
     }
 
-    render(encoder: GPUCommandEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined, spots: readonly SpotLightInput[], skinnedBatches: ShadowDrawBatch[] = []): void {
-        const count = this.enabled ? Math.min(spots.length, this.maxShadows) : 0;
+    render(encoder: GPUCommandEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined, casters: readonly PointLightInput[], skinnedBatches: ShadowDrawBatch[] = []): void {
+        const count = this.enabled ? Math.min(casters.length, this.maxShadows) : 0;
         const m = this.uniformData;
         for (let i = 0; i < count; i++) {
-            const s = spots[i]!;
-            const far = Math.max(s.range, 0.1);
-            perspectiveLookAt(this.passData, 0, s.px, s.py, s.pz, s.dx, s.dy, s.dz, Math.max(0.05, s.angle * 2), 0.5, far);
-            this.passData[16] = s.px; this.passData[17] = s.py; this.passData[18] = s.pz; this.passData[19] = far;
-            this.device.queue.writeBuffer(this.passBuffers[i]!, 0, this.passData);
-            for (let k = 0; k < 16; k++) m[i * 16 + k] = this.passData[k]!;
-            m[MAX_SPOT_SHADOWS * 16 + i * 4] = s.px;
-            m[MAX_SPOT_SHADOWS * 16 + i * 4 + 1] = s.py;
-            m[MAX_SPOT_SHADOWS * 16 + i * 4 + 2] = s.pz;
-            m[MAX_SPOT_SHADOWS * 16 + i * 4 + 3] = far;
+            const c = casters[i]!;
+            const far = Math.max(c.range, 0.1);
+            const near = 0.05;
+            for (let f = 0; f < 6; f++) {
+                const face = FACES[f]!;
+                perspectiveLookUp(this.passData, 0, c.px, c.py, c.pz, face.r[0], face.r[1], face.r[2], face.f[0], face.f[1], face.f[2], near, far);
+                this.passData[16] = c.px; this.passData[17] = c.py; this.passData[18] = c.pz; this.passData[19] = far;
+                this.device.queue.writeBuffer(this.passBuffers[i * 6 + f]!, 0, this.passData);
 
-            const pass = encoder.beginRenderPass({
-                colorAttachments: [{ view: this.layerViews[i]!, loadOp: 'clear', storeOp: 'store', clearValue: { r: 1, g: 1, b: 1, a: 1 } }],
-                depthStencilAttachment: { view: this.depthLayerViews[i]!, depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1.0 },
-            });
-            pass.setPipeline(this.pipeline);
-            pass.setBindGroup(0, this.passBindGroups[i]!);
-            let current: GPUBuffer | null = null;
-            for (const batch of batches) {
-                const model = getModel(batch.modelId);
-                if (!model) continue;
-                if (model.rawVertexBuffer !== current) { pass.setVertexBuffer(0, model.rawVertexBuffer); current = model.rawVertexBuffer; }
-                if (model.rawIndexBuffer) {
-                    pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                    pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
-                } else {
-                    pass.draw(model.vertexCount, batch.count, 0, batch.offset);
-                }
-            }
-            if (skinnedBatches.length > 0 && this.skinnedPipeline && this.skinnedBindGroups[i]) {
-                pass.setPipeline(this.skinnedPipeline);
-                pass.setBindGroup(0, this.skinnedBindGroups[i]!);
-                let sCurrent: GPUBuffer | null = null;
-                for (const batch of skinnedBatches) {
+                const pass = encoder.beginRenderPass({
+                    colorAttachments: [{ view: this.layerViews[i * 6 + f]!, loadOp: 'clear', storeOp: 'store', clearValue: { r: 1, g: 1, b: 1, a: 1 } }],
+                    depthStencilAttachment: { view: this.depthLayerViews[i * 6 + f]!, depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1.0 },
+                });
+                pass.setPipeline(this.pipeline);
+                pass.setBindGroup(0, this.passBindGroups[i * 6 + f]!);
+                let current: GPUBuffer | null = null;
+                for (const batch of batches) {
                     const model = getModel(batch.modelId);
                     if (!model) continue;
-                    if (model.rawVertexBuffer !== sCurrent) { pass.setVertexBuffer(0, model.rawVertexBuffer); sCurrent = model.rawVertexBuffer; }
+                    if (model.rawVertexBuffer !== current) { pass.setVertexBuffer(0, model.rawVertexBuffer); current = model.rawVertexBuffer; }
                     if (model.rawIndexBuffer) {
                         pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
                         pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
@@ -242,14 +229,30 @@ export class SpotShadowSystem {
                         pass.draw(model.vertexCount, batch.count, 0, batch.offset);
                     }
                 }
+                if (skinnedBatches.length > 0 && this.skinnedPipeline && this.skinnedBindGroups[i * 6 + f]) {
+                    pass.setPipeline(this.skinnedPipeline);
+                    pass.setBindGroup(0, this.skinnedBindGroups[i * 6 + f]!);
+                    let sCurrent: GPUBuffer | null = null;
+                    for (const batch of skinnedBatches) {
+                        const model = getModel(batch.modelId);
+                        if (!model) continue;
+                        if (model.rawVertexBuffer !== sCurrent) { pass.setVertexBuffer(0, model.rawVertexBuffer); sCurrent = model.rawVertexBuffer; }
+                        if (model.rawIndexBuffer) {
+                            pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
+                            pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
+                        } else {
+                            pass.draw(model.vertexCount, batch.count, 0, batch.offset);
+                        }
+                    }
+                }
+                pass.end();
             }
-            pass.end();
+            m[i * 4] = c.px; m[i * 4 + 1] = c.py; m[i * 4 + 2] = c.pz; m[i * 4 + 3] = far;
         }
-        const p = MAX_SPOT_SHADOWS * 20;
-        m[p] = count;
-        m[p + 1] = this.bias;
-        m[p + 2] = 1 / this.resolution;
-        m[p + 3] = 0;
+        m[MAX_POINT_SHADOWS * 4] = count;
+        m[MAX_POINT_SHADOWS * 4 + 1] = this.bias;
+        m[MAX_POINT_SHADOWS * 4 + 2] = 0;
+        m[MAX_POINT_SHADOWS * 4 + 3] = 0;
         this.device.queue.writeBuffer(this.uniformBuffer, 0, m);
     }
 
@@ -261,29 +264,30 @@ export class SpotShadowSystem {
         for (const b of this.passBuffers) b.destroy();
     }
 
-    private createTargets(res: number): { map: GPUTexture; mapView: GPUTextureView; depth: GPUTexture } {
-        const map = this.device.createTexture({ size: [res, res, this.maxShadows], format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
-        const depth = this.device.createTexture({ size: [res, res, this.maxShadows], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    private createTargets(res: number, n: number): { map: GPUTexture; mapView: GPUTextureView; depth: GPUTexture } {
+        const layers = n * 6;
+        const map = this.device.createTexture({ size: [res, res, layers], format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+        const depth = this.device.createTexture({ size: [res, res, layers], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT });
         this.layerViews.length = 0;
         this.depthLayerViews.length = 0;
-        for (let i = 0; i < this.maxShadows; i++) {
+        for (let i = 0; i < layers; i++) {
             this.layerViews.push(map.createView({ dimension: '2d', baseArrayLayer: i, arrayLayerCount: 1 }));
             this.depthLayerViews.push(depth.createView({ dimension: '2d', baseArrayLayer: i, arrayLayerCount: 1 }));
         }
-        return { map, mapView: map.createView({ dimension: '2d-array' }), depth };
+        return { map, mapView: map.createView({ dimension: 'cube-array' }), depth };
     }
 }
 
-function createSpotLayout(maxInstances: number) {
+function createPointLayout(maxInstances: number) {
     return tgpu.bindGroupLayout({
-        uniforms: { uniform: SpotPassUniforms },
+        uniforms: { uniform: PointPassUniforms },
         dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
         staticInstances: { storage: d.arrayOf(StaticMesh, maxInstances) },
         slotIndices: { storage: d.arrayOf(d.u32, maxInstances) },
     });
 }
 
-function createSpotShadowVertex(layout: ReturnType<typeof createSpotLayout>): TgpuVertexFn {
+function createPointShadowVertex(layout: ReturnType<typeof createPointLayout>): TgpuVertexFn {
     const _WS = ['d', 'std', 'layout', 'mix', 'cos', 'sin', 'mul'];
     const fn = function(input: { position: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
         const slot = layout.$.slotIndices[input.instanceIndex];
@@ -328,36 +332,38 @@ function createSpotShadowVertex(layout: ReturnType<typeof createSpotLayout>): Tg
     } as any)(fn as any);
 }
 
-function createSpotShadowFragment(layout: ReturnType<typeof createSpotLayout>): TgpuFragmentFn {
+function createPointShadowFragment(layout: ReturnType<typeof createPointLayout>): TgpuFragmentFn {
     const fn = function(input: { vWorld: { x: number; y: number; z: number } }) {
         const lp = layout.$.uniforms.lightPosFar;
-        const dist = std.length(d.vec3f(input.vWorld.x - lp.x, input.vWorld.y - lp.y, input.vWorld.z - lp.z)) / lp.w;
+        const d3 = d.vec3f(input.vWorld.x - lp.x, input.vWorld.y - lp.y, input.vWorld.z - lp.z);
+        // Normalised distance from the light (0..1 over near..far).
+        const dist = std.length(d3) / lp.w;
         return d.vec4f(dist, dist, dist, 1.0);
     };
     attachShaderMetadata(fn as any, () => ({ d, std, layout }), false, { d, std, layout });
     return tgpu.fragmentFn({ in: { vWorld: d.vec3f }, out: d.vec4f } as any)(fn as any);
 }
 
-/** `proj * view` for a spot light (column-major, WebGPU depth). */
-function perspectiveLookAt(
+/** `proj * view` looking along `f` with screen-right `r` (up = r x f). */
+function perspectiveLookUp(
     out: Float32Array, off: number,
     ex: number, ey: number, ez: number,
-    dx: number, dy: number, dz: number,
-    fov: number, near: number, far: number,
+    rx: number, ry: number, rz: number,
+    fx: number, fy: number, fz: number,
+    near: number, far: number,
 ): void {
-    const dl = Math.hypot(dx, dy, dz) || 1;
-    const fx = dx / dl, fy = dy / dl, fz = dz / dl;
-    let ux = 0, uy = 1, uz = 0;
-    if (Math.abs(fy) > 0.99) { ux = 1; uy = 0; uz = 0; }
-    let rx = fy * uz - fz * uy, ry = fz * ux - fx * uz, rz = fx * uy - fy * ux;
-    const rl = Math.hypot(rx, ry, rz) || 1; rx /= rl; ry /= rl; rz /= rl;
-    const ux2 = ry * fz - rz * fy, uy2 = rz * fx - rx * fz, uz2 = rx * fy - ry * fx;
+    const fl = Math.hypot(fx, fy, fz) || 1;
+    fx /= fl; fy /= fl; fz /= fl;
+    const rl = Math.hypot(rx, ry, rz) || 1;
+    rx /= rl; ry /= rl; rz /= rl;
+    // up = right x forward
+    const ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
     const zx = -fx, zy = -fy, zz = -fz;
     out[off + 0] = rx; out[off + 4] = ry; out[off + 8] = rz; out[off + 12] = -(rx * ex + ry * ey + rz * ez);
-    out[off + 1] = ux2; out[off + 5] = uy2; out[off + 9] = uz2; out[off + 13] = -(ux2 * ex + uy2 * ey + uz2 * ez);
+    out[off + 1] = ux; out[off + 5] = uy; out[off + 9] = uz; out[off + 13] = -(ux * ex + uy * ey + uz * ez);
     out[off + 2] = zx; out[off + 6] = zy; out[off + 10] = zz; out[off + 14] = -(zx * ex + zy * ey + zz * ez);
     out[off + 3] = 0; out[off + 7] = 0; out[off + 11] = 0; out[off + 15] = 1;
-    const f = 1 / Math.tan(fov * 0.5);
+    const f = 1; // 90 degrees
     const rangeInv = 1 / (near - far);
     const p22 = far * rangeInv, p23 = far * near * rangeInv;
     for (let c = 0; c < 4; c++) {

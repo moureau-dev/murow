@@ -28,6 +28,7 @@ import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { MaterialLibrary, type MaterialHandle } from './materials';
 import { ShadowSystem, type ShadowDrawBatch } from './shadows';
 import { SpotShadowSystem } from './shadows/spot-shadow-system';
+import { PointShadowSystem } from './shadows/point-shadow-system';
 import { DecalLayer, type DecalLayerHost, type DecalLayerOptions, type DecalInstance } from './decals';
 import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
@@ -187,9 +188,16 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private materials!: MaterialLibrary;
     private shadowSystem!: ShadowSystem;
     private spotShadowSystem!: SpotShadowSystem;
+    private pointShadowSystem!: PointShadowSystem;
     private lastShadowMotion = -1;
     private readonly spotBatches: ShadowDrawBatch[] = [];
     private spotSlots!: Uint32Array<ArrayBuffer>;
+    private readonly spotSkinnedBatches: ShadowDrawBatch[] = [];
+    private spotSkinnedSlots!: Uint32Array<ArrayBuffer>;
+    private readonly pointBatches: ShadowDrawBatch[] = [];
+    private pointSlots!: Uint32Array<ArrayBuffer>;
+    private readonly pointSkinnedBatches: ShadowDrawBatch[] = [];
+    private pointSkinnedSlots!: Uint32Array<ArrayBuffer>;
     private readonly decalLayers: DecalLayer[] = [];
     private readonly shadowBatches: ShadowDrawBatch[] = [];
     private readonly shadowSkinnedBatches: ShadowDrawBatch[] = [];
@@ -347,8 +355,37 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             dynamicBuffer: this.pipelines.rawDynamicBuffer,
             staticBuffer: this.pipelines.rawStaticBuffer,
             maxInstances: this.maxInstances,
+            skinned: {
+                dynamicBuffer: this.pipelines.rawSkinnedDynamicBuffer,
+                staticBuffer: this.pipelines.rawSkinnedStaticBuffer,
+                boneBuffer: this.pipelines.rawBoneMatrixBuffer,
+                maxInstances: this.maxSkinnedInstances,
+                maxBones: this.maxTotalBones,
+                vertexBufferLayout: this.pipelines.skinnedVertexBufferLayout,
+            },
         }, { maxShadows: (this.options as WebGPU3DRendererOptions).maxSpotShadows });
         this.spotSlots = new Uint32Array(this.maxInstances);
+        this.spotSkinnedSlots = new Uint32Array(this.maxSkinnedInstances);
+
+        this.pointShadowSystem = new PointShadowSystem({
+            root: this.root,
+            dynamicBuffer: this.pipelines.rawDynamicBuffer,
+            staticBuffer: this.pipelines.rawStaticBuffer,
+            maxInstances: this.maxInstances,
+            skinned: {
+                dynamicBuffer: this.pipelines.rawSkinnedDynamicBuffer,
+                staticBuffer: this.pipelines.rawSkinnedStaticBuffer,
+                boneBuffer: this.pipelines.rawBoneMatrixBuffer,
+                maxInstances: this.maxSkinnedInstances,
+                maxBones: this.maxTotalBones,
+                vertexBufferLayout: this.pipelines.skinnedVertexBufferLayout,
+            },
+        }, {
+            maxShadows: (this.options as WebGPU3DRendererOptions).maxPointShadows,
+            resolution: (this.options as WebGPU3DRendererOptions).pointShadowResolution,
+        });
+        this.pointSlots = new Uint32Array(this.maxInstances);
+        this.pointSkinnedSlots = new Uint32Array(this.maxSkinnedInstances);
 
         this.textures = new TextureRegistry(this.device, this.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
         this.textures.initWhiteFallback();
@@ -378,6 +415,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             skinnedLayout: this.pipelines.skinnedMeshLayout,
             shadow: this.shadowSystem,
             spotShadow: this.spotShadowSystem,
+            pointShadow: this.pointShadowSystem,
             maxMaterials: (this.options as WebGPU3DRendererOptions).maxMaterials ?? 64,
         });
         // Changing `renderer.shadows.resolution` rebinds every material.
@@ -605,6 +643,16 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
      */
     get shadows(): ShadowSystem {
         return this.shadowSystem;
+    }
+
+    /** Spot-light shadow controls (`.enabled`, `.bias`, `.maxShadows`, `.resolution`). */
+    get spotShadows(): SpotShadowSystem {
+        return this.spotShadowSystem;
+    }
+
+    /** Point-light (cube) shadow controls (`.enabled`, `.bias`, `.maxShadows`, `.resolution`). */
+    get pointShadows(): PointShadowSystem {
+        return this.pointShadowSystem;
     }
 
     /**
@@ -1014,8 +1062,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             this.instances.staticDirty = false;
         }
 
-        // Assign spot-shadow indices (must precede pack so the shader sees them).
+        // Assign spot/point shadow indices (must precede pack so the shader sees them).
         const spotCasterCount = this.lights.assignSpotShadows(this.spotShadowSystem.maxShadows);
+        const pointCasterCount = this.lights.assignPointShadows(this.pointShadowSystem.maxShadows);
 
         // Pack enabled lights densely and upload them.
         const packed = this.lights.pack();
@@ -1278,7 +1327,63 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                 spb.push({ modelId, offset, count });
             });
             this.spotShadowSystem.setSlots(spts, sptCount);
-            this.spotShadowSystem.render(encoder, spb, (id) => this.models.get(id) as any, this.lights.spotCasters);
+            const sskb = this.spotSkinnedBatches;
+            sskb.length = 0;
+            const ssslots = this.spotSkinnedSlots;
+            let sskCount = 0;
+            this.skinned.batcher.each((modelId, instances, count) => {
+                const offset = sskCount;
+                for (let i = 0; i < count; i++) {
+                    const slot = instances[i]!;
+                    const mid = this.skinned.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
+                    if (mid > 0) {
+                        const m = this.materials.get(mid);
+                        if (!m || m.transparent || !this.materials.casts(mid)) continue;
+                    }
+                    ssslots[sskCount++] = slot;
+                }
+                if (sskCount > offset) sskb.push({ modelId, offset, count: sskCount - offset });
+            });
+            this.spotShadowSystem.setSkinnedSlots(ssslots, sskCount);
+            this.spotShadowSystem.render(encoder, spb, (id) => this.models.get(id) as any, this.lights.spotCasters, sskb);
+        }
+
+        // Point-light cube shadow maps.
+        if (pointCasterCount > 0) {
+            const ppb = this.pointBatches;
+            ppb.length = 0;
+            const ppts = this.pointSlots;
+            let pptCount = 0;
+            this.instances.batcher.each((modelId, instances, count, key) => {
+                const materialId = (key / SparseBatcher.MAX_SHEETS) | 0;
+                if (materialId > 0) {
+                    const m = this.materials.get(materialId);
+                    if (!m || m.transparent || !this.materials.casts(materialId)) return;
+                }
+                const offset = pptCount;
+                for (let i = 0; i < count; i++) ppts[pptCount++] = instances[i]!;
+                ppb.push({ modelId, offset, count });
+            });
+            this.pointShadowSystem.setSlots(ppts, pptCount);
+            const pskb = this.pointSkinnedBatches;
+            pskb.length = 0;
+            const psslots = this.pointSkinnedSlots;
+            let pskCount = 0;
+            this.skinned.batcher.each((modelId, instances, count) => {
+                const offset = pskCount;
+                for (let i = 0; i < count; i++) {
+                    const slot = instances[i]!;
+                    const mid = this.skinned.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
+                    if (mid > 0) {
+                        const m = this.materials.get(mid);
+                        if (!m || m.transparent || !this.materials.casts(mid)) continue;
+                    }
+                    psslots[pskCount++] = slot;
+                }
+                if (pskCount > offset) pskb.push({ modelId, offset, count: pskCount - offset });
+            });
+            this.pointShadowSystem.setSkinnedSlots(psslots, pskCount);
+            this.pointShadowSystem.render(encoder, ppb, (id) => this.models.get(id) as any, this.lights.pointCasters, pskb);
         }
 
         const pass = encoder.beginRenderPass({

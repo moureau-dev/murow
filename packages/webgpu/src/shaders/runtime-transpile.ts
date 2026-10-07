@@ -210,9 +210,12 @@ export function attachShaderMetadata(
                 }
 
                 const alt = (s as unknown as acorn.IfStatement).alternate;
-                if (alt && typeof alt === 'object' && 'body' in alt) {
-                    const arr = alt.body;
+                if (alt && typeof alt === 'object') {
+                    // `else { … }` has a `body`; `else if (…) { … }` is a nested
+                    // IfStatement — recurse into either.
+                    const arr = (alt as unknown as { body?: unknown }).body;
                     if (Array.isArray(arr)) splitDecls(arr as acorn.VariableDeclaration[]);
+                    else splitDecls([alt as unknown as acorn.VariableDeclaration]);
                 }
             }
         };

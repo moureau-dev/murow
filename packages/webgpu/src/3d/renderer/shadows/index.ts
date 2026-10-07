@@ -14,3 +14,11 @@ export {
     type SpotShadowOptions,
     type SpotLightInput,
 } from './spot-shadow-system';
+export {
+    PointShadowSystem,
+    PointShadowUniforms,
+    MAX_POINT_SHADOWS,
+    type PointShadowSystemDeps,
+    type PointShadowOptions,
+    type PointLightInput,
+} from './point-shadow-system';

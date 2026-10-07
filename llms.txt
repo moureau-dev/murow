@@ -2943,12 +2943,16 @@ const ground = renderer.createMaterial({ type: 'standard', shadow: { receive: tr
 | `renderer.shadows.softness` | `1` | PCF tap spacing, in texels |
 | `renderer.shadows.bias` | `0.003` | Depth compare bias (plus a normal-offset bias) |
 | `renderer.shadows.distance` | `45` | Ortho half-extent of the box fitted around the camera position |
-| `renderer.shadows.anchorStep` | `0` (= `distance`) | Grid the focus snaps to; the map only re-renders when the focus crosses a cell, so a static scene reuses it |
+| `renderer.shadows.anchorStep` | `0` | Optional snap grid for the focus; `0` follows the camera exactly (box always covers around the camera, idle still caches) |
 | `renderer.shadows.resolution` | `2048` | Assignable at runtime; rebuilds the map and rebinds materials. `setShadowResolution(px)` is an alias |
 | `shadow: { cast }` / `{ receive }` | `true` | Per material. Transparent and alpha-tested materials default to `cast: false` (the shadow pass ignores alpha) |
 | `WebGPU3DRendererOptions.shadowResolution` | `2048` | Initial map size |
 
-**Spot lights can also cast.** Set `castShadow: true` on a spot `LightSpec` (up to `MAX_SPOT_SHADOWS` = 4 per frame, nearest-first by slot order). Each gets a perspective depth layer in a `texture_2d_array`; `standard` materials project into it and 4-tap PCF per light (via the light's `castsShadow`/`shadowMapIndex`). Point-light (cube) shadows are not implemented. Spot maps re-render every frame (not cached like the directional map).
+**Dynamic lights can also cast.** Set `castShadow: true` on a spot or point `LightSpec`:
+- **Spot** (up to 4/frame) — a perspective depth layer in a `texture_2d_array`; `standard` projects into it and 4-tap PCFs per light.
+- **Point** (up to 2/frame) — a `texture_cube_array` storing distance/far; `standard` samples by light direction and compares distance.
+
+Both are driven by the light's `castsShadow`/`shadowMapIndex`, gated per-system, and re-render every frame (not cached like the directional map); one global bias each. Controls: `renderer.spotShadows` / `renderer.pointShadows` (`.enabled`, `.bias`, `.maxShadows`, `.resolution`); renderer options `maxSpotShadows` (4), `maxPointShadows` (2), `pointShadowResolution` (512).
 
 Casters are opaque instances, including skinned meshes (skinned casters share the animated bone matrices). **The directional map is only re-rendered when the sun, the snapped box, or a caster actually changes** (instances/skinned stores and skeletal animation carry a version counter); otherwise the previous map is reused and no shadow pass runs. Because the focus snaps to `anchorStep`, a static scene keeps the same map even while the camera moves within a cell. Limitations: one directional light; constant bias (no slope scale); a single fixed box around the camera, so casters beyond `distance` do not cast and detail falls off with distance. Custom `shader` fragments can read the map via the `shadow`, `shadowMap`, and `shadowSampler` free variables.
 

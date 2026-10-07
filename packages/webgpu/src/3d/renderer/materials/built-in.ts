@@ -4,6 +4,7 @@ import { lightContribution, tonemap } from '../../../shaders/utils';
 import { createTexturedMeshVertex, type MeshDataLayout } from '../../shader';
 import { ShadowUniforms } from '../shadows';
 import { SpotShadowUniforms } from '../shadows/spot-shadow-system';
+import { PointShadowUniforms } from '../shadows/point-shadow-system';
 
 /**
  * Uniform block shared by all engine-provided materials. f32-only to keep the
@@ -36,6 +37,9 @@ export function createEngineMaterialLayout() {
         spotShadow: { uniform: SpotShadowUniforms },
         spotShadowMap: { texture: 'float', viewDimension: '2d-array' },
         spotSampler: { sampler: 'filtering' },
+        pointShadow: { uniform: PointShadowUniforms },
+        pointShadowMap: { texture: 'float', viewDimension: 'cube-array' },
+        pointSampler: { sampler: 'filtering' },
     });
 }
 
@@ -100,10 +104,10 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
             const zero = d.f32(0.0);
             const xn = d.f32(-1.0);
             const xp = d.f32(1.0);
-            const s0 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xn), t))).x;
-            const s1 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xn), t))).x;
-            const s2 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xp), t))).x;
-            const s3 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xp), t))).x;
+            const s0 = std.textureSampleLevel(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xn), t)), 0.0).x;
+            const s1 = std.textureSampleLevel(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xn), t)), 0.0).x;
+            const s2 = std.textureSampleLevel(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xp), t)), 0.0).x;
+            const s3 = std.textureSampleLevel(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xp), t)), 0.0).x;
             // select(falseValue, trueValue, cond): 1 when this tap is occluded.
             const occ = std.select(zero, one, sDepth > s0)
                 + std.select(zero, one, sDepth > s1)
@@ -127,23 +131,36 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
             const pos = d.vec3f(std.mix(L.prevPosX, L.currPosX, a), std.mix(L.prevPosY, L.currPosY, a), std.mix(L.prevPosZ, L.currPosZ, a));
             const axis = d.vec3f(std.mix(L.prevDirX, L.currDirX, a), std.mix(L.prevDirY, L.currDirY, a), std.mix(L.prevDirZ, L.currDirZ, a));
             const c = lightContribution(pos, axis, d.vec3f(L.colorR, L.colorG, L.colorB), d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos), normal, worldPos);
-            // Per-light spot shadow (scalar factor, so no vec reassignment).
+            // Per-light shadow (scalar factor, so no vec reassignment).
             const oneF = d.f32(1.0);
             const zeroF = d.f32(0.0);
             let sh = std.select(oneF, oneF, L.castsShadow > 0.5);
-            if (L.castsShadow > 0.5) {
+            const lit = c.x + c.y + c.z;
+            if (L.castsShadow > 0.5 && L.kind < 1.5 && lit > 0.0 && matLayout.$.pointShadow.params.x > 0.5) {
+                // Point light: cube shadow, compare distance along the direction.
+                const idx = d.i32(L.shadowMapIndex);
+                const lp = matLayout.$.pointShadow.lights[idx];
+                const dd = d.vec3f(worldPos.x - lp.x, worldPos.y - lp.y, worldPos.z - lp.z);
+                const ddLen = std.max(std.length(dd), 1.0e-4);
+                const pdir = std.mul(dd, 1.0 / ddLen);
+                const s = std.textureSampleLevel(matLayout.$.pointShadowMap, matLayout.$.pointSampler, pdir, idx, 0.0).x * lp.w;
+                sh = std.select(oneF, zeroF, ddLen - matLayout.$.pointShadow.params.y > s);
+            } else if (L.castsShadow > 0.5 && lit > 0.0 && matLayout.$.spotShadow.params.x > 0.5) {
+                // Spot light: project into the spot's shadow map, 4-tap PCF.
                 const idx = d.i32(L.shadowMapIndex);
                 const svp = matLayout.$.spotShadow.matrices[idx];
                 const sp = std.mul(svp, d.vec4f(worldPos.x, worldPos.y, worldPos.z, 1.0));
                 const sndc = d.vec3f(sp.x / sp.w, sp.y / sp.w, sp.z / sp.w);
                 const suv = d.vec2f(sndc.x * 0.5 + 0.5, 0.5 - sndc.y * 0.5);
-                const sdep = sndc.z * 0.5 + 0.5 - matLayout.$.spotShadow.params.y;
+                const lp = matLayout.$.spotShadow.lights[idx];
+                // Stored depth is distance/far (linear), so compare distances.
+                const rdep = std.length(d.vec3f(worldPos.x - lp.x, worldPos.y - lp.y, worldPos.z - lp.z)) / lp.w - matLayout.$.spotShadow.params.y;
                 const st = matLayout.$.spotShadow.params.z * 0.5;
-                const b0 = std.textureSample(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(-st, -st)), idx).x;
-                const b1 = std.textureSample(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(st, -st)), idx).x;
-                const b2 = std.textureSample(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(-st, st)), idx).x;
-                const b3 = std.textureSample(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(st, st)), idx).x;
-                const onc = std.select(zeroF, oneF, sdep > b0) + std.select(zeroF, oneF, sdep > b1) + std.select(zeroF, oneF, sdep > b2) + std.select(zeroF, oneF, sdep > b3);
+                const b0 = std.textureSampleLevel(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(-st, -st)), idx, 0.0).x;
+                const b1 = std.textureSampleLevel(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(st, -st)), idx, 0.0).x;
+                const b2 = std.textureSampleLevel(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(-st, st)), idx, 0.0).x;
+                const b3 = std.textureSampleLevel(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(st, st)), idx, 0.0).x;
+                const onc = std.select(zeroF, oneF, rdep > b0) + std.select(zeroF, oneF, rdep > b1) + std.select(zeroF, oneF, rdep > b2) + std.select(zeroF, oneF, rdep > b3);
                 const inb = std.select(zeroF, oneF, suv.x >= 0.0) * std.select(zeroF, oneF, suv.x <= 1.0) * std.select(zeroF, oneF, suv.y >= 0.0) * std.select(zeroF, oneF, suv.y <= 1.0);
                 sh = 1.0 - (onc / 4.0) * inb;
             }

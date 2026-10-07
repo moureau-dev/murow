@@ -25,6 +25,8 @@ export type LightSpec =
         intensity?: number;
         /** World-unit radius past which the light contributes nothing. Defaults to `10`. */
         range?: number;
+        /** Cast a cube shadow (up to `maxPointShadows` casters per frame). */
+        castShadow?: boolean;
     }
     | {
         type: 'spot';
@@ -70,6 +72,8 @@ export class LightSystem {
     private readonly smoothness: Float32Array;
     /** Reusable pose records for spot lights that cast shadows. */
     private readonly spotScratch: { px: number; py: number; pz: number; dx: number; dy: number; dz: number; angle: number; range: number }[];
+    /** Reusable pose records for point lights that cast shadows. */
+    private readonly pointScratch: { px: number; py: number; pz: number; range: number }[];
 
     private uniformU32: Uint32Array | null = null;
     private uniformU32Buffer: ArrayBufferLike | null = null;
@@ -88,8 +92,10 @@ export class LightSystem {
         this.angle = new Float32Array(maxLights);
         this.smoothness = new Float32Array(maxLights);
         this.spotScratch = new Array(maxLights);
+        this.pointScratch = new Array(maxLights);
         for (let i = 0; i < maxLights; i++) {
             this.spotScratch[i] = { px: 0, py: 0, pz: 0, dx: 0, dy: 0, dz: 0, angle: 0, range: 0 };
+            this.pointScratch[i] = { px: 0, py: 0, pz: 0, range: 0 };
         }
     }
 
@@ -249,6 +255,37 @@ export class LightSystem {
     }
 
     /**
+     * Assign cube-shadow indices to enabled point lights that cast, filling the
+     * reusable `pointCasters`. Returns the count. Must run before `pack()`.
+     */
+    assignPointShadows(max: number): number {
+        const active = this.slots.activeSlots;
+        const size = this.slots.size;
+        const data = this.data;
+        let n = 0;
+        for (let i = 0; i < size; i++) {
+            const slot = active[i]!;
+            const base = slot * LIGHT_FLOATS;
+            if (data[base + KIND] !== LIGHT_KIND_POINT) continue;
+            if (this.enabled[slot] === 0 || data[base + CASTS_SHADOW]! < 0.5 || n >= max) {
+                data[base + SHADOW_INDEX] = -1;
+                continue;
+            }
+            const rec = this.pointScratch[n]!;
+            rec.px = data[base + CURR_POS_X]!; rec.py = data[base + CURR_POS_Y]!; rec.pz = data[base + CURR_POS_Z]!;
+            rec.range = data[base + RANGE]!;
+            data[base + SHADOW_INDEX] = n;
+            n++;
+        }
+        return n;
+    }
+
+    /** Reusable pose records for the first `count` casting point lights. */
+    get pointCasters(): readonly { px: number; py: number; pz: number; range: number }[] {
+        return this.pointScratch;
+    }
+
+    /**
      * Stamp the directional + ambient terms and the light count into the
      * renderer's uniform array, starting at `offset` (the float index after the
      * VP matrix + alpha). Layout: lightDir(3), dirColor(3), dirIntensity(1),
@@ -308,7 +345,7 @@ export class LightSystem {
         data[base + COL_B] = color[2];
         data[base + INTENSITY] = spec.intensity ?? 1;
         data[base + RANGE] = spec.range ?? 10;
-        data[base + CASTS_SHADOW] = spec.type === 'spot' && spec.castShadow ? 1 : 0;
+        data[base + CASTS_SHADOW] = spec.castShadow ? 1 : 0;
         data[base + SHADOW_INDEX] = -1;
         if (spec.type === 'spot') {
             const [dx, dy, dz] = spec.direction;

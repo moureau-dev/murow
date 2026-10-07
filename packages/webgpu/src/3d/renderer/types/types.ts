@@ -99,6 +99,10 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
     shadowResolution?: number;
     /** Max casting spot lights per frame. Defaults to 4. */
     maxSpotShadows?: number;
+    /** Max casting point lights per frame (cube maps). Defaults to 2. */
+    maxPointShadows?: number;
+    /** Point-light shadow cube face resolution. Defaults to 512. */
+    pointShadowResolution?: number;
     /**
      * Upper bound on internal render resolution relative to CSS pixels (caps
      * `devicePixelRatio`, default uncapped). `1.5` is a good HiDPI trade-off;

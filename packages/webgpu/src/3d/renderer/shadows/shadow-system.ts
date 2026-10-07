@@ -73,10 +73,10 @@ export class ShadowSystem {
     /** Orthographic half-extent fitted around the camera position. */
     distance = 45;
     /**
-     * Grid the focus point snaps to. The box only recenters when the focus
-     * crosses a cell, so a static scene reuses the shadow map. `0` uses
-     * `distance` (coverage around the camera still holds since the half-extent
-     * is larger than the cell).
+     * Optional grid the focus point snaps to. `0` (default) follows the focus
+     * exactly, so the box always covers the area around the camera (idle still
+     * reuses the cached map). A larger step snaps the box, which reduces
+     * re-renders while moving but can let the box lag behind the camera.
      */
     anchorStep = 0;
 
@@ -230,10 +230,10 @@ export class ShadowSystem {
         const [dx, dy, dz] = sunDir;
         const len = Math.hypot(dx, dy, dz) || 1;
         const snx = dx / len, sny = dy / len, snz = dz / len;
-        const step = this.anchorStep > 0 ? this.anchorStep : this.distance;
-        const ax = Math.round(focus[0] / step) * step;
-        const ay = Math.round(focus[1] / step) * step;
-        const az = Math.round(focus[2] / step) * step;
+        const step = this.anchorStep;
+        const ax = step > 0 ? Math.round(focus[0] / step) * step : focus[0];
+        const ay = step > 0 ? Math.round(focus[1] / step) * step : focus[1];
+        const az = step > 0 ? Math.round(focus[2] / step) * step : focus[2];
         const sunMoved = Math.abs(snx - this.lastSun[0]!) > 1e-4
             || Math.abs(sny - this.lastSun[1]!) > 1e-4
             || Math.abs(snz - this.lastSun[2]!) > 1e-4;
