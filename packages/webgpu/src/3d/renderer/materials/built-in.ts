@@ -3,6 +3,7 @@ import { attachShaderMetadata } from '../../../shaders/runtime-transpile';
 import { lightContribution, tonemap } from '../../../shaders/utils';
 import { createTexturedMeshVertex, type MeshDataLayout } from '../../shader';
 import { ShadowUniforms } from '../shadows';
+import { SpotShadowUniforms } from '../shadows/spot-shadow-system';
 
 /**
  * Uniform block shared by all engine-provided materials. f32-only to keep the
@@ -32,6 +33,9 @@ export function createEngineMaterialLayout() {
         shadow: { uniform: ShadowUniforms },
         shadowMap: { texture: 'float' },
         shadowSampler: { sampler: 'filtering' },
+        spotShadow: { uniform: SpotShadowUniforms },
+        spotShadowMap: { texture: 'float', viewDimension: '2d-array' },
+        spotSampler: { sampler: 'filtering' },
     });
 }
 
@@ -123,7 +127,28 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
             const pos = d.vec3f(std.mix(L.prevPosX, L.currPosX, a), std.mix(L.prevPosY, L.currPosY, a), std.mix(L.prevPosZ, L.currPosZ, a));
             const axis = d.vec3f(std.mix(L.prevDirX, L.currDirX, a), std.mix(L.prevDirY, L.currDirY, a), std.mix(L.prevDirZ, L.currDirZ, a));
             const c = lightContribution(pos, axis, d.vec3f(L.colorR, L.colorG, L.colorB), d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos), normal, worldPos);
-            acc = d.vec3f(acc.x + baseColor.x * c.x, acc.y + baseColor.y * c.y, acc.z + baseColor.z * c.z);
+            // Per-light spot shadow (scalar factor, so no vec reassignment).
+            const oneF = d.f32(1.0);
+            const zeroF = d.f32(0.0);
+            let sh = std.select(oneF, oneF, L.castsShadow > 0.5);
+            if (L.castsShadow > 0.5) {
+                const idx = d.i32(L.shadowMapIndex);
+                const svp = matLayout.$.spotShadow.matrices[idx];
+                const sp = std.mul(svp, d.vec4f(worldPos.x, worldPos.y, worldPos.z, 1.0));
+                const sndc = d.vec3f(sp.x / sp.w, sp.y / sp.w, sp.z / sp.w);
+                const suv = d.vec2f(sndc.x * 0.5 + 0.5, 0.5 - sndc.y * 0.5);
+                const sdep = sndc.z * 0.5 + 0.5 - matLayout.$.spotShadow.params.y;
+                const st = matLayout.$.spotShadow.params.z * 0.5;
+                const b0 = std.textureSample(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(-st, -st)), idx).x;
+                const b1 = std.textureSample(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(st, -st)), idx).x;
+                const b2 = std.textureSample(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(-st, st)), idx).x;
+                const b3 = std.textureSample(matLayout.$.spotShadowMap, matLayout.$.spotSampler, std.add(suv, d.vec2f(st, st)), idx).x;
+                const onc = std.select(zeroF, oneF, sdep > b0) + std.select(zeroF, oneF, sdep > b1) + std.select(zeroF, oneF, sdep > b2) + std.select(zeroF, oneF, sdep > b3);
+                const inb = std.select(zeroF, oneF, suv.x >= 0.0) * std.select(zeroF, oneF, suv.x <= 1.0) * std.select(zeroF, oneF, suv.y >= 0.0) * std.select(zeroF, oneF, suv.y <= 1.0);
+                sh = 1.0 - (onc / 4.0) * inb;
+            }
+            const cc = std.mul(c, sh);
+            acc = d.vec3f(acc.x + baseColor.x * cc.x, acc.y + baseColor.y * cc.y, acc.z + baseColor.z * cc.z);
         }
 
         const alpha = std.mul(tex.w, m.opacity);

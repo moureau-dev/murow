@@ -27,6 +27,7 @@ import { LightSystem, type LightSpec } from './lights';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { MaterialLibrary, type MaterialHandle } from './materials';
 import { ShadowSystem, type ShadowDrawBatch } from './shadows';
+import { SpotShadowSystem, MAX_SPOT_SHADOWS } from './shadows/spot-shadow-system';
 import { DecalLayer, type DecalLayerHost, type DecalLayerOptions, type DecalInstance } from './decals';
 import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
@@ -185,7 +186,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private lights = new LightSystem(MAX_LIGHTS);
     private materials!: MaterialLibrary;
     private shadowSystem!: ShadowSystem;
+    private spotShadowSystem!: SpotShadowSystem;
     private lastShadowMotion = -1;
+    private readonly spotBatches: ShadowDrawBatch[] = [];
+    private spotSlots!: Uint32Array<ArrayBuffer>;
     private readonly decalLayers: DecalLayer[] = [];
     private readonly shadowBatches: ShadowDrawBatch[] = [];
     private readonly shadowSkinnedBatches: ShadowDrawBatch[] = [];
@@ -338,6 +342,14 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.shadowSlots = new Uint32Array(this.maxInstances);
         this.shadowSkinnedSlots = new Uint32Array(this.maxSkinnedInstances);
 
+        this.spotShadowSystem = new SpotShadowSystem({
+            root: this.root,
+            dynamicBuffer: this.pipelines.rawDynamicBuffer,
+            staticBuffer: this.pipelines.rawStaticBuffer,
+            maxInstances: this.maxInstances,
+        });
+        this.spotSlots = new Uint32Array(this.maxInstances);
+
         this.textures = new TextureRegistry(this.device, this.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
         this.textures.initWhiteFallback();
         if (this._assets) {
@@ -365,6 +377,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             meshLayout: this.pipelines.meshLayout,
             skinnedLayout: this.pipelines.skinnedMeshLayout,
             shadow: this.shadowSystem,
+            spotShadow: this.spotShadowSystem,
             maxMaterials: (this.options as WebGPU3DRendererOptions).maxMaterials ?? 64,
         });
         // Changing `renderer.shadows.resolution` rebinds every material.
@@ -1001,6 +1014,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             this.instances.staticDirty = false;
         }
 
+        // Assign spot-shadow indices (must precede pack so the shader sees them).
+        const spotCasterCount = this.lights.assignSpotShadows(MAX_SPOT_SHADOWS);
+
         // Pack enabled lights densely and upload them.
         const packed = this.lights.pack();
         if (packed.count > 0) {
@@ -1243,6 +1259,26 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             this.shadowSystem.setSkinnedSlots(sslots, sSlotCount);
 
             this.shadowSystem.encode(encoder, sb, (id) => this.models.get(id) as any, skb);
+        }
+
+        // Spot-light shadow maps (independent of the directional map).
+        if (spotCasterCount > 0) {
+            const spb = this.spotBatches;
+            spb.length = 0;
+            const spts = this.spotSlots;
+            let sptCount = 0;
+            this.instances.batcher.each((modelId, instances, count, key) => {
+                const materialId = (key / SparseBatcher.MAX_SHEETS) | 0;
+                if (materialId > 0) {
+                    const m = this.materials.get(materialId);
+                    if (!m || m.transparent || !this.materials.casts(materialId)) return;
+                }
+                const offset = sptCount;
+                for (let i = 0; i < count; i++) spts[sptCount++] = instances[i]!;
+                spb.push({ modelId, offset, count });
+            });
+            this.spotShadowSystem.setSlots(spts, sptCount);
+            this.spotShadowSystem.render(encoder, spb, (id) => this.models.get(id) as any, this.lights.spotCasters);
         }
 
         const pass = encoder.beginRenderPass({

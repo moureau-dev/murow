@@ -396,7 +396,7 @@ function createShadowLayout(maxInstances: number) {
     });
 }
 
-function createShadowVertex(layout: ReturnType<typeof createShadowLayout>) {
+export function createShadowVertex(layout: ReturnType<typeof createShadowLayout>): any {
     const _WS = ['d', 'std', 'layout', 'mix', 'cos', 'sin', 'mul'];
     const fn = function(input: { position: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
         const slot = layout.$.slotIndices[input.instanceIndex];
@@ -450,7 +450,7 @@ function createShadowVertex(layout: ReturnType<typeof createShadowLayout>) {
     } as any)(fn as any);
 }
 
-function createShadowFragment() {
+export function createShadowFragment(): any {
     const fn = function(input: { vDepth: number }) {
         return d.vec4f(input.vDepth, input.vDepth, input.vDepth, 1.0);
     };

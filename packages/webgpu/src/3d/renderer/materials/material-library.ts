@@ -8,6 +8,8 @@ import type { MeshPipelines } from '../pipelines/mesh-pipelines';
 import type { TextureRegistry } from '../textures';
 import type { ShadowSystem } from '../shadows';
 import { ShadowUniforms } from '../shadows';
+import type { SpotShadowSystem } from '../shadows/spot-shadow-system';
+import { SpotShadowUniforms } from '../shadows/spot-shadow-system';
 import { createUnlitMeshVertex, createSkinnedMeshVertex, type MeshDataLayout, type SkinnedMeshDataLayout } from '../../shader';
 import type { MaterialSpec, ResolvedRenderState } from './specs';
 import { resolveRenderState, isTransparent } from './specs';
@@ -55,8 +57,10 @@ export interface MaterialLibraryDeps {
     meshLayout: MeshDataLayout;
     /** Optional skinned layout; enables skinned pipeline variants. */
     skinnedLayout?: SkinnedMeshDataLayout;
-    /** Directional shadow resources bound into every material. */
-    shadow: ShadowSystem;
+        /** Directional shadow resources bound into every material. */
+        shadow: ShadowSystem;
+        /** Spot-light shadow resources bound into every material. */
+        spotShadow: SpotShadowSystem;
     maxMaterials: number;
 }
 
@@ -216,6 +220,9 @@ export class MaterialLibrary {
         bindings.shadow = { uniform: ShadowUniforms };
         bindings.shadowMap = { texture: 'float' };
         bindings.shadowSampler = { sampler: 'filtering' };
+        bindings.spotShadow = { uniform: SpotShadowUniforms };
+        bindings.spotShadowMap = { texture: 'float', viewDimension: '2d-array' };
+        bindings.spotSampler = { sampler: 'filtering' };
         const layout = tgpu.bindGroupLayout(bindings as any);
 
         const { vertex, fragment } = this.compileDeclarative(spec, this.deps.meshLayout, layout, textureNames);
@@ -397,6 +404,9 @@ export class MaterialLibrary {
         entries.push({ binding: binding++, resource: { buffer: this.deps.shadow.uniforms } });
         entries.push({ binding: binding++, resource: this.deps.shadow.mapTexture });
         entries.push({ binding: binding++, resource: this.deps.shadow.mapSampler });
+        entries.push({ binding: binding++, resource: { buffer: this.deps.spotShadow.uniforms } });
+        entries.push({ binding: binding++, resource: this.deps.spotShadow.mapTexture });
+        entries.push({ binding: binding++, resource: this.deps.spotShadow.mapSampler });
         return this.deps.device.createBindGroup({
             layout: this.deps.root.unwrap(layout) as unknown as GPUBindGroupLayout,
             entries,
