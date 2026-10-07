@@ -18,6 +18,9 @@ export class RingBuffer {
     readonly bytes: Uint8Array;
     private readonly capacityValue: number;
     private readonly strideValue: number;
+    /** Fast wrap when capacity is a power of two (`& mask` beats `%`). */
+    private readonly mask: number;
+    private readonly isPow2: boolean;
     /** Physical index of the oldest live record. */
     private head = 0;
     private count = 0;
@@ -25,7 +28,13 @@ export class RingBuffer {
     constructor({ capacity, stride, bytes }: RingBufferOptions) {
         this.capacityValue = capacity;
         this.strideValue = stride;
+        this.isPow2 = (capacity & (capacity - 1)) === 0;
+        this.mask = this.isPow2 ? capacity - 1 : 0;
         this.bytes = bytes ?? new Uint8Array(capacity * stride);
+    }
+
+    private wrap(i: number): number {
+        return this.isPow2 ? (i & this.mask) : (i % this.capacityValue);
     }
 
     get capacity(): number { return this.capacityValue; }
@@ -37,11 +46,11 @@ export class RingBuffer {
     push(): number {
         let slot: number;
         if (this.count < this.capacityValue) {
-            slot = (this.head + this.count) % this.capacityValue;
+            slot = this.wrap(this.head + this.count);
             this.count++;
         } else {
             slot = this.head;
-            this.head = (this.head + 1) % this.capacityValue;
+            this.head = this.wrap(this.head + 1);
         }
         return slot;
     }
@@ -53,7 +62,7 @@ export class RingBuffer {
 
     /** Physical slot of the i-th oldest record (0 = oldest). */
     slotAt(i: number): number {
-        return (this.head + i) % this.capacityValue;
+        return this.wrap(this.head + i);
     }
 
     /** Byte offset of the i-th oldest record. */
