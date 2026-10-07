@@ -27,7 +27,7 @@ import { LightSystem, type LightSpec } from './lights';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { MaterialLibrary, type MaterialHandle } from './materials';
 import { ShadowSystem, type ShadowDrawBatch } from './shadows';
-import { SpotShadowSystem, MAX_SPOT_SHADOWS } from './shadows/spot-shadow-system';
+import { SpotShadowSystem } from './shadows/spot-shadow-system';
 import { DecalLayer, type DecalLayerHost, type DecalLayerOptions, type DecalInstance } from './decals';
 import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
@@ -347,7 +347,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             dynamicBuffer: this.pipelines.rawDynamicBuffer,
             staticBuffer: this.pipelines.rawStaticBuffer,
             maxInstances: this.maxInstances,
-        });
+        }, { maxShadows: (this.options as WebGPU3DRendererOptions).maxSpotShadows });
         this.spotSlots = new Uint32Array(this.maxInstances);
 
         this.textures = new TextureRegistry(this.device, this.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
@@ -1015,7 +1015,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         }
 
         // Assign spot-shadow indices (must precede pack so the shader sees them).
-        const spotCasterCount = this.lights.assignSpotShadows(MAX_SPOT_SHADOWS);
+        const spotCasterCount = this.lights.assignSpotShadows(this.spotShadowSystem.maxShadows);
 
         // Pack enabled lights densely and upload them.
         const packed = this.lights.pack();

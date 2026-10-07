@@ -1,4 +1,4 @@
-import type { TgpuRoot } from 'typegpu';
+import type { TgpuRoot, TgpuVertexFn, TgpuFragmentFn } from 'typegpu';
 import { tgpu, d, std } from '../../../shaders/typegpu';
 import { attachShaderMetadata } from '../../../shaders/runtime-transpile';
 import { DynamicMesh, SkinnedStaticMesh, StaticMesh } from '../../../core/types';
@@ -396,7 +396,7 @@ function createShadowLayout(maxInstances: number) {
     });
 }
 
-export function createShadowVertex(layout: ReturnType<typeof createShadowLayout>): any {
+export function createShadowVertex(layout: ReturnType<typeof createShadowLayout>): TgpuVertexFn {
     const _WS = ['d', 'std', 'layout', 'mix', 'cos', 'sin', 'mul'];
     const fn = function(input: { position: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
         const slot = layout.$.slotIndices[input.instanceIndex];
@@ -450,7 +450,7 @@ export function createShadowVertex(layout: ReturnType<typeof createShadowLayout>
     } as any)(fn as any);
 }
 
-export function createShadowFragment(): any {
+export function createShadowFragment(): TgpuFragmentFn {
     const fn = function(input: { vDepth: number }) {
         return d.vec4f(input.vDepth, input.vDepth, input.vDepth, 1.0);
     };

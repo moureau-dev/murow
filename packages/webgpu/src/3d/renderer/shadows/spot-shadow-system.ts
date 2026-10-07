@@ -21,6 +21,11 @@ export interface SpotShadowSystemDeps {
     maxInstances: number;
 }
 
+export interface SpotShadowOptions {
+    /** Max casting spot lights per frame. Defaults to `MAX_SPOT_SHADOWS`, clamped to it. */
+    maxShadows?: number;
+}
+
 /** Per-frame pose of a shadow-casting spot light. */
 export interface SpotLightInput {
     px: number; py: number; pz: number;
@@ -60,11 +65,14 @@ export class SpotShadowSystem {
     resolution = 1024;
     bias = 0.002;
     enabled = true;
+    /** Number of casting spot lights supported (<= the shader capacity). */
+    readonly maxShadows: number;
 
-    constructor(deps: SpotShadowSystemDeps) {
+    constructor(deps: SpotShadowSystemDeps, options: SpotShadowOptions = {}) {
         this.root = deps.root;
         this.device = deps.root.device;
         this.maxInstances = deps.maxInstances;
+        this.maxShadows = Math.max(1, Math.min(options.maxShadows ?? MAX_SPOT_SHADOWS, MAX_SPOT_SHADOWS));
         this.slotIndexBuffer = this.device.createBuffer({
             size: Math.max(4, deps.maxInstances * 4),
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -104,7 +112,7 @@ export class SpotShadowSystem {
             depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
         });
 
-        for (let i = 0; i < MAX_SPOT_SHADOWS; i++) {
+        for (let i = 0; i < this.maxShadows; i++) {
             const buf = this.device.createBuffer({ size: this.passData.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
             this.passBuffers.push(buf);
             this.passBindGroups.push(this.device.createBindGroup({
@@ -129,7 +137,7 @@ export class SpotShadowSystem {
 
     /** Render up to `MAX_SPOT_SHADOWS` casting spot lights into their layers. */
     render(encoder: GPUCommandEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined, spots: readonly SpotLightInput[]): void {
-        const count = this.enabled ? Math.min(spots.length, MAX_SPOT_SHADOWS) : 0;
+        const count = this.enabled ? Math.min(spots.length, this.maxShadows) : 0;
         const m = this.uniformData;
         for (let i = 0; i < count; i++) {
             const s = spots[i]!;
@@ -176,11 +184,11 @@ export class SpotShadowSystem {
     }
 
     private createTargets(res: number): { map: GPUTexture; mapView: GPUTextureView; depth: GPUTexture } {
-        const map = this.device.createTexture({ size: [res, res, MAX_SPOT_SHADOWS], format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
-        const depth = this.device.createTexture({ size: [res, res, MAX_SPOT_SHADOWS], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+        const map = this.device.createTexture({ size: [res, res, this.maxShadows], format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+        const depth = this.device.createTexture({ size: [res, res, this.maxShadows], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT });
         this.layerViews.length = 0;
         this.depthLayerViews.length = 0;
-        for (let i = 0; i < MAX_SPOT_SHADOWS; i++) {
+        for (let i = 0; i < this.maxShadows; i++) {
             this.layerViews.push(map.createView({ dimension: '2d', baseArrayLayer: i, arrayLayerCount: 1 }));
             this.depthLayerViews.push(depth.createView({ dimension: '2d', baseArrayLayer: i, arrayLayerCount: 1 }));
         }

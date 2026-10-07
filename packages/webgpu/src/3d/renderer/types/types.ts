@@ -97,6 +97,8 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
     maxParticleEmitters?: number;
     /** Directional shadow map resolution (square). Defaults to 2048. */
     shadowResolution?: number;
+    /** Max casting spot lights per frame. Defaults to 4. */
+    maxSpotShadows?: number;
     /**
      * Upper bound on internal render resolution relative to CSS pixels (caps
      * `devicePixelRatio`, default uncapped). `1.5` is a good HiDPI trade-off;

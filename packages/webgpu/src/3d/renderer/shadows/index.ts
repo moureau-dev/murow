@@ -11,5 +11,6 @@ export {
     SpotShadowUniforms,
     MAX_SPOT_SHADOWS,
     type SpotShadowSystemDeps,
+    type SpotShadowOptions,
     type SpotLightInput,
 } from './spot-shadow-system';
