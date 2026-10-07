@@ -1,3 +1,4 @@
+import { RingStore } from 'murow/core/ring';
 import type { Component, Entity, World } from 'murow/ecs';
 import type { ServerPlugin } from './plugin';
 
@@ -56,11 +57,11 @@ export class LagCompensation implements ServerPlugin {
     readonly tickRate: number;
     private components: Component<any>[];
     private ringSize: number;
-    private ringHead = 0;
     private currentTick = 0;
     private world: World | null = null;
 
-    private frames: Frame[] = [];
+    /** Preallocated frame ring; `push()` recycles the oldest on wrap. */
+    private ring!: RingStore<Frame>;
     /** Bytes per entity entry, worst case (eid + full presence mask + all fields). */
     private entryStride = 4;
     private words = 1;
@@ -113,7 +114,7 @@ export class LagCompensation implements ServerPlugin {
         this.dirtyEids = new Uint32Array(maxEntities);
 
         const initial = HEADER_BYTES + Math.min(maxEntities, INITIAL_ENTITIES) * this.entryStride;
-        for (let i = 0; i < this.ringSize; i++) this.frames.push(makeFrame(initial));
+        this.ring = new RingStore<Frame>({ capacity: this.ringSize, create: () => makeFrame(initial) });
         this.ensureScratch(initial);
     }
 
@@ -129,7 +130,7 @@ export class LagCompensation implements ServerPlugin {
         if (this.dirtyCount === 0) this.collectAll(world);
 
         const count = this.dirtyCount;
-        const frame = this.frames[this.ringHead];
+        const frame = this.ring.get(this.ring.push());
         this.ensureFrame(frame, count);
         frame.tick = this.currentTick;
         const dv = frame.dv;
@@ -145,18 +146,16 @@ export class LagCompensation implements ServerPlugin {
             written++;
         }
         dv.setUint32(4, written, true);
-
-        this.ringHead = (this.ringHead + 1) % this.ringSize;
     }
 
     rewind<T>(clientTick: number, fn: () => T): T {
         const world = this.world;
         if (world === null) return fn();
 
-        const index = this.findFrame(clientTick);
-        if (index === -1) return fn();
+        const slot = this.findFrame(clientTick);
+        if (slot === -1) return fn();
 
-        const frame = this.frames[index];
+        const frame = this.ring.get(slot);
         const count = frame.dv.getUint32(4, true);
         if (count === 0) return fn();
 
@@ -224,21 +223,23 @@ export class LagCompensation implements ServerPlugin {
     };
 
     private findFrame(clientTick: number): number {
+        const size = this.ring.size;
         const delta = this.currentTick - clientTick;
-        if (delta >= 0 && delta < this.ringSize) {
-            const idx = (this.ringHead - 1 - delta + this.ringSize) % this.ringSize;
-            if (this.frames[idx].tick === clientTick) return idx;
+        if (delta >= 0 && delta < size) {
+            const slot = this.ring.slotAt(size - 1 - delta);
+            if (this.ring.get(slot).tick === clientTick) return slot;
         }
         // Gap/out-of-range: nearest retained frame.
         let best = -1;
         let bestDelta = Number.MAX_SAFE_INTEGER;
-        for (let i = 0; i < this.ringSize; i++) {
-            const t = this.frames[i].tick;
+        for (let i = 0; i < size; i++) {
+            const slot = this.ring.slotAt(i);
+            const t = this.ring.get(slot).tick;
             if (t < 0) continue;
             const d = Math.abs(t - clientTick);
             if (d < bestDelta) {
                 bestDelta = d;
-                best = i;
+                best = slot;
             }
         }
         return best;

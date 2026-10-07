@@ -79,8 +79,12 @@ export function attachShaderMetadata(
 
     let source = sourceOverride ?? fn?.toString?.() ?? '';
 
-    // Handle method shorthand: `name(...) { }` → `function(...) { }`
-    if (!source.startsWith('function') && !source.startsWith('(') && !source.startsWith('async')) {
+    // Handle method shorthand: `name(...) { }` → `function(...) { }`.
+    // Skip arrow functions (which may appear as `x => { … }` after minification
+    // strips a single parameter's parentheses) — rewriting those corrupts them.
+    const firstBrace = source.indexOf('{');
+    const isArrow = firstBrace !== -1 && source.slice(0, firstBrace).includes('=>');
+    if (!isArrow && !source.startsWith('function') && !source.startsWith('(') && !source.startsWith('async')) {
         const parenIndex = source.indexOf('(');
         if (parenIndex !== -1) {
             source = 'function' + source.slice(parenIndex);

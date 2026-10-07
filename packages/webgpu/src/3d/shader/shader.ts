@@ -122,6 +122,7 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             vNormal: nRx,
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
+            vCustom: d.vec2f(stat.custom0, stat.custom1),
         };
     };
     attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std, meshLayout }, _WS);
@@ -136,6 +137,7 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             vNormal: d.vec3f,
             vColor: d.vec3f,
             vWorldPos: d.vec3f,
+            vCustom: d.vec2f,
         },
     })(fn as any);
 }
@@ -304,6 +306,7 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vUV: input.uv,
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
+            vCustom: d.vec2f(stat.custom0, stat.custom1),
         };
     };
     attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std, meshLayout }, _WS);
@@ -320,6 +323,7 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
             vColor: d.vec3f,
             vUV: d.vec2f,
             vWorldPos: d.vec3f,
+            vCustom: d.vec2f,
         },
     })(fn as any);
 }
@@ -383,6 +387,7 @@ export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
             pos: clipPos,
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vUV: input.uv,
+            vCustom: d.vec2f(stat.custom0, stat.custom1),
         };
     };
     attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std, meshLayout });
@@ -397,6 +402,7 @@ export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
             pos: d.builtin.position,
             vColor: d.vec3f,
             vUV: d.vec2f,
+            vCustom: d.vec2f,
         },
     })(fn as any);
 }
@@ -625,6 +631,8 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vUV: input.uv,
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
+            // SkinnedStaticMesh has no custom slots; keep the varying at location 4.
+            vCustom: d.vec2f(0.0, 0.0),
         };
     };
     attachShaderMetadata(fn, () => ({ d, std, layout }), false, { d, std, layout }, _WSSK);
@@ -643,6 +651,7 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
             vColor: d.vec3f,
             vUV: d.vec2f,
             vWorldPos: d.vec3f,
+            vCustom: d.vec2f,
         },
     })(fn as any);
 }

@@ -1336,6 +1336,26 @@ members.add(42);                      // false if out of range or already presen
 members.has(42);
 ```
 
+### `Ring` / `RingStore` / `RingBuffer` — fixed-capacity oldest-eviction
+
+Fixed rings that overwrite the oldest entry when full. Distinct from `FreeList`/`SlotMap`: those reuse *freed* slots and can fail; a ring never frees and never fails. Use for bounded histories and cosmetic pools (decal marks, trails, floating text, input/lag-comp history).
+
+```ts
+import { Ring, RingStore, RingBuffer } from 'murow/core/ring';
+
+const voices = new Ring(8);              // u32 values (ids/flags)
+voices.push(42); voices.oldest();
+
+const decals = new RingStore({ capacity: 256, create: () => ({ x: 0, y: 0, cell: 0 }) });
+const slot = decals.push();              // recycles the oldest past capacity
+decals.get(slot).x = 3;                  // mutate the reused object in place
+
+const frames = new RingBuffer({ capacity: 64, stride: 256 }); // fixed-stride byte records
+const off = frames.offsetOf(frames.push());
+```
+
+All three iterate oldest to newest (`forEach`), and expose `at(i)` / `slotAt(i)` (0 = oldest), `oldest()`, `newest()`, `size`, `capacity`, `isFull`, `clear()`. Zero allocation after construction.
+
 ### `SparseBatcher` — layer/sheet bucketing for draw calls
 
 ```ts
@@ -2928,6 +2948,19 @@ const ground = renderer.createMaterial({ type: 'standard', shadow: { receive: tr
 | `WebGPU3DRendererOptions.shadowResolution` | `2048` | Initial map size |
 
 Casters are opaque instances, including skinned meshes (skinned casters share the animated bone matrices). Limitations: one directional light; constant bias (no slope scale); a single fixed box around the camera, so casters beyond `distance` do not cast and detail falls off with distance. Custom `shader` fragments can read the map via the `shadow`, `shadowMap`, and `shadowSampler` free variables.
+
+### Decals (3D)
+
+Pooled surface marks (blood, scorch, AoE rings) drawn as instanced `plane` quads oriented to a surface normal, sampled from one atlas, faded over time. One draw call for the whole pool.
+
+```ts
+const decals = renderer.createDecalLayer({ atlas: 'decals', quad: 'decalQuad', capacity: 256, cols: 4, rows: 4, life: 8 });
+decals.spawn(x, y, z, nx, ny, nz, { cell: 2, size: 0.8 });  // hit point + normal
+```
+
+- The atlas is an `AssetBucket` texture; each decal picks a cell via the per-instance channel (`x` = cell, `y` = spawn time), delivered to the fragment through the engine's `vCustom` varying.
+- The pool is a `RingStore` — the oldest mark is recycled past `capacity`; the fade is computed in the shader from `scene.time - spawn`, so the CPU never expires anything.
+- The material is created by the layer: `type: 'shader'`, `lit: false`, `blend: 'alpha'`, `depthWrite: false`, `cull: 'none'`.
 
 ### Renderer shape
 

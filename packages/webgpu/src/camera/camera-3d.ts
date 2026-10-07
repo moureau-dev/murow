@@ -121,33 +121,6 @@ export class Camera3D implements Camera3DState {
         return this._vpMatrix;
     }
 
-    /**
-     * Write the 8 world-space frustum corners into `out` (24 floats):
-     * near plane at 0..3, far plane at 4..7, in (-x,-y), (+x,-y), (+x,+y), (-x,+y)
-     * order. Uses interpolated (render) state so it matches the drawn frame.
-     */
-    writeFrustumCorners(out: Float32Array): void {
-        const m = this.getViewMatrix();
-        const rightX = m[0], rightY = m[4], rightZ = m[8];
-        const upX = m[1], upY = m[5], upZ = m[9];
-        const fwdX = -m[2], fwdY = -m[6], fwdZ = -m[10];
-        const th = Math.tan(this.fov * Math.PI / 180 * 0.5);
-        const tw = th * this.aspect;
-        const px = this._renderPosition[0], py = this._renderPosition[1], pz = this._renderPosition[2];
-        const sx = [-1, 1, 1, -1];
-        const sy = [-1, -1, 1, 1];
-        for (let i = 0; i < 4; i++) {
-            const nw = tw * this.near * sx[i]!, nh = th * this.near * sy[i]!;
-            out[i * 3] = px + fwdX * this.near + rightX * nw + upX * nh;
-            out[i * 3 + 1] = py + fwdY * this.near + rightY * nw + upY * nh;
-            out[i * 3 + 2] = pz + fwdZ * this.near + rightZ * nw + upZ * nh;
-            const fw = tw * this.far * sx[i]!, fh = th * this.far * sy[i]!;
-            out[(4 + i) * 3] = px + fwdX * this.far + rightX * fw + upX * fh;
-            out[(4 + i) * 3 + 1] = py + fwdY * this.far + rightY * fw + upY * fh;
-            out[(4 + i) * 3 + 2] = pz + fwdZ * this.far + rightZ * fw + upZ * fh;
-        }
-    }
-
     setAspect(width: number, height: number): void {
         this.aspect = width / height;
         this._width = width;

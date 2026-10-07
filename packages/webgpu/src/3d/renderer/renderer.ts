@@ -27,6 +27,7 @@ import { LightSystem, type LightSpec } from './lights';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { MaterialLibrary, type MaterialHandle } from './materials';
 import { ShadowSystem, type ShadowDrawBatch } from './shadows';
+import { DecalLayer, type DecalLayerHost, type DecalLayerOptions, type DecalInstance } from './decals';
 import type { MaterialSpec } from './materials/specs';
 import { Camera3D } from '../../camera/camera-3d';
 import { CameraEffectStack } from './camera-effects/stack';
@@ -183,6 +184,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private lights = new LightSystem(MAX_LIGHTS);
     private materials!: MaterialLibrary;
     private shadowSystem!: ShadowSystem;
+    private readonly decalLayers: DecalLayer[] = [];
     private readonly shadowBatches: ShadowDrawBatch[] = [];
     private readonly shadowSkinnedBatches: ShadowDrawBatch[] = [];
     /** Caster slot indices for the shadow pass (all live instances). */
@@ -591,6 +593,27 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
      */
     setShadowResolution(resolution: number): void {
         this.shadowSystem.resolution = resolution;
+    }
+
+    /**
+     * Create a pooled decal layer (blood/scorch/AoE marks). Spawn marks with
+     * `layer.spawn(...)` from a hit point + surface normal; the oldest are
+     * recycled past `capacity` and fade out over `life`.
+     */
+    createDecalLayer(opts: DecalLayerOptions): DecalLayer {
+        const host: DecalLayerHost = {
+            createMaterial: (spec) => this.createMaterial(spec) as never,
+            addDecalInstance: (prefab, material) => this.addInstance({
+                prefab,
+                position: [0, -10000, 0],
+                scale: 0.001,
+                material,
+            }) as unknown as DecalInstance,
+            elapsedSeconds: () => this.elapsed,
+        };
+        const layer = new DecalLayer(host, opts);
+        this.decalLayers.push(layer);
+        return layer;
     }
 
     /** Create a flat grid mesh on the XZ plane at Y=0. */

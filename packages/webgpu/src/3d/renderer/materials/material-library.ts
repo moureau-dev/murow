@@ -310,15 +310,15 @@ export class MaterialLibrary {
         } else if (skinned) {
             if (!this.engineSkinnedVertex) this.engineSkinnedVertex = createSkinnedMeshVertex(meshLayout as SkinnedMeshDataLayout);
             vertex = this.engineSkinnedVertex;
-            fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position };
+            fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position, vCustom: d.vec2f };
         } else if (spec.lit === false) {
             if (!this.engineUnlitVertex) this.engineUnlitVertex = createUnlitMeshVertex(meshLayout as MeshDataLayout);
             vertex = this.engineUnlitVertex;
-            fragmentIn = { vColor: d.vec3f, vUV: d.vec2f };
+            fragmentIn = { vColor: d.vec3f, vUV: d.vec2f, vCustom: d.vec2f };
         } else {
             if (!this.engineVertex) this.engineVertex = createTexturedMeshVertex(meshLayout as MeshDataLayout);
             vertex = this.engineVertex;
-            fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position };
+            fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position, vCustom: d.vec2f };
         }
 
         // The skinned variant attaches independent metadata to a placeholder fn

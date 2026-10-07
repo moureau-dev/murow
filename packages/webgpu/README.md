@@ -43,6 +43,7 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **Camera effects** — an ordered fullscreen post chain on `renderer.camera.effects` (fxaa, vignette, grade, chromatic, scanlines, posterize, motionBlur) plus custom declarative shader effects, rendered through off-screen targets
 - **3D particles** — GPU-first `renderer.particles`: emitters, atlas animation, turbulence, additive/alpha materials, and per-material `drawIndirect` batching
 - **Shadows** — a single directional shadow map cast by the sun, controlled at runtime via `renderer.shadows` (`enabled`, `softness`, `bias`, `distance`); `standard` materials PCF-sample it, per-material `shadow: { cast, receive }`
+- **Decals** — `renderer.createDecalLayer({ atlas, quad, capacity })` pools instanced quads oriented to a surface normal (blood/scorch/AoE marks), sampling one atlas cell per mark and fading over time; oldest recycled past capacity
 
 ## Usage
 
@@ -244,8 +245,11 @@ from `'murow'`.
 - `MaterialSpec` / `EngineMaterialSpec` / `ShaderMaterialSpec` / `BlendMode` / `CullMode` — material spec types, exported from `murow/webgpu`
 
 ### Shadows
-- [`ShadowSystem`](./src/3d/renderer/shadows/shadow-system.ts) — directional shadow map control (`renderer.shadows`): `enabled`, `softness`, `bias`, `distance`; `renderer.setShadowResolution(px)` rebuilds the map
+- [`ShadowSystem`](./src/3d/renderer/shadows/shadow-system.ts) — directional shadow map control (`renderer.shadows`): `enabled`, `softness`, `bias`, `distance`, `resolution`; `renderer.setShadowResolution(px)` is an alias
 - Per material: `shadow: { cast?: boolean; receive?: boolean }` (transparent materials never cast)
+
+### Decals
+- [`DecalLayer`](./src/3d/renderer/decals/decal-layer.ts) — `renderer.createDecalLayer({ atlas, quad, capacity })`; `spawn(x,y,z,nx,ny,nz,{cell,size})` places a pooled, atlas-sampled, time-faded mark (backed by core `RingStore`)
 
 ### Camera effects
 - [`CameraEffectStack`](./src/3d/renderer/camera-effects/stack.ts) — off-screen targets + ping-pong fullscreen passes

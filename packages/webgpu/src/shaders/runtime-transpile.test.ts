@@ -73,6 +73,21 @@ describe('attachShaderMetadata (recovery)', () => {
         }
     });
 
+    test('parses an unparenthesized arrow (minified single-param form)', () => {
+        // esbuild drops the parens of a single typed parameter, leaving
+        // `input => { … }`. The method-shorthand rewrite must not touch it.
+        const meta = attach(
+            `input => { const cell = input.vCustom.x; return d.vec4f(cell, material.cols, scene.time, 1.0); }`,
+            { d, std, material: { cols: 4 }, scene: { time: 0 } },
+            false,
+        );
+        expect(meta).toBeDefined();
+        const resolved = meta.externals();
+        for (const name of meta.ast.externalNames) {
+            expect(name in resolved).toBe(true);
+        }
+    });
+
     test('renames a minifier-produced lone `_` local identifier', () => {
         const meta = attach(
             `function (input) {
