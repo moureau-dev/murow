@@ -147,6 +147,21 @@ function cameraBasis(
 }
 
 /** The WebGPU 3D renderer: instances, materials, lights, skinning, and camera effects. */
+/** Whether a sphere is within any light's range (a cheap light-volume cull). */
+function inAnySpotRange(
+    casters: readonly { px: number; py: number; pz: number; range: number }[],
+    count: number,
+    cx: number, cy: number, cz: number, radius: number,
+): boolean {
+    for (let k = 0; k < count; k++) {
+        const s = casters[k]!;
+        const dx = cx - s.px, dy = cy - s.py, dz = cz - s.pz;
+        const r = s.range + radius;
+        if (dx * dx + dy * dy + dz * dz <= r * r) return true;
+    }
+    return false;
+}
+
 export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Base3DRenderer {
     private root!: TgpuRoot;
     private device!: GPUDevice;
@@ -190,6 +205,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private spotShadowSystem!: SpotShadowSystem;
     private pointShadowSystem!: PointShadowSystem;
     private lastShadowMotion = -1;
+    private lastSpotHash = NaN;
+    private lastSpotMotion = -1;
+    private lastPointHash = NaN;
+    private lastPointMotion = -1;
     private readonly spotBatches: ShadowDrawBatch[] = [];
     private spotSlots!: Uint32Array<ArrayBuffer>;
     private readonly spotSkinnedBatches: ShadowDrawBatch[] = [];
@@ -1310,80 +1329,172 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             this.shadowSystem.encode(encoder, sb, (id) => this.models.get(id) as any, skb);
         }
 
-        // Spot-light shadow maps (independent of the directional map).
+        // Spot-light shadow maps. Cached (skipped when nothing changed) and the
+        // caster list is culled to the spot range spheres.
         if (spotCasterCount > 0) {
-            const spb = this.spotBatches;
-            spb.length = 0;
-            const spts = this.spotSlots;
-            let sptCount = 0;
-            this.instances.batcher.each((modelId, instances, count, key) => {
-                const materialId = (key / SparseBatcher.MAX_SHEETS) | 0;
-                if (materialId > 0) {
-                    const m = this.materials.get(materialId);
-                    if (!m || m.transparent || !this.materials.casts(materialId)) return;
-                }
-                const offset = sptCount;
-                for (let i = 0; i < count; i++) spts[sptCount++] = instances[i]!;
-                spb.push({ modelId, offset, count });
-            });
-            this.spotShadowSystem.setSlots(spts, sptCount);
-            const sskb = this.spotSkinnedBatches;
-            sskb.length = 0;
-            const ssslots = this.spotSkinnedSlots;
-            let sskCount = 0;
-            this.skinned.batcher.each((modelId, instances, count) => {
-                const offset = sskCount;
-                for (let i = 0; i < count; i++) {
-                    const slot = instances[i]!;
-                    const mid = this.skinned.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
-                    if (mid > 0) {
-                        const m = this.materials.get(mid);
-                        if (!m || m.transparent || !this.materials.casts(mid)) continue;
+            const casters = this.lights.spotCasters;
+            let hash = spotCasterCount;
+            for (let i = 0; i < spotCasterCount; i++) {
+                const s = casters[i]!;
+                hash = (hash * 31 + ((s.px * 7 + s.py * 13 + s.pz * 17 + s.dx * 19 + s.dy * 23 + s.dz * 29 + s.angle * 31 + s.range * 37) | 0)) | 0;
+            }
+            if (hash !== this.lastSpotHash || shadowMotion !== this.lastSpotMotion) {
+                this.lastSpotHash = hash;
+                this.lastSpotMotion = shadowMotion;
+                const spb = this.spotBatches;
+                spb.length = 0;
+                const spts = this.spotSlots;
+                const dyn = this.instances.dynamicData;
+                const stat = this.instances.staticData;
+                let sptCount = 0;
+                this.instances.batcher.each((modelId, instances, count, key) => {
+                    const materialId = (key / SparseBatcher.MAX_SHEETS) | 0;
+                    if (materialId > 0) {
+                        const m = this.materials.get(materialId);
+                        if (!m || m.transparent || !this.materials.casts(materialId)) return;
                     }
-                    ssslots[sskCount++] = slot;
-                }
-                if (sskCount > offset) sskb.push({ modelId, offset, count: sskCount - offset });
-            });
-            this.spotShadowSystem.setSkinnedSlots(ssslots, sskCount);
-            this.spotShadowSystem.render(encoder, spb, (id) => this.models.get(id) as any, this.lights.spotCasters, sskb);
+                    const model = this.models.get(modelId);
+                    if (!model) return;
+                    const baseRadius = model.boundingRadius;
+                    const offset = sptCount;
+                    for (let i = 0; i < count; i++) {
+                        const slot = instances[i]!;
+                        const base = slot * DYNAMIC_MESH_FLOATS;
+                        const sBase = slot * STATIC_MESH_FLOATS;
+                        const cx = dyn[base + DYN_CURR_PX];
+                        const cy = dyn[base + DYN_CURR_PY];
+                        const cz = dyn[base + DYN_CURR_PZ];
+                        const sx = stat[sBase + STAT_SX];
+                        const sy = stat[sBase + STAT_SY];
+                        const sz = stat[sBase + STAT_SZ];
+                        const ms = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
+                        const radius = baseRadius * ms;
+                        if (inAnySpotRange(casters, spotCasterCount, cx, cy, cz, radius)) spts[sptCount++] = slot;
+                    }
+                    if (sptCount > offset) spb.push({ modelId, offset, count: sptCount - offset });
+                });
+                this.spotShadowSystem.setSlots(spts, sptCount);
+
+                const sskb = this.spotSkinnedBatches;
+                sskb.length = 0;
+                const ssslots = this.spotSkinnedSlots;
+                const sDyn = this.skinned.dynamicData;
+                const sStat = this.skinned.staticData;
+                let sskCount = 0;
+                this.skinned.batcher.each((modelId, instances, count) => {
+                    const model = this.models.get(modelId);
+                    if (!model) return;
+                    const skinModel = model.skinIndex >= 0 ? this.models.skinnedModel(model.skinIndex) : null;
+                    const baseRadius = skinModel?.boundingRadius ?? 10;
+                    const offset = sskCount;
+                    for (let i = 0; i < count; i++) {
+                        const slot = instances[i]!;
+                        const mid = sStat[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
+                        if (mid > 0) {
+                            const m = this.materials.get(mid);
+                            if (!m || m.transparent || !this.materials.casts(mid)) continue;
+                        }
+                        const base = slot * DYNAMIC_MESH_FLOATS;
+                        const sBase = slot * SKINNED_STATIC_MESH_FLOATS;
+                        const cx = sDyn[base + DYN_CURR_PX];
+                        const cy = sDyn[base + DYN_CURR_PY];
+                        const cz = sDyn[base + DYN_CURR_PZ];
+                        const sx = sStat[sBase + SSTAT_SX];
+                        const sy = sStat[sBase + SSTAT_SY];
+                        const sz = sStat[sBase + SSTAT_SZ];
+                        const ms = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
+                        if (inAnySpotRange(casters, spotCasterCount, cx, cy, cz, baseRadius * ms)) ssslots[sskCount++] = slot;
+                    }
+                    if (sskCount > offset) sskb.push({ modelId, offset, count: sskCount - offset });
+                });
+                this.spotShadowSystem.setSkinnedSlots(ssslots, sskCount);
+                this.spotShadowSystem.render(encoder, spb, (id) => this.models.get(id) as any, casters, sskb);
+            }
+        } else {
+            this.lastSpotHash = NaN;
         }
 
-        // Point-light cube shadow maps.
+        // Point-light cube shadow maps. Cached and culled to the light range.
         if (pointCasterCount > 0) {
-            const ppb = this.pointBatches;
-            ppb.length = 0;
-            const ppts = this.pointSlots;
-            let pptCount = 0;
-            this.instances.batcher.each((modelId, instances, count, key) => {
-                const materialId = (key / SparseBatcher.MAX_SHEETS) | 0;
-                if (materialId > 0) {
-                    const m = this.materials.get(materialId);
-                    if (!m || m.transparent || !this.materials.casts(materialId)) return;
-                }
-                const offset = pptCount;
-                for (let i = 0; i < count; i++) ppts[pptCount++] = instances[i]!;
-                ppb.push({ modelId, offset, count });
-            });
-            this.pointShadowSystem.setSlots(ppts, pptCount);
-            const pskb = this.pointSkinnedBatches;
-            pskb.length = 0;
-            const psslots = this.pointSkinnedSlots;
-            let pskCount = 0;
-            this.skinned.batcher.each((modelId, instances, count) => {
-                const offset = pskCount;
-                for (let i = 0; i < count; i++) {
-                    const slot = instances[i]!;
-                    const mid = this.skinned.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
-                    if (mid > 0) {
-                        const m = this.materials.get(mid);
-                        if (!m || m.transparent || !this.materials.casts(mid)) continue;
+            const casters = this.lights.pointCasters;
+            let hash = pointCasterCount;
+            for (let i = 0; i < pointCasterCount; i++) {
+                const s = casters[i]!;
+                hash = (hash * 31 + ((s.px * 7 + s.py * 13 + s.pz * 17 + s.range * 37) | 0)) | 0;
+            }
+            if (hash !== this.lastPointHash || shadowMotion !== this.lastPointMotion) {
+                this.lastPointHash = hash;
+                this.lastPointMotion = shadowMotion;
+                const ppb = this.pointBatches;
+                ppb.length = 0;
+                const ppts = this.pointSlots;
+                const dyn = this.instances.dynamicData;
+                const stat = this.instances.staticData;
+                let pptCount = 0;
+                this.instances.batcher.each((modelId, instances, count, key) => {
+                    const materialId = (key / SparseBatcher.MAX_SHEETS) | 0;
+                    if (materialId > 0) {
+                        const m = this.materials.get(materialId);
+                        if (!m || m.transparent || !this.materials.casts(materialId)) return;
                     }
-                    psslots[pskCount++] = slot;
-                }
-                if (pskCount > offset) pskb.push({ modelId, offset, count: pskCount - offset });
-            });
-            this.pointShadowSystem.setSkinnedSlots(psslots, pskCount);
-            this.pointShadowSystem.render(encoder, ppb, (id) => this.models.get(id) as any, this.lights.pointCasters, pskb);
+                    const model = this.models.get(modelId);
+                    if (!model) return;
+                    const baseRadius = model.boundingRadius;
+                    const offset = pptCount;
+                    for (let i = 0; i < count; i++) {
+                        const slot = instances[i]!;
+                        const base = slot * DYNAMIC_MESH_FLOATS;
+                        const sBase = slot * STATIC_MESH_FLOATS;
+                        const cx = dyn[base + DYN_CURR_PX];
+                        const cy = dyn[base + DYN_CURR_PY];
+                        const cz = dyn[base + DYN_CURR_PZ];
+                        const sx = stat[sBase + STAT_SX];
+                        const sy = stat[sBase + STAT_SY];
+                        const sz = stat[sBase + STAT_SZ];
+                        const ms = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
+                        if (inAnySpotRange(casters, pointCasterCount, cx, cy, cz, baseRadius * ms)) ppts[pptCount++] = slot;
+                    }
+                    if (pptCount > offset) ppb.push({ modelId, offset, count: pptCount - offset });
+                });
+                this.pointShadowSystem.setSlots(ppts, pptCount);
+
+                const pskb = this.pointSkinnedBatches;
+                pskb.length = 0;
+                const psslots = this.pointSkinnedSlots;
+                const sDyn = this.skinned.dynamicData;
+                const sStat = this.skinned.staticData;
+                let pskCount = 0;
+                this.skinned.batcher.each((modelId, instances, count) => {
+                    const model = this.models.get(modelId);
+                    if (!model) return;
+                    const skinModel = model.skinIndex >= 0 ? this.models.skinnedModel(model.skinIndex) : null;
+                    const baseRadius = skinModel?.boundingRadius ?? 10;
+                    const offset = pskCount;
+                    for (let i = 0; i < count; i++) {
+                        const slot = instances[i]!;
+                        const mid = sStat[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
+                        if (mid > 0) {
+                            const m = this.materials.get(mid);
+                            if (!m || m.transparent || !this.materials.casts(mid)) continue;
+                        }
+                        const base = slot * DYNAMIC_MESH_FLOATS;
+                        const sBase = slot * SKINNED_STATIC_MESH_FLOATS;
+                        const cx = sDyn[base + DYN_CURR_PX];
+                        const cy = sDyn[base + DYN_CURR_PY];
+                        const cz = sDyn[base + DYN_CURR_PZ];
+                        const sx = sStat[sBase + SSTAT_SX];
+                        const sy = sStat[sBase + SSTAT_SY];
+                        const sz = sStat[sBase + SSTAT_SZ];
+                        const ms = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
+                        if (inAnySpotRange(casters, pointCasterCount, cx, cy, cz, baseRadius * ms)) psslots[pskCount++] = slot;
+                    }
+                    if (pskCount > offset) pskb.push({ modelId, offset, count: pskCount - offset });
+                });
+                this.pointShadowSystem.setSkinnedSlots(psslots, pskCount);
+                this.pointShadowSystem.render(encoder, ppb, (id) => this.models.get(id) as any, casters, pskb);
+            }
+        } else {
+            this.lastPointHash = NaN;
         }
 
         const pass = encoder.beginRenderPass({
