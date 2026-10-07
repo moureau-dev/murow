@@ -42,8 +42,9 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **Materials** — `renderer.createMaterial(spec)` with `standard` (lit), `unlit`, `emissive`, and custom `shader` types; per-material uniforms, named textures (mipmapped), `alphaTest` cutout, UV scale/offset, per-material samplers, two-sided normals, and render state (blend modes / depth / cull / colorWrite / depthBias)
 - **Camera effects** — an ordered fullscreen post chain on `renderer.camera.effects` (fxaa, vignette, grade, chromatic, scanlines, posterize, motionBlur) plus custom declarative shader effects, rendered through off-screen targets
 - **3D particles** — GPU-first `renderer.particles`: emitters, atlas animation, turbulence, additive/alpha materials, per-material `drawIndirect` batching, and camera-frustum emitter culling
-- **Shadows** — a single directional shadow map cast by the sun, controlled at runtime via `renderer.shadows` (`enabled`, `softness`, `bias`, `distance`); `standard` materials PCF-sample it, per-material `shadow: { cast, receive }`
+- **Shadows** — a single directional shadow map cast by the sun, controlled at runtime via `renderer.shadows` (`enabled`, `softness`, `bias`, `distance`, `anchorStep`, `resolution`); `standard` materials 4-tap PCF-sample it, per-material `shadow: { cast, receive }`. The map is cached and only re-rendered when the sun, the snapped box, or a caster changes
 - **Decals** — `renderer.createDecalLayer({ atlas, quad, capacity })` pools instanced quads oriented to a surface normal (blood/scorch/AoE marks), sampling one atlas cell per mark and fading over time; oldest recycled past capacity
+- **Resolution cap** — `maxPixelRatio` caps the internal render resolution on HiDPI (scene + post + shadows all scale with it); the single cheapest large perf win
 
 ## Usage
 

@@ -2912,7 +2912,7 @@ Spec fields:
 | `id` | all | debug label on the GPU pipeline |
 | `shadow` | all | `{ cast?, receive? }`; participate in the directional shadow map (both default `true`; transparent never casts) |
 
-Free variables inside a `shader` fragment (and custom vertex): `scene` (engine uniforms: `viewProjection`, `alpha`, sun direction/ambient, `lightCount`, `cameraX/Y/Z`, `time`, `resolutionX/Y`), `material` (this material's uniforms), `textures` (one key per declared texture name, plus a `<name>Sampler` and a convenience `sampler`), `lights`, `dynamic`, `statics`, `slotIndices`; plus `d`, `std`, and the helpers `lightContribution`, `tonemap`. The fragment also receives `input.position` (fragment coords) for screen-space UV: `input.position.xy / vec2(scene.resolutionX, scene.resolutionY)`. Engine fragments flip the normal on back faces, so `cull:'none'` lights both sides.
+Free variables inside a `shader` fragment (and custom vertex): `scene` (engine uniforms: `viewProjection`, `alpha`, sun direction/ambient, `lightCount`, `cameraX/Y/Z`, `time`, `resolutionX/Y`), `material` (this material's uniforms), `textures` (one key per declared texture name, plus a `<name>Sampler` and a convenience `sampler`), `lights`, `dynamic`, `statics`, `slotIndices`; plus `d`, `std`, and the helpers `lightContribution`, `tonemap`. The fragment also receives `input.position` (fragment coords) for screen-space UV: `input.position.xy / vec2(scene.resolutionX, scene.resolutionY)`, and `input.vCustom` (`vec2` = the instance's `custom0`/`custom1`, set via `handle.setMaterialParams(a, b)`). Engine fragments flip the normal on back faces, so `cull:'none'` lights both sides.
 
 Batching is by `(materialId, modelId)`; `render()` draws opaque batches first, then transparent (`alpha`/`additive`) batches.
 
@@ -3030,6 +3030,8 @@ interface WebGPU3DRendererOptions {
   maxSkinnedInstances?: number;          // cap on simultaneously animated meshes
   maxBonesPerSkin?: number;              // cap on bones per skinned model
   animationCullDistance?: number;         // skip CPU skinning for instances farther than this
+  shadowResolution?: number;             // directional shadow map size (default 2048)
+  maxPixelRatio?: number;                // caps devicePixelRatio; scene + post + shadows scale with it (default uncapped)
   clearColor?: [number, number, number, number];
   autoResize?: boolean;
 }
@@ -3050,6 +3052,7 @@ const renderer = new WebGPU3DRenderer(canvas, {
   clearColor: [0.05, 0.07, 0.13, 1],
   autoResize: true,
   animationCullDistance: 15,
+  maxPixelRatio: 1.5,          // cheapest large perf win on HiDPI: caps the internal resolution
 });
 await renderer.init();
 
