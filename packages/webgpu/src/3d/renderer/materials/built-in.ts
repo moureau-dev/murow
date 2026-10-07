@@ -89,34 +89,25 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
             const ndc = d.vec3f(lp.x / lp.w, lp.y / lp.w, lp.z / lp.w);
             const suv = d.vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
             const sDepth = ndc.z * 0.5 + 0.5 - shU.params.y;
-            const t = shU.params.z * shU.params.w;
+            // 2x2 PCF at half-texel offsets; the linear sampler makes each tap a
+            // 2x2 bilinear average, so four taps cover a 3x3 neighbourhood.
+            const t = shU.params.z * shU.params.w * 0.5;
             const one = d.f32(1.0);
             const zero = d.f32(0.0);
             const xn = d.f32(-1.0);
-            const xz = d.f32(0.0);
             const xp = d.f32(1.0);
-            const s00 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xn), t))).x;
-            const s10 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xz, xn), t))).x;
-            const s20 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xn), t))).x;
-            const s01 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xz), t))).x;
-            const s11 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xz, xz), t))).x;
-            const s21 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xz), t))).x;
-            const s02 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xp), t))).x;
-            const s12 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xz, xp), t))).x;
-            const s22 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xp), t))).x;
+            const s0 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xn), t))).x;
+            const s1 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xn), t))).x;
+            const s2 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xn, xp), t))).x;
+            const s3 = std.textureSample(matLayout.$.shadowMap, matLayout.$.shadowSampler, std.add(suv, std.mul(d.vec2f(xp, xp), t))).x;
             // select(falseValue, trueValue, cond): 1 when this tap is occluded.
-            const occ = std.select(zero, one, sDepth > s00)
-                + std.select(zero, one, sDepth > s10)
-                + std.select(zero, one, sDepth > s20)
-                + std.select(zero, one, sDepth > s01)
-                + std.select(zero, one, sDepth > s11)
-                + std.select(zero, one, sDepth > s21)
-                + std.select(zero, one, sDepth > s02)
-                + std.select(zero, one, sDepth > s12)
-                + std.select(zero, one, sDepth > s22);
+            const occ = std.select(zero, one, sDepth > s0)
+                + std.select(zero, one, sDepth > s1)
+                + std.select(zero, one, sDepth > s2)
+                + std.select(zero, one, sDepth > s3);
             const inside = std.select(zero, one, suv.x >= 0.0) * std.select(zero, one, suv.x <= 1.0)
                 * std.select(zero, one, suv.y >= 0.0) * std.select(zero, one, suv.y <= 1.0);
-            direct = std.mul(direct, 1.0 - (occ / 9.0) * inside);
+            direct = std.mul(direct, 1.0 - (occ / 4.0) * inside);
         }
 
         let acc = d.vec3f(

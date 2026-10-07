@@ -1162,7 +1162,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         // Directional shadow pass: render casters from the sun before the main pass.
         // Only re-render when the sun, the (snapped) box, or a caster actually
         // changed; otherwise the previous map is reused (no shadow pass at all).
-        const shadowBoxChanged = this.shadowSystem.update(this.lights.sunDirection, this.camera.position, alpha);
+        const shadowBoxChanged = this.shadowSystem.update(this.lights.sunDirection, this.camera.position);
         const shadowMotion = this.instances.dynamicVersion + this.skinned.dynamicVersion + this.animation.version;
         if (this.shadowSystem.enabled && (shadowBoxChanged || shadowMotion !== this.lastShadowMotion)) {
             this.lastShadowMotion = shadowMotion;

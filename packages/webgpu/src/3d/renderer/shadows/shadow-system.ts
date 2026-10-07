@@ -226,7 +226,7 @@ export class ShadowSystem {
      * (snapped) focus changed, i.e. the map must be re-rendered; `false` means
      * the previous map is still valid and the pass can be skipped.
      */
-    update(sunDir: readonly [number, number, number], focus: readonly [number, number, number], alpha = 1): boolean {
+    update(sunDir: readonly [number, number, number], focus: readonly [number, number, number]): boolean {
         const [dx, dy, dz] = sunDir;
         const len = Math.hypot(dx, dy, dz) || 1;
         const snx = dx / len, sny = dy / len, snz = dz / len;
@@ -273,7 +273,9 @@ export class ShadowSystem {
         m[17] = this.bias;
         m[18] = 1 / this.resolutionValue;
         m[19] = this.softness;
-        m[20] = alpha;
+        // Casters are rendered at the current (tick) pose, not interpolated, so
+        // the cached map is consistent across the frames within a tick.
+        m[20] = 1;
         m[21] = texelWorld;
         m[22] = 0; m[23] = 0;
         this.device.queue.writeBuffer(this.uniformBuffer, 0, m);
