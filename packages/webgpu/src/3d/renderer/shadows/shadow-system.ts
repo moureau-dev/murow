@@ -72,6 +72,17 @@ export class ShadowSystem {
     bias = 0.0015;
     /** Orthographic half-extent fitted around the camera position. */
     distance = 45;
+    /**
+     * Grid the focus point snaps to. The box only recenters when the focus
+     * crosses a cell, so a static scene reuses the shadow map. `0` uses
+     * `distance` (coverage around the camera still holds since the half-extent
+     * is larger than the cell).
+     */
+    anchorStep = 0;
+
+    private readonly lastSun = new Float32Array(3).fill(NaN);
+    private readonly lastAnchor = new Float32Array(3).fill(NaN);
+    private hasBox = false;
 
     private resolutionValue: number;
     private map: GPUTexture;
@@ -210,15 +221,34 @@ export class ShadowSystem {
     get mapSampler(): GPUSampler { return this.sampler; }
 
     /**
-     * Recompute the sun's orthographic view-projection around `center`.
-     * `sunDir` points toward the light (the same direction used for shading).
+     * Recompute the sun's orthographic view-projection around `focus`.
+     * `sunDir` points toward the light. Returns `true` when the sun or the
+     * (snapped) focus changed, i.e. the map must be re-rendered; `false` means
+     * the previous map is still valid and the pass can be skipped.
      */
-    update(sunDir: readonly [number, number, number], center: readonly [number, number, number], alpha = 1): void {
-        const m = this.uniformData;
+    update(sunDir: readonly [number, number, number], focus: readonly [number, number, number], alpha = 1): boolean {
         const [dx, dy, dz] = sunDir;
         const len = Math.hypot(dx, dy, dz) || 1;
+        const snx = dx / len, sny = dy / len, snz = dz / len;
+        const step = this.anchorStep > 0 ? this.anchorStep : this.distance;
+        const ax = Math.round(focus[0] / step) * step;
+        const ay = Math.round(focus[1] / step) * step;
+        const az = Math.round(focus[2] / step) * step;
+        const sunMoved = Math.abs(snx - this.lastSun[0]!) > 1e-4
+            || Math.abs(sny - this.lastSun[1]!) > 1e-4
+            || Math.abs(snz - this.lastSun[2]!) > 1e-4;
+        const anchorMoved = ax !== this.lastAnchor[0]! || ay !== this.lastAnchor[1]! || az !== this.lastAnchor[2]!;
+        // The map must be re-rendered only when the box (sun or anchor) changed.
+        // Uniform-only settings (bias/softness/enabled) are always written below.
+        const boxChanged = !this.hasBox || sunMoved || anchorMoved;
+        this.hasBox = true;
+        this.lastSun[0] = snx; this.lastSun[1] = sny; this.lastSun[2] = snz;
+        this.lastAnchor[0] = ax; this.lastAnchor[1] = ay; this.lastAnchor[2] = az;
+
+        const m = this.uniformData;
+        const center: readonly [number, number, number] = [ax, ay, az];
         // View forward is the light's travel direction (opposite the surface-to-light vector).
-        const fx = -dx / len, fy = -dy / len, fz = -dz / len;
+        const fx = -snx, fy = -sny, fz = -snz;
         // Light basis (matches orthoLookAt) so the frustum center can be snapped
         // to whole texels, which stops static shadows from swimming.
         let upx = 0, upy = 1, upz = 0;
@@ -247,6 +277,7 @@ export class ShadowSystem {
         m[21] = texelWorld;
         m[22] = 0; m[23] = 0;
         this.device.queue.writeBuffer(this.uniformBuffer, 0, m);
+        return boxChanged;
     }
 
     /**

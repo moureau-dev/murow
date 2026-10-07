@@ -2943,11 +2943,12 @@ const ground = renderer.createMaterial({ type: 'standard', shadow: { receive: tr
 | `renderer.shadows.softness` | `1` | PCF tap spacing, in texels |
 | `renderer.shadows.bias` | `0.003` | Depth compare bias (plus a normal-offset bias) |
 | `renderer.shadows.distance` | `45` | Ortho half-extent of the box fitted around the camera position |
+| `renderer.shadows.anchorStep` | `0` (= `distance`) | Grid the focus snaps to; the map only re-renders when the focus crosses a cell, so a static scene reuses it |
 | `renderer.shadows.resolution` | `2048` | Assignable at runtime; rebuilds the map and rebinds materials. `setShadowResolution(px)` is an alias |
 | `shadow: { cast }` / `{ receive }` | `true` | Per material. Transparent and alpha-tested materials default to `cast: false` (the shadow pass ignores alpha) |
 | `WebGPU3DRendererOptions.shadowResolution` | `2048` | Initial map size |
 
-Casters are opaque instances, including skinned meshes (skinned casters share the animated bone matrices). Limitations: one directional light; constant bias (no slope scale); a single fixed box around the camera, so casters beyond `distance` do not cast and detail falls off with distance. Custom `shader` fragments can read the map via the `shadow`, `shadowMap`, and `shadowSampler` free variables.
+Casters are opaque instances, including skinned meshes (skinned casters share the animated bone matrices). **The map is only re-rendered when the sun, the snapped box, or a caster actually changes** (instances/skinned stores and skeletal animation carry a version counter); otherwise the previous map is reused and no shadow pass runs. Because the focus snaps to `anchorStep`, a static scene keeps the same map even while the camera moves within a cell. Limitations: one directional light; constant bias (no slope scale); a single fixed box around the camera, so casters beyond `distance` do not cast and detail falls off with distance. Custom `shader` fragments can read the map via the `shadow`, `shadowMap`, and `shadowSampler` free variables.
 
 ### Decals (3D)
 
@@ -3250,6 +3251,7 @@ renderer.particles.removeEmitter(fire);
 - `emitter.update(dt)` queues spawns for that emitter; the renderer runs `simulate(dt)` once per frame (spawn kernel + integrate + per-material compaction + indirect args). `renderer.particles.simulate(dt)` is available if you drive rendering yourself.
 - Material: `{ texture?, blend: 'additive'|'alpha', atlas?: { cols, rows, fps } }`. No texture -> soft procedural disc.
 - Quality knobs: `rateScale` (default 1; 0 stops spawning) and `sizeScale` (default 1.1). Capacities (renderer options): `maxParticles`, `maxSpawnsPerFrame`, `maxParticleMaterials`, `maxParticleEmitters`. Warns once via `debug` when the pool saturates or the spawn budget clamps.
+- Emitter culling: the renderer sets the camera frustum on the particle system each frame, so an emitter whose conservative reach is off-screen spawns nothing until it re-enters view (live particles still finish). Set it yourself with `renderer.particles.setCullFrustum(frustum | null)`.
 
 ### `SpriteAccessor` — direct buffer access for 2D sprites
 

@@ -185,6 +185,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private lights = new LightSystem(MAX_LIGHTS);
     private materials!: MaterialLibrary;
     private shadowSystem!: ShadowSystem;
+    private lastShadowMotion = -1;
     private readonly decalLayers: DecalLayer[] = [];
     private readonly shadowBatches: ShadowDrawBatch[] = [];
     private readonly shadowSkinnedBatches: ShadowDrawBatch[] = [];
@@ -396,7 +397,12 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         }
 
         this.hitboxDebug.init(this.device, this.format);
-        this.resize = new ResizeController(this.canvas, (w, h, cssW, cssH) => this.applyResize(w, h, cssW, cssH));
+        this.resize = new ResizeController(
+            this.canvas,
+            (w, h, cssW, cssH) => this.applyResize(w, h, cssW, cssH),
+            undefined,
+            (this.options as WebGPU3DRendererOptions).maxPixelRatio ?? Infinity,
+        );
         this.resize.start(this._width, this._height);
         this._initialized = true;
     }
@@ -1024,6 +1030,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         // Extract frustum planes from VP matrix for culling
         this.frustum.setFromViewProjection(vpMatrix);
+        // Off-screen emitters skip spawning (their live particles still finish).
+        this.particles.setCullFrustum(this.frustum);
 
         // Pack slot indices per model, with frustum culling
         let indexOffset = 0;
@@ -1152,9 +1160,12 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const encoder = this.device.createCommandEncoder();
 
         // Directional shadow pass: render casters from the sun before the main pass.
-        // Box fitted around the camera position (snapped to texels).
-        this.shadowSystem.update(this.lights.sunDirection, this.camera.position, alpha);
-        if (this.shadowSystem.enabled) {
+        // Only re-render when the sun, the (snapped) box, or a caster actually
+        // changed; otherwise the previous map is reused (no shadow pass at all).
+        const shadowBoxChanged = this.shadowSystem.update(this.lights.sunDirection, this.camera.position, alpha);
+        const shadowMotion = this.instances.dynamicVersion + this.skinned.dynamicVersion + this.animation.version;
+        if (this.shadowSystem.enabled && (shadowBoxChanged || shadowMotion !== this.lastShadowMotion)) {
+            this.lastShadowMotion = shadowMotion;
             // Casters come from every live instance (not the camera-culled set,
             // so a caster behind the camera still casts), minus those outside
             // the light's ortho box.

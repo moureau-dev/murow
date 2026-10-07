@@ -22,6 +22,8 @@ export class ResizeController {
         private readonly canvas: HTMLCanvasElement,
         private readonly apply: ApplyResize,
         private readonly createObserver: ResizeObserverFactory = (callback) => new ResizeObserver(callback),
+        /** Upper bound on `devicePixelRatio`. `Infinity` (default) = uncapped. */
+        private readonly maxPixelRatio = Infinity,
     ) {}
 
     start(width: number, height: number): void {
@@ -43,12 +45,12 @@ export class ResizeController {
             for (const entry of entries) {
                 let w: number;
                 let h: number;
-                if (supportsDevicePixelBox && entry.devicePixelContentBoxSize?.[0]) {
+                if (this.maxPixelRatio >= devicePixelRatio && supportsDevicePixelBox && entry.devicePixelContentBoxSize?.[0]) {
                     w = entry.devicePixelContentBoxSize[0].inlineSize;
                     h = entry.devicePixelContentBoxSize[0].blockSize;
                 } else {
                     const box = entry.contentBoxSize[0];
-                    const dpr = devicePixelRatio;
+                    const dpr = Math.min(devicePixelRatio, this.maxPixelRatio);
                     w = Math.round(box.inlineSize * dpr);
                     h = Math.round(box.blockSize * dpr);
                 }

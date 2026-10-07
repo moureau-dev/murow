@@ -28,6 +28,8 @@ export class InstanceStore {
     readonly dynamicData: Float32Array;
     readonly staticData: Float32Array;
     readonly slotIndexData: Uint32Array;
+    /** Bumped on any transform/structure change; lets consumers cache GPU passes. */
+    dynamicVersion = 0;
     readonly instanceModelIds: Uint8Array;
     readonly instanceHandles: (MeshInstanceHandle | null)[];
     readonly batcher: SparseBatcher;
@@ -103,6 +105,7 @@ export class InstanceStore {
         stat[statBase + STAT_CUSTOM1] = 0;
 
         this.staticDirty = true;
+        this.dynamicVersion++;
         this.instanceModelIds[slot] = modelHandle.id;
         this.materialIds[slot] = materialId;
         this.batcher.add(materialId, modelHandle.id, slot);
@@ -133,17 +136,20 @@ export class InstanceStore {
                 dyn[dynBase + DYN_CURR_PX] = nx;
                 dyn[dynBase + DYN_CURR_PY] = ny;
                 dyn[dynBase + DYN_CURR_PZ] = nz;
+                self.dynamicVersion++;
             },
             setRotation(nx: number, ny: number, nz: number) {
                 dyn[dynBase + DYN_CURR_RX] = nx;
                 dyn[dynBase + DYN_CURR_RY] = ny;
                 dyn[dynBase + DYN_CURR_RZ] = nz;
+                self.dynamicVersion++;
             },
             setScale(nx: number, ny: number, nz: number) {
                 stat[statBase + STAT_SX] = nx;
                 stat[statBase + STAT_SY] = ny;
                 stat[statBase + STAT_SZ] = nz;
                 self.staticDirty = true;
+                self.dynamicVersion++;
             },
             teleport(nx: number, ny: number, nz: number) {
                 dyn[dynBase + DYN_PREV_PX] = nx;
@@ -152,6 +158,7 @@ export class InstanceStore {
                 dyn[dynBase + DYN_CURR_PX] = nx;
                 dyn[dynBase + DYN_CURR_PY] = ny;
                 dyn[dynBase + DYN_CURR_PZ] = nz;
+                self.dynamicVersion++;
             },
             get position(): readonly [number, number, number] {
                 posOut[0] = dyn[dynBase + DYN_CURR_PX];
@@ -200,6 +207,7 @@ export class InstanceStore {
             destroy() {
                 if (destroyed) return;
                 destroyed = true;
+                self.dynamicVersion++;
                 self.textureBGs[slot] = null;
                 self.batcher.remove(self.materialIds[slot], modelHandle.id, slot);
                 self.materialIds[slot] = 0;

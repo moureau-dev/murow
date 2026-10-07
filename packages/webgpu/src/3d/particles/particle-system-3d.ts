@@ -5,6 +5,7 @@ import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builde
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotMap } from 'murow/core/slot-map';
 import { Logger } from 'murow/core';
+import { Frustum } from '../renderer/cull/frustum';
 import { PARTICLE_3D_STRIDE, PARTICLE_3D_FRAME_FLOATS } from './shaders';
 
 /** Per-particle GPU record. Must match the raw WGSL `Particle` layout exactly. */
@@ -226,6 +227,8 @@ export class ParticleSystem3D {
     private _rateScale = 1;
     /** Global particle size multiplier for quality scaling. */
     private _sizeScale = 1.1;
+    /** When set, emitters outside it (plus a margin) skip spawning. */
+    private cullFrustum: Frustum | null = null;
 
     constructor(options: ParticleSystem3DOptions) {
         const { root, format } = options;
@@ -550,6 +553,15 @@ export class ParticleSystem3D {
         if (emitter.enabled) this.emitFrom(emitter, deltaTime);
     }
 
+    /**
+     * Set the frustum used to cull emitter spawning (e.g. the camera frustum).
+     * Emitters whose conservative reach lies outside it spawn nothing until
+     * they come back into view. Pass `null` to disable.
+     */
+    setCullFrustum(frustum: Frustum | null): void {
+        this.cullFrustum = frustum;
+    }
+
     /** Spawn from every enabled emitter (queues records; see `simulate`). */
     update(deltaTime: number): void {
         const active = this.emitterSlots.activeSlots;
@@ -649,6 +661,15 @@ export class ParticleSystem3D {
     }
 
     private emitFrom(emitter: ParticleEmitter3D, deltaTime: number): void {
+        const cull = this.cullFrustum;
+        if (cull !== null) {
+            const p = emitter.position;
+            const g = emitter.gravity;
+            // Conservative reach of a particle from this emitter (spread + drift).
+            const r = emitter.spawnRadius + emitter.size[1] + emitter.speed[1] * emitter.lifetime[1]
+                + 0.5 * Math.hypot(g[0], g[1], g[2]) * emitter.lifetime[1] * emitter.lifetime[1] + 1;
+            if (!cull.intersectsSphere(p[0], p[1], p[2], r)) return;
+        }
         emitter.budget += emitter.rate * this._rateScale * deltaTime;
         let n = Math.floor(emitter.budget);
         if (n <= 0) return;

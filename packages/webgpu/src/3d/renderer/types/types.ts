@@ -98,6 +98,13 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
     /** Directional shadow map resolution (square). Defaults to 2048. */
     shadowResolution?: number;
     /**
+     * Upper bound on internal render resolution relative to CSS pixels (caps
+     * `devicePixelRatio`, default uncapped). `1.5` is a good HiDPI trade-off;
+     * post-processing and shadows scale with this, so capping is the cheapest
+     * large performance win.
+     */
+    maxPixelRatio?: number;
+    /**
      * Development diagnostics. `true` routes warnings to the console with a
      * `[murow]` prefix; pass a `Logger` to route them yourself.
      */

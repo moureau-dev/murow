@@ -43,6 +43,8 @@ export interface SkeletalRuntimeDeps {
 export class SkeletalRuntime {
     /** CPU bone-matrix staging / rest-pose buffer, shared with the skinned store. */
     readonly boneMatrixData: Float32Array;
+    /** Bumped whenever bone matrices are rewritten (some instance is animating). */
+    version = 0;
 
     private packedAnimData: PackedAnimationData = createPackedAnimationData();
     private kernel: ComputeKernel | null = null;
@@ -213,6 +215,8 @@ export class SkeletalRuntime {
         }
 
         if (count > 0) {
+            // Bones changed this frame; consumers (e.g. shadows) can invalidate.
+            this.version++;
             if (this.kernel) {
                 this.kernel.write('uniforms', {
                     instanceCount: count,
