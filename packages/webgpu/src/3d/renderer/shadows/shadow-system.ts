@@ -204,6 +204,8 @@ export class ShadowSystem {
     setResolutionHook(fn: () => void): void { this.resolutionHook = fn; }
     /** Uniform buffer holding `ShadowUniforms`, bound by receiving materials. */
     get uniforms(): GPUBuffer { return this.uniformBuffer; }
+    /** Current light view-projection (column-major, 16 floats), for culling. */
+    get viewProjection(): Float32Array { return this.uniformData.subarray(0, 16); }
     get mapTexture(): GPUTextureView { return this.mapView; }
     get mapSampler(): GPUSampler { return this.sampler; }
 

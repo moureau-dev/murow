@@ -177,6 +177,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private readonly maxBonesPerSkin: number;
 
     private readonly frustum = new Frustum();
+    private readonly lightFrustum = new Frustum();
     private readonly skinCull: SkinCull;
 
     // Dynamic lights — CPU state (SoA, slots, globals) lives in LightSystem;
@@ -1154,11 +1155,15 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         // Box fitted around the camera position (snapped to texels).
         this.shadowSystem.update(this.lights.sunDirection, this.camera.position, alpha);
         if (this.shadowSystem.enabled) {
-            // Casters come from every live instance, not the camera-culled set,
-            // so a caster behind the camera still casts into view.
+            // Casters come from every live instance (not the camera-culled set,
+            // so a caster behind the camera still casts), minus those outside
+            // the light's ortho box.
+            this.lightFrustum.setFromViewProjection(this.shadowSystem.viewProjection);
             const sb = this.shadowBatches;
             sb.length = 0;
             const slots = this.shadowSlots;
+            const dyn = this.instances.dynamicData;
+            const stat = this.instances.staticData;
             let slotCount = 0;
             this.instances.batcher.each((modelId, instances, count, key) => {
                 const materialId = (key / SparseBatcher.MAX_SHEETS) | 0;
@@ -1166,27 +1171,61 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                     const m = this.materials.get(materialId);
                     if (!m || m.transparent || !this.materials.casts(materialId)) return;
                 }
+                const model = this.models.get(modelId);
+                if (!model) return;
+                const baseRadius = model.boundingRadius;
                 const offset = slotCount;
-                for (let i = 0; i < count; i++) slots[slotCount++] = instances[i]!;
-                sb.push({ modelId, offset, count });
+                for (let i = 0; i < count; i++) {
+                    const slot = instances[i]!;
+                    const base = slot * DYNAMIC_MESH_FLOATS;
+                    const sBase = slot * STATIC_MESH_FLOATS;
+                    const cx = dyn[base + DYN_CURR_PX];
+                    const cy = dyn[base + DYN_CURR_PY];
+                    const cz = dyn[base + DYN_CURR_PZ];
+                    const sx = stat[sBase + STAT_SX];
+                    const sy = stat[sBase + STAT_SY];
+                    const sz = stat[sBase + STAT_SZ];
+                    const maxScale = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
+                    if (this.lightFrustum.intersectsSphere(cx, cy, cz, baseRadius * maxScale)) {
+                        slots[slotCount++] = slot;
+                    }
+                }
+                if (slotCount > offset) sb.push({ modelId, offset, count: slotCount - offset });
             });
             this.shadowSystem.setSlots(slots, slotCount);
 
-            // Skinned casters (same all-instance rule).
+            // Skinned casters (all-instance minus the light box).
             const skb = this.shadowSkinnedBatches;
             skb.length = 0;
             const sslots = this.shadowSkinnedSlots;
+            const sDyn = this.skinned.dynamicData;
+            const sStat = this.skinned.staticData;
             let sSlotCount = 0;
             this.skinned.batcher.each((modelId, instances, count) => {
+                const model = this.models.get(modelId);
+                if (!model) return;
+                const skinModel = model.skinIndex >= 0 ? this.models.skinnedModel(model.skinIndex) : null;
+                const baseRadius = skinModel?.boundingRadius ?? 10;
                 const offset = sSlotCount;
                 for (let i = 0; i < count; i++) {
                     const slot = instances[i]!;
-                    const mid = this.skinned.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
+                    const mid = sStat[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
                     if (mid > 0) {
                         const m = this.materials.get(mid);
                         if (!m || m.transparent || !this.materials.casts(mid)) continue;
                     }
-                    sslots[sSlotCount++] = slot;
+                    const base = slot * DYNAMIC_MESH_FLOATS;
+                    const sBase = slot * SKINNED_STATIC_MESH_FLOATS;
+                    const cx = sDyn[base + DYN_CURR_PX];
+                    const cy = sDyn[base + DYN_CURR_PY];
+                    const cz = sDyn[base + DYN_CURR_PZ];
+                    const sx = sStat[sBase + SSTAT_SX];
+                    const sy = sStat[sBase + SSTAT_SY];
+                    const sz = sStat[sBase + SSTAT_SZ];
+                    const maxScale = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
+                    if (this.lightFrustum.intersectsSphere(cx, cy, cz, baseRadius * maxScale)) {
+                        sslots[sSlotCount++] = slot;
+                    }
                 }
                 if (sSlotCount > offset) skb.push({ modelId, offset, count: sSlotCount - offset });
             });
