@@ -33,7 +33,7 @@ export class SpritesheetManager {
      * @throws when the sheet ceiling (`SparseBatcher.MAX_SHEETS`) is reached.
      */
     upload(parsed: ParsedSpritesheet): Spritesheet {
-        const packed = this.allocator.alloc();
+        const packed = this.allocator.allocate();
         if (packed === -1) {
             throw new Error(`Max spritesheets (${SparseBatcher.MAX_SHEETS}) reached`);
         }

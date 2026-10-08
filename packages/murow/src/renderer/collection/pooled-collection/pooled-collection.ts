@@ -95,7 +95,7 @@ export abstract class PooledCollection<
      * @returns the new id, slot and handle, or `null` (after logging) when full.
      */
     protected allocateHandle(): { id: Id; slot: number; handle: Handle } | null {
-        const packed = this.allocator.alloc();
+        const packed = this.allocator.allocate();
         if (packed === -1) {
             this.logger.error(`collection at capacity (${this.allocator.capacity}); add aborted`);
             return null;

@@ -43,7 +43,7 @@ export class GenerationAllocator {
      * Allocate a slot and return its versioned id.
      * @returns the id, or `-1` when the pool is exhausted.
      */
-    alloc(): number {
+    allocate(): number {
         const slot = this.slots.add();
         if (slot === -1) return -1;
         return this.pack(this.generations[slot]!, slot);
