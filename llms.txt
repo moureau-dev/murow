@@ -2822,7 +2822,7 @@ You don't write any of this. The renderer handles it under the hood as long as y
 
 ### Managers and handles
 
-The renderer is a composition root: `new WebGPU3DRenderer(canvas, options)`, `init()`, `render(alpha)`, `storePreviousState()`, `destroy()`, `onResize`, `worldToScreen`, and `createCompute` stay on it. Each subsystem, including `renderer.models` for mesh creation/loading, is a manager reached off it:
+The renderer is a composition root: `new WebGPU3DRenderer(canvas, options)`, `init()`, `render(alpha)`, `storePreviousState()`, `destroy()`, `onResize`, and `worldToScreen` stay on it. Each subsystem, including `renderer.models` for mesh creation/loading and `renderer.compute` for compute kernels, is a manager reached off it:
 
 | Manager | Creation | Returns |
 |---|---|---|
@@ -3146,7 +3146,7 @@ const cube  = renderer.models.createCube({ size: 1 });
 const model = renderer.models.loadModel(rawModelData);          // raw geometry (ModelData), no bucket
 const gltf  = await renderer.models.loadGltf('https://example.com/model.glb', { animations: ['Idle'] });  // manual glTF path
 const up    = renderer.models.uploadParsedGltf(parsedGltf);     // GPU-upload an already-parsed glTF (CPU/GPU split)
-const k     = renderer.createCompute('name', { workgroupSize: 256 });   // compute kernel (see Compute Shaders)
+const k     = renderer.compute.create('name', { workgroupSize: 256 });   // compute kernel (see Compute Shaders)
 ```
 
 (`WebGPU2DRenderer` exposes the same `renderer.raycast` against sprite hitboxes, sorted topmost-first.)

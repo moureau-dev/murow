@@ -24,8 +24,8 @@
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotSet } from 'murow/core/slot-map';
 import type { SpritesheetHandle } from 'murow/renderer';
-import type { WebGPU2DRenderer } from '../2d/renderer';
-import type { SpriteAccessor } from '../2d/renderer';
+import type { WebGPU2DRenderer } from '../renderer';
+import type { SpriteAccessor } from '../managers/sprites';
 
 export interface Range {
     min: number;

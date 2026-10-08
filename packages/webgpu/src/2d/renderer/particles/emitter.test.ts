@@ -1,6 +1,6 @@
 import { test, expect, describe } from 'bun:test';
 import { ParticleEmitter } from './emitter';
-import type { WebGPU2DRenderer } from '../2d/renderer';
+import type { WebGPU2DRenderer } from '../renderer';
 import type { SpritesheetHandle } from 'murow/renderer';
 
 class MockRenderer {

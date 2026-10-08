@@ -11,7 +11,6 @@ import type { TgpuRoot } from 'typegpu';
 import type { AnyWgslData } from 'typegpu/data';
 import { Base3DRenderer } from 'murow/renderer';
 import { tgpu } from '../../shaders/typegpu';
-import { ComputeBuilder, type ComputeOptions } from '../../compute/compute-builder';
 import { MESH_UNIFORM_LIGHT_OFFSET } from '../../core/types';
 import { Logger } from 'murow/core';
 import {
@@ -38,6 +37,7 @@ import {
     CameraManager,
     CameraEffectStack,
     ModelsManager,
+    ComputeManager,
 } from './managers';
 import {
     TextureRegistry,
@@ -144,6 +144,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     particles!: ParticleManager;
     /** Mesh creation and loading facade. */
     models!: ModelsManager;
+    /** GPU compute facade. */
+    compute!: ComputeManager;
 
     private readonly _assets: AssetBucket<'3d', any, any> | null;
     private readonly _prefabs: PrefabBucket3D | null;
@@ -203,6 +205,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const device = await adapter.requestDevice({ requiredLimits });
         this.core.root = tgpu.initFromDevice({ device });
         this.core.device = this.core.root.device;
+        this.compute = new ComputeManager(this.core.root);
 
         this.core.context = this.canvas.getContext('webgpu')!;
         this.core.format = navigator.gpu.getPreferredCanvasFormat();
@@ -448,10 +451,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
      */
     onResize(callback: (width: number, height: number) => void): void {
         this.resize.onResize(callback);
-    }
-
-    createCompute(name: string, options: ComputeOptions): ComputeBuilder {
-        return new ComputeBuilder(name, options, this.core.root);
     }
 
     /**

@@ -85,8 +85,8 @@ export type { BuiltInGeometry, GeometryData } from './geometry/built-in';
 export { Spritesheet, createTextureFromBitmap } from './spritesheet/spritesheet';
 
 // Particle
-export { ParticleEmitter } from './particle/emitter';
-export type { ParticleEmitterConfig, Range } from './particle/emitter';
+export { ParticleEmitter } from './2d/renderer/particles';
+export type { ParticleEmitterConfig, Range } from './2d/renderer/particles';
 export { ParticleSystem3D } from './3d/renderer/managers/particles';
 export type { ParticleSystem3DOptions, ParticleEmitter3D, ParticleEmitter3DOptions, ParticleMaterialSpec, ParticleBlend } from './3d/renderer/managers/particles';
 
