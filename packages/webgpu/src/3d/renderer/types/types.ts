@@ -15,7 +15,7 @@ import type {
 } from 'murow/renderer';
 import type { Logger } from 'murow/core';
 import type { Handles } from '../handles';
-import type { MaterialHandle } from '../materials';
+import type { MaterialHandle } from '../managers/materials';
 
 export type ModelHandle = Handles.ModelHandle;
 export type GltfModel = Handles.GltfModel;
@@ -80,8 +80,12 @@ export type RaycastMemo = RaycastMemoBase<MeshInstanceHandle, [number, number, n
 export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Renderer3DOptions {
     maxSkinnedInstances?: number;
     maxBonesPerSkin?: number;
+    /** Max simultaneously live dynamic lights. Defaults to 64. */
+    maxLights?: number;
     /** Max simultaneously created materials. Defaults to 64. */
     maxMaterials?: number;
+    /** Max decal layers. Defaults to 16. */
+    maxDecals?: number;
     /**
      * Max camera effects in `renderer.camera.effects`. Bounds the effect-id
      * pool and the off-screen pass count. Defaults to 20.
@@ -133,4 +137,16 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
      * Set to `Infinity` to disable. Default 50.
      */
     animationCullDistance?: number;
+}
+
+/**
+ * A subsystem whose simulated state is snapshotted before each tick so the
+ * renderer can interpolate between the previous and current frames.
+ *
+ * Implemented by the camera, the instance pool and the light manager. The
+ * renderer holds an explicit list and calls `storePrevious()` on pre-tick.
+ */
+export interface Interpolator {
+    /** @internal Snapshot curr into prev. Called by the renderer on pre-tick. */
+    storePrevious(): void;
 }

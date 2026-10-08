@@ -39,11 +39,11 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 - **Composites** — a `{ type: 'composite', parts: [...] }` spec wires several prefabs into one spawnable instance with baked offsets
 - **Instance recycling** — `handle.destroy()` frees slots and bone-matrix blocks; respawns reuse them without growing buffers
 - **Grid / cube helpers** — `{ type: 'grid' }` and `{ type: 'cube' }` prefab specs
-- **Materials** — `renderer.createMaterial(spec)` with `standard` (lit), `unlit`, `emissive`, and custom `shader` types; per-material uniforms, named textures (mipmapped), `alphaTest` cutout, UV scale/offset, per-material samplers, two-sided normals, and render state (blend modes / depth / cull / colorWrite / depthBias)
+- **Materials** — `renderer.materials.create(spec)` with `standard` (lit), `unlit`, `emissive`, and custom `shader` types; per-material uniforms, named textures (mipmapped), `alphaTest` cutout, UV scale/offset, per-material samplers, two-sided normals, and render state (blend modes / depth / cull / colorWrite / depthBias)
 - **Camera effects** — an ordered fullscreen post chain on `renderer.camera.effects` (fxaa, vignette, grade, chromatic, scanlines, posterize, motionBlur) plus custom declarative shader effects, rendered through off-screen targets
 - **3D particles** — GPU-first `renderer.particles`: emitters, atlas animation, turbulence, additive/alpha materials, per-material `drawIndirect` batching, and camera-frustum emitter culling
-- **Shadows** — a directional map from the sun (cached; re-rendered only on change) plus **spot** (up to 4) and **point/cube** (up to 2) shadow maps via `castShadow: true` on a spot/point `LightSpec`. Controls: `renderer.shadows` / `renderer.spotShadows` / `renderer.pointShadows`; `standard` materials PCF-sample them, per-material `shadow: { cast, receive }`
-- **Decals** — `renderer.createDecalLayer({ atlas, quad, capacity })` pools instanced quads oriented to a surface normal (blood/scorch/AoE marks), sampling one atlas cell per mark and fading over time; oldest recycled past capacity
+- **Shadows** — a directional map from the sun (cached; re-rendered only on change) plus **spot** (up to 4) and **point/cube** (up to 2) shadow maps via `castShadow: true` on a spot/point `LightSpec`. Controls: `renderer.shadows.directional` / `renderer.shadows.spot` / `renderer.shadows.point`; `standard` materials PCF-sample them, per-material `shadow: { cast, receive }`
+- **Decals** — `renderer.decals.createLayer({ atlas, quad, capacity })` pools instanced quads oriented to a surface normal (blood/scorch/AoE marks), sampling one atlas cell per mark and fading over time; oldest recycled past capacity
 - **Resolution cap** — `maxPixelRatio` caps the internal render resolution on HiDPI (scene + post + shadows all scale with it); the single cheapest large perf win
 
 ## Usage
@@ -102,7 +102,7 @@ const renderer = new WebGPU3DRenderer(canvas, { assets, maxInstances: 100 });
 await renderer.init();
 
 const hero = assets.prefabs.get('hero');          // typed as GltfPrefab
-const instance = renderer.addInstance({
+const instance = renderer.instances.add({
   prefab: hero,
   position: [0, 0, 0],
   scale: hero.metadata.scale,
@@ -123,7 +123,7 @@ Create a material after `renderer.init()`. A `shader` material omits `shaders.ve
 ```typescript
 import { d, std } from 'murow/webgpu';
 
-const holo = renderer.createMaterial({
+const holo = renderer.materials.create({
   type: 'shader',
   blend: 'additive',
   depthWrite: false,
@@ -140,9 +140,9 @@ const holo = renderer.createMaterial({
   },
 });
 
-const glow = renderer.createMaterial({ type: 'emissive', color: [1, 0.45, 0.1], emissive: 2 });
+const glow = renderer.materials.create({ type: 'emissive', color: [1, 0.45, 0.1], emissive: 2 });
 
-const orb = renderer.addInstance({ prefab: 'orb', material: holo });
+const orb = renderer.instances.add({ prefab: 'orb', material: holo });
 orb.setMaterial(glow.slot + 1);   // slot + 1; 0 is the engine default
 orb.setMaterialParams(1.5, 0);    // per-instance custom0 / custom1
 
@@ -235,25 +235,25 @@ from `'murow'`.
 
 ### Renderers
 - [`WebGPU2DRenderer`](./src/2d/renderer.ts) — Sprite renderer with batching and interpolation
-- [`WebGPU3DRenderer`](./src/3d/renderer.ts) — Mesh renderer with glTF, skinning, frustum culling
+- [`WebGPU3DRenderer`](./src/3d/renderer/renderer.ts) — Mesh renderer with glTF, skinning, frustum culling
 
 ### Geometry & Compute
 - [`GeometryBuilder`](./src/geometry/geometry-builder.ts) — Custom instanced geometries with TypeGPU shaders
 - [`ComputeBuilder`](./src/compute/compute-builder.ts) — GPU compute kernels with buffer management
 
 ### Materials (3D)
-- `WebGPU3DRenderer.createMaterial(spec)` — `standard` (lit), `unlit`, `emissive`, and custom `shader` materials; returns a typed `MaterialHandle<U>` (`slot`, `uniforms`, `setTexture`, `destroy`)
+- `renderer.materials.create(spec)` — `standard` (lit), `unlit`, `emissive`, and custom `shader` materials; returns a typed `MaterialHandle<U>` (`slot`, `uniforms`, `setTexture`, `destroy`) or `null` at capacity
 - `MaterialSpec` / `EngineMaterialSpec` / `ShaderMaterialSpec` / `BlendMode` / `CullMode` — material spec types, exported from `murow/webgpu`
 
 ### Shadows
-- [`ShadowSystem`](./src/3d/renderer/shadows/shadow-system.ts) — directional shadow map control (`renderer.shadows`): `enabled`, `softness`, `bias`, `distance`, `resolution`; `renderer.setShadowResolution(px)` is an alias
+- [`ShadowSystem`](./src/3d/renderer/managers/shadows/shadow-system.ts) — directional shadow map control (`renderer.shadows.directional`): `enabled`, `softness`, `bias`, `distance`, `resolution`; `renderer.shadows.resolution = px`
 - Per material: `shadow: { cast?: boolean; receive?: boolean }` (transparent materials never cast)
 
 ### Decals
-- [`DecalLayer`](./src/3d/renderer/decals/decal-layer.ts) — `renderer.createDecalLayer({ atlas, quad, capacity })`; `spawn(x,y,z,nx,ny,nz,{cell,size})` places a pooled, atlas-sampled, time-faded mark (backed by core `RingStore`)
+- [`DecalLayer`](./src/3d/renderer/managers/decals/decal-layer.ts) — `renderer.decals.createLayer({ atlas, quad, capacity })`; `add(x,y,z,nx,ny,nz,{cell,size})` returns a `DecalHandle` for a pooled, atlas-sampled, time-faded mark (backed by core `RingStore`)
 
 ### Camera effects
-- [`CameraEffectStack`](./src/3d/renderer/camera-effects/stack.ts) — off-screen targets + ping-pong fullscreen passes
+- [`CameraEffectStack`](./src/3d/renderer/managers/camera/camera-effects.ts) — off-screen targets + ping-pong fullscreen passes
 - `CameraEffect` / `CameraEffectList` / `CameraEffectSpec` — the `renderer.camera.effects` API (`add`/`set`/`remove`), built-in + custom shader effects
 
 ### Camera
@@ -261,14 +261,14 @@ from `'murow'`.
 - [`Camera3D`](./src/camera/camera-3d.ts) — Perspective camera with FPS controls and `effects`
 
 ### Animation
-- [`MorphAnimation`](./src/3d/morph-animation.ts) — Morph target animation (GPU buffer write path)
+- [`MorphAnimation`](./src/3d/morph-animation/morph-animation.ts) — Morph target animation (GPU buffer write path)
 - [`AnimationController`](./src/2d/animation.ts) — 2D spritesheet animation
 - `SkeletalAnimation` lives in [`murow`](../murow/src/renderer/gltf) — CPU-side bone evaluation, renderer-agnostic
 
 ### Utilities
 - [`SpriteAccessor`](./src/2d/sprite-accessor.ts) — Direct buffer access for sprites
 - [`ParticleEmitter`](./src/particle/emitter.ts) — CPU 2D particle system
-- [`ParticleSystem3D`](./src/3d/particles/particle-system-3d.ts) — GPU-first 3D particles (`renderer.particles`)
+- [`ParticleSystem3D`](./src/3d/renderer/managers/particles/particle-system-3d.ts) — GPU-first 3D particles (`renderer.particles`)
 - [`Spritesheet`](./src/spritesheet/spritesheet.ts) — GPU-bound texture atlas (built from a parsed bucket prefab)
 - `d` / `std` — TypeGPU data types and standard library (re-exported)
 

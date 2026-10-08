@@ -37,7 +37,7 @@ export type {
     EngineMaterialSpec,
     ShaderMaterialSpec,
 } from './3d/renderer';
-export type { LightSpec } from './3d/renderer/lights';
+export type { LightSpec } from './3d/renderer/managers/lights';
 export type { Handles } from './3d/renderer';
 export { MorphAnimation } from './3d/morph-animation';
 export type { MorphClip, MorphState, MorphClipConfig } from './3d/morph-animation';
@@ -74,8 +74,8 @@ export { Spritesheet, createTextureFromBitmap } from './spritesheet/spritesheet'
 // Particle
 export { ParticleEmitter } from './particle/emitter';
 export type { ParticleEmitterConfig, Range } from './particle/emitter';
-export { ParticleSystem3D } from './3d/particles';
-export type { ParticleSystem3DOptions, ParticleEmitter3D, ParticleEmitter3DOptions, ParticleMaterialSpec, ParticleBlend } from './3d/particles';
+export { ParticleSystem3D } from './3d/renderer/managers/particles';
+export type { ParticleSystem3DOptions, ParticleEmitter3D, ParticleEmitter3DOptions, ParticleMaterialSpec, ParticleBlend } from './3d/renderer/managers/particles';
 
 // Compute
 export { ComputeBuilder, ComputeKernel } from './compute/compute-builder';

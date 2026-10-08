@@ -6,6 +6,7 @@
  import { lerp } from "murow/core/lerp";
  import { Ray3D } from "murow/core/ray";
  import { mat4Mul, type Camera3DState } from 'murow/renderer';
+ import type { Interpolator } from '../3d/renderer/types';
  import { CameraEffectList } from './camera-effect';
 
 export interface Camera3DOptions {
@@ -13,7 +14,7 @@ export interface Camera3DOptions {
     maxEffects?: number;
 }
 
-export class Camera3D implements Camera3DState {
+export class Camera3D implements Camera3DState, Interpolator {
     position: [number, number, number] = [0, 5, -10];
     target: [number, number, number] = [0, 0, 0];
     up: [number, number, number] = [0, 1, 0];
@@ -50,6 +51,7 @@ export class Camera3D implements Camera3DState {
 
     /**
      * Store current position/target as previous. Call before each tick.
+     * @internal Called by the renderer's pre-tick, not for direct user calls.
      */
     storePrevious(): void {
         this._prevPosition[0] = this.position[0];

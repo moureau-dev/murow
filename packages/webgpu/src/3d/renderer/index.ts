@@ -1,8 +1,14 @@
 export { WebGPU3DRenderer } from './renderer';
+export type { Interpolator } from './types';
 export type { Handles } from './handles';
-export * from './materials';
-export { ShadowSystem } from './shadows';
-export type { ShadowOptions, ShadowDrawBatch, ShadowModelLike } from './shadows';
+export * from './managers/materials';
+export * from './managers';
+export * from './handles';
+export * from './collection';
+export { RendererCore } from './core';
+export { DEFAULT_CAPACITIES } from './defaults';
+export { ShadowSystem } from './managers/shadows';
+export type { ShadowOptions, ShadowDrawBatch, ShadowModelLike } from './managers/shadows';
 export type {
     ModelData,
     ModelHandle,

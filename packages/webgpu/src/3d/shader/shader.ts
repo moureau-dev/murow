@@ -19,13 +19,13 @@ const _WSSK = ['d','std','layout','mix','mul','cos','sin','sub','add','vec3f','v
 /** Max point/spot lights the mesh shaders' storage buffer holds. */
 export const MAX_LIGHTS = 64;
 
-export function createMeshLayout(maxInstances: number) {
+export function createMeshLayout(maxInstances: number, maxLights: number = MAX_LIGHTS) {
     return tgpu.bindGroupLayout({
         uniforms: { uniform: MeshUniforms },
         dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
         staticInstances: { storage: d.arrayOf(StaticMesh, maxInstances) },
         slotIndices: { storage: d.arrayOf(d.u32, maxInstances) },
-        lights: { storage: d.arrayOf(Light, MAX_LIGHTS) },
+        lights: { storage: d.arrayOf(Light, maxLights) },
     });
 }
 
@@ -483,7 +483,7 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
 // Skinned mesh shaders
 // =============================================================================
 
-export function createSkinnedMeshLayout(maxInstances: number, maxBones: number) {
+export function createSkinnedMeshLayout(maxInstances: number, maxBones: number, maxLights: number = MAX_LIGHTS) {
     return tgpu.bindGroupLayout({
         uniforms: { uniform: MeshUniforms },
         dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
@@ -492,7 +492,7 @@ export function createSkinnedMeshLayout(maxInstances: number, maxBones: number) 
         // mat4x4f array — the compute kernel writes via TypeGPU's mat4 * mat4
         // operator, and the vertex shader reads them as full mat4x4f values.
         boneMatrices: { storage: d.arrayOf(d.mat4x4f, maxBones) },
-        lights: { storage: d.arrayOf(Light, MAX_LIGHTS) },
+        lights: { storage: d.arrayOf(Light, maxLights) },
     });
 }
 

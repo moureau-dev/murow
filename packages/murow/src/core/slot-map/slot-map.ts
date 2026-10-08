@@ -13,11 +13,11 @@
 import { FreeList } from '../free-list';
 
 /**
- * A branded integer id. Use `as SlotId<'light'>` (or your own brand) to keep
- * a light id from being passed where an instance id is expected. Purely a
- * compile-time tag — at runtime it is a plain number.
+ * A branded integer id. The brand is required, so a plain `number` does not
+ * assign; ids enter typed code only at a boundary (ECS, snapshot, wire) via a
+ * cast. Purely a compile-time tag, at runtime it is a plain number.
  */
-export type SlotId<Brand extends string = string> = number & { readonly __slot?: Brand };
+export type SlotId<Brand extends string> = number & { readonly __slot: Brand };
 
 /**
  * Dense membership set for externally chosen integer ids in `[0, capacity)`.

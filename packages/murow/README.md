@@ -77,7 +77,7 @@ Renderer-agnostic primitives consumed by any backend (`@murow/webgpu`, future Pi
 ### [DOM](./src/dom) — World-anchored HTML overlays
 `HTMLDom` ties DOM elements to world points via a renderer's `worldToScreen`, for nameplates, health bars and damage numbers. Renderer-agnostic (2D or 3D), pooled with a global budget.
 
-### [WebGPU](./src/../webgpu) — WebGPU rendering backend
+### [WebGPU](../webgpu) — WebGPU rendering backend
 The WebGPU renderer is bundled with murow and accessible via `murow/webgpu`:
 
 ```typescript
@@ -86,7 +86,7 @@ import { WebGPU2DRenderer, WebGPU3DRenderer } from 'murow/webgpu';
 
 See [WebGPU README](../webgpu/README.md) for full documentation.
 
-### [Netcode](./src/../netcode) — Multiplayer layer
+### [Netcode](../netcode) — Multiplayer layer
 Opinionated multiplayer layer built on the `Protocol` and `Network`
 primitives above. Adds snapshot-based state sync, client-side prediction
 with rollback, jitter interpolation, server-pushed entity assignment,

@@ -6,6 +6,8 @@
  * types are re-exported at the top level of the package for convenience.
  */
 import type { PlayOptions, TexturePrefab } from 'murow/renderer';
+import type { HandleBase } from '../collection/handle-base';
+import type { DecalId, EmitterId, InstanceId, LayerId, LightId } from '../collection/ids';
 
 export declare namespace Handles {
     /** A GPU mesh resource. */
@@ -28,8 +30,7 @@ export declare namespace Handles {
     }
 
     /** A single-part spawned instance. */
-    export interface MeshInstanceHandle {
-        readonly id: number;
+    export interface MeshInstanceHandle extends HandleBase<InstanceId> {
         readonly slot: number;
         readonly modelId: number;
         readonly skinned: boolean;
@@ -68,8 +69,7 @@ export declare namespace Handles {
     }
 
     /** A spawned instance (single primitive or multi-part glTF). */
-    export interface InstanceHandle {
-        readonly id: number;
+    export interface InstanceHandle extends HandleBase<InstanceId> {
         setPosition(x: number, y: number, z: number): void;
         setRotation(x: number, y: number, z: number): void;
         setScale(x: number, y: number, z: number): void;
@@ -116,7 +116,7 @@ export declare namespace Handles {
      * tuple (mutated on each read), matching `MeshInstanceHandle`. Copy the
      * values out if you need to retain them past the next read on the same handle.
      */
-    export interface LightHandle {
+    export interface LightHandle extends HandleBase<LightId> {
         readonly slot: number;
         setPosition(x: number, y: number, z: number): void;
         setDirection(x: number, y: number, z: number): void;
@@ -134,6 +134,40 @@ export declare namespace Handles {
         smoothness: number;
         /** Whether the light contributes this frame. Toggling does not free the slot. */
         enabled: boolean;
+        /** Per-light shadow override, when this light casts a shadow. */
+        shadow?: LightShadow;
         destroy(): void;
+    }
+
+    /** Per-light shadow participation and overrides. */
+    export interface LightShadow {
+        enabled: boolean;
+        bias?: number;
+    }
+
+    /** A decal layer: a pool of surface marks sharing one atlas material. */
+    export interface DecalLayer {
+        readonly id: LayerId;
+        readonly alive: boolean;
+        readonly capacity: number;
+        readonly count: number;
+        add(x: number, y: number, z: number, nx: number, ny: number, nz: number, opts?: unknown): DecalHandle | null;
+        destroy(): void;
+    }
+
+    /** A spawned decal. */
+    export interface DecalHandle extends HandleBase<DecalId> {
+        readonly x: number;
+        readonly y: number;
+        readonly z: number;
+    }
+
+    /** A live particle emitter. */
+    export interface ParticleEmitter extends HandleBase<EmitterId> {
+        enabled: boolean;
+        readonly position: [number, number, number];
+        update(deltaTime: number): void;
+        setPosition(x: number, y: number, z: number): void;
+        setRotation(x: number, y: number, z: number): void;
     }
 }

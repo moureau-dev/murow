@@ -15,7 +15,7 @@ The `webgpu` and `netcode` subpaths are bundled with the `murow` package — `np
 Before writing anything, internalize these — they are the patterns agents wrongly import from other engines:
 
 - **No entity/component classes.** A component is a typed binary schema (`defineComponent`), not a class with methods. An entity is a plain `number`. Don't write `class Player {}` or `class PositionComponent {}`.
-- **No scene graph / `Object3D` / `mesh.material.color`.** You spawn instance *handles* from a renderer and set flat transforms/tint; there is no node hierarchy. 3D surfaces use `renderer.createMaterial(spec)` + a `MaterialHandle` (see "Materials (3D)"), not a material assigned to a mesh.
+- **No scene graph / `Object3D` / `mesh.material.color`.** You spawn instance *handles* from a renderer and set flat transforms/tint; there is no node hierarchy. 3D surfaces use `renderer.materials.create(spec)` + a `MaterialHandle` (see "Materials (3D)"), not a material assigned to a mesh.
 - **No React-style hooks, no per-frame object allocation in hot loops.** State lives in components (multiplayer) or in your own arrays (single-player) — not in closures or framework state.
 - **Determinism in predictions:** no `Math.random()` (use `ctx.rng`), no `Date.now()`/`performance.now()` (use `ctx.tick`/`ctx.deltaTime`), no I/O, no module-level mutable state. Predictions only write **networked** components.
 - **Server is authority.** Handlers are server-only. Gameplay decisions (hits, awards) live in `defineHandlers`, never on the client.
@@ -45,7 +45,7 @@ These are the rules LLMs most often get wrong. Internalize them before writing c
 - Do not use DOM `addEventListener` for ordinary game keyboard/mouse input — the loop snapshots input and hands it to each tick.
 - `input.keys[code].down` = held; `.hit` = pressed during the current tick. Mouse buttons expose the same `.down` / `.hit`.
 - Assets are registered through `AssetBucket`; prefabs go through the `.prefabs()` callback — which MUST return the bucket.
-- After `await assets.load()`, consume registered prefabs via `assets.prefabs.get(id)` and pass them to `renderer.addInstance({ prefab: ... })` — the option key is `prefab`, NOT `model`.
+- After `await assets.load()`, consume registered prefabs via `assets.prefabs.get(id)` and pass them to `renderer.instances.add({ prefab: ... })` — the option key is `prefab`, NOT `model`.
 - Declare every reusable model as an `AssetBucket` prefab. `renderer.createCube()` / `createGrid()` / `loadModel()` / `loadGltf()` are one-off/debug conveniences — not the way to declare game models.
 - Do not invent a separate prefab loading/registration mechanism.
 - Simulation (movement, AI, input reads) belongs in `tick`; drawing belongs in `render`.
@@ -124,7 +124,7 @@ Many entities / want systems & SoA speed?
 └── Yes ──> ECS World + components + systems (see ECS section; default to the Fields API).
 ```
 
-**ECS is not required for single-player.** A loop that owns a few hundred instance handles and moves them each tick is perfectly idiomatic — `new GameLoop(...)`, `addInstance(...)`, mutate handles in the `tick` event, `render(alpha)` in `render`. No `World`, no `defineComponent`. Reach for ECS when entity count, query patterns, or system organization make hand-rolled state painful, or when you want SoA cache performance. (In **multiplayer**, ECS is effectively required — `networked()` components and the snapshot codec are built on the World.)
+**ECS is not required for single-player.** A loop that owns a few hundred instance handles and moves them each tick is perfectly idiomatic — `new GameLoop(...)`, `instances.add(...)`, mutate handles in the `tick` event, `render(alpha)` in `render`. No `World`, no `defineComponent`. Reach for ECS when entity count, query patterns, or system organization make hand-rolled state painful, or when you want SoA cache performance. (In **multiplayer**, ECS is effectively required — `networked()` components and the snapshot codec are built on the World.)
 
 Minimal single-player skeleton (no ECS, no netcode):
 
@@ -138,7 +138,7 @@ const renderer = new WebGPU3DRenderer(canvas, { assets, maxInstances: 500, autoR
 await renderer.init();
 
 const boxes = Array.from({ length: 200 }, (_, i) =>
-  renderer.addInstance({ prefab: assets.prefabs.get('box'), position: [i % 20, 0, (i / 20) | 0] }));
+  renderer.instances.add({ prefab: assets.prefabs.get('box'), position: [i % 20, 0, (i / 20) | 0] }));
 
 // `tickRate` is the SIMULATION rate, not the rendering rate. 'client' still
 // renders through requestAnimationFrame; WebGPU3DRenderer interpolates between
@@ -209,7 +209,7 @@ Minimal HTML:
 
   const renderer = new WebGPU3DRenderer(canvas, { assets, maxInstances: 500, autoResize: true });
   await renderer.init();
-  renderer.addInstance({ prefab: assets.prefabs.get('box') });
+  renderer.instances.add({ prefab: assets.prefabs.get('box') });
 
   const loop = new GameLoop({ type: 'client', tickRate: 20 });
   loop.events.on('pre-tick', () => renderer.storePreviousState());
@@ -330,7 +330,7 @@ Do not invent these — they will not type-check or will silently do nothing:
 
 - `renderer.setColor(...)` / `renderer.setTint(...)` — tint is set at spawn (3D `color: [r, g, b]`) or via the 2D `SpriteHandle.setTint(...)` method; there is no renderer-level setter
 - `renderer.camera.lookAt(...)` — not part of the Camera2D / Camera3D API (see the Camera sections for what exists)
-- `renderer.addMesh(...)` — models come from `AssetBucket` prefabs (preferred) or the renderer's `create*` / `load*` factories, then `addInstance`
+- `renderer.addMesh(...)` — models come from `AssetBucket` prefabs (preferred) or the renderer's `create*` / `load*` factories, then `instances.add`
 - `entity.position = ...` / `entity.setPosition(...)` — entities are plain numbers; position lives in components or on renderer instance handles
 - `scene.add(...)` / `scene.remove(...)` / `new Scene()` — there is no scene graph
 - `new Vector3()` / `new Vector2()` / `new Quaternion()` — no vector/quaternion classes (see "What does NOT ship" above)
@@ -2442,7 +2442,7 @@ const assets = new AssetBucket('3d')
 await assets.load();
 
 // ✅ Consume after load(), pass the prefab to the renderer:
-renderer.addInstance({ prefab: assets.prefabs.get('player') });
+renderer.instances.add({ prefab: assets.prefabs.get('player') });
 
 // ❌ Don't register prefabs after load(), and don't parse/upload the glTF
 //    yourself — the bucket owns uploads and GPU buffer sizing.
@@ -2820,6 +2820,26 @@ You don't write any of this. The renderer handles it under the hood as long as y
 | **Dynamic point + spot lights + sun** | Point and spot lights with live-mutable properties per frame. Configurable directional light and ambient. Up to 16 dynamic lights. GPU-side interpolation for moving lights. Single directional shadow map (the sun). No PBR. |
 | **Zero-GC hot path** | `Float32Array` buffers + `FreeList` slot allocation. No per-frame object creation. |
 
+### Managers and handles
+
+The renderer is a composition root: `new WebGPU3DRenderer(canvas, options)`, `init()`, `render(alpha)`, `storePreviousState()`, `destroy()`, `onResize`, `worldToScreen`, `createCompute`, and the `create*` / `load*` model factories stay on it. Each subsystem is a manager reached off it:
+
+| Manager | Creation | Returns |
+|---|---|---|
+| `renderer.instances` | `add(spec)` | `MeshInstanceHandle`, or `null` at capacity |
+| `renderer.materials` | `create(spec)` | `MaterialHandle<U>`, or `null` at capacity |
+| `renderer.lights` | `add(spec)` | `LightHandle`, or `null` at capacity; `renderer.lights.ambient(color)` and `renderer.lights.sun(dir, color, intensity)` set the scene terms |
+| `renderer.decals` | `createLayer(spec)` | a decal layer; `layer.add(x, y, z, nx, ny, nz, opts)` returns a `DecalHandle` |
+| `renderer.shadows` | (system) | `enabled`, `resolution`, plus `directional` / `spot` / `point` sub-managers |
+| `renderer.particles` | `addEmitter(spec)` | a particle emitter handle |
+| `renderer.camera` | (system) | unchanged |
+
+Collection managers (`instances`, `materials`, `lights`, `decals`, `particles`) share one read and lifecycle contract: `get(id)`, `has(id)`, `each(cb)`, `remove(id)`, `clear()`, `destroy()`, `capacity`, `count`, and an `events` system (`add` / `remove` / `clear`). Creation is named per manager: `add` for a cheap pool insert, `create` when the manager compiles or allocates GPU resources.
+
+Ids are versioned numbers, so a stale id never aliases a recycled slot. Every handle carries a readonly `id` and an `alive` flag; compare handles by `.id`, never by reference. `destroy()` is idempotent; a stale handle is inert (mutating methods are no-ops, reads return the last values). `handle.destroy()` frees the pool slot for reuse, not memory; full reclamation is `renderer.destroy()`.
+
+Materials are refcounted: `material.destroy()` throws while instances still use it, and `material.destroy({ force: true })` reassigns those instances to the default material first. Particle `capacity` is `{ maxEmitters, maxParticles }`.
+
 ### Lighting (3D)
 
 Dynamic point and spot lights with GPU-side interpolation, plus a configurable global directional light and ambient term. The renderer supports up to `MAX_LIGHTS` (default 16) dynamic lights + one sun.
@@ -2828,7 +2848,7 @@ Dynamic point and spot lights with GPU-side interpolation, plus a configurable g
 import { type LightSpec, type LightHandle } from 'murow/webgpu';
 
 // Point light
-const point = renderer.addLight({
+const point = renderer.lights.add({
   type: 'point',
   position: [0, 5, 0],
   color: [1, 0.3, 0.3],        // RGB, default [1,1,1]
@@ -2837,7 +2857,7 @@ const point = renderer.addLight({
 });
 
 // Spot light (cone with soft edge)
-const spot = renderer.addLight({
+const spot = renderer.lights.add({
   type: 'spot',
   position: [0, 3, 0],
   direction: [0, -1, 0],
@@ -2858,14 +2878,14 @@ spot.smoothness = 0.7;
 spot.enabled = false;           // toggle without freeing the slot
 
 // Global directional light (the "sun") — configurable, defaults to (0.3, 0.8, 0.5), white, intensity 1
-renderer.lights.setDirectional(
+renderer.lights.sun(
   [0.5, -0.8, 0.3],           // direction (points toward the light)
   [1, 0.95, 0.9],             // color
   1.5,                         // intensity
 );
 
 // Global ambient — defaults to (0.3, 0.3, 0.3)
-renderer.lights.setAmbient([0.1, 0.1, 0.15]);
+renderer.lights.ambient([0.1, 0.1, 0.15]);
 
 // Light positions/directions interpolate on the GPU (store previous state in pre-tick)
 loop.events.on('pre-tick', () => renderer.storePreviousState());
@@ -2877,14 +2897,14 @@ The 3D renderer is **not a PBR engine** — no skybox, no metalness/roughness/IB
 
 ### Materials (3D)
 
-`renderer.createMaterial(spec)` compiles a `MaterialSpec` into a `MaterialHandle`. Materials are GPU resources created **after `init()`**; there is no string registry, no `AssetBucket` entry, and no `.get(id)`.
+`renderer.materials.create(spec)` compiles a `MaterialSpec` into a `MaterialHandle`, or returns `null` at capacity. Materials are GPU resources created **after `init()`**; there is no string registry, no `AssetBucket` entry, and no `.get(id)`.
 
 ```ts
 import { d, std } from 'murow/webgpu';
 
 // Declarative custom shader. Omitting `shaders.vertex` reuses the engine mesh
 // vertex, so the fragment receives vNormal, vColor, vUV, vWorldPos.
-const holo = renderer.createMaterial({
+const holo = renderer.materials.create({
   type: 'shader',
   id: 'holo',                   // optional debug label on the GPU pipeline
   blend: 'additive',            // 'opaque' | 'alpha' | 'additive' | 'premultiplied' | 'multiply' | 'screen'
@@ -2903,9 +2923,9 @@ const holo = renderer.createMaterial({
   },
 });
 
-const glow = renderer.createMaterial({ type: 'emissive', color: [1, 0.45, 0.1], emissive: 2 });
+const glow = renderer.materials.create({ type: 'emissive', color: [1, 0.45, 0.1], emissive: 2 });
 
-const orb = renderer.addInstance({ prefab: 'orb', material: holo });
+const orb = renderer.instances.add({ prefab: 'orb', material: holo });
 orb.setMaterial(glow.slot + 1);      // runtime swap (O(1)); 0 = engine default
 orb.setMaterialParams(1.5, 0);       // writes statics[slot].custom0 / custom1
 
@@ -2922,7 +2942,7 @@ holo.destroy();                      // free the slot + uniform buffer
 | `uniforms` | Typed read/write over this material's uniform buffer. `holo.uniforms.scan = v` and `+=` both work. |
 | `setTexture(name, texture)` | Re-binds a declared texture by name. |
 | `setCastShadow(bool)` / `setReceiveShadow(bool)` | Runtime shadow toggles (receive is engine materials only). |
-| `destroy()` | Frees the slot and uniform buffer. |
+| `destroy(opts?)` | Frees the slot and uniform buffer. Throws while instances still use it; `destroy({ force: true })` reassigns them to the default material first. |
 
 Spec fields:
 
@@ -2942,34 +2962,33 @@ Free variables inside a `shader` fragment (and custom vertex): `scene` (engine u
 Batching is by `(materialId, modelId)`; `render()` draws opaque batches first, then transparent (`alpha`/`additive`) batches.
 
 Caveats:
-- Skinned meshes still use the engine default material; `addInstance({ material })` applies to non-skinned models only.
+- Skinned meshes still use the engine default material; `instances.add({ material })` applies to non-skinned models only.
 - Textures get a mip chain on upload (good minification); atlas sprites must sample LOD 0 to avoid cross-cell bleed (the 3D particle path does).
 - `standard` is Lambert + two-sided; no PBR/specular/normal maps yet.
 
 ### Shadows (3D)
 
-Cast by the global sun (`renderer.setDirectionalLight`). A single `rgba16float` linear-depth ortho map is fitted around the camera position (half-extent `renderer.shadows.distance`), texel-snapped, and `standard` materials PCF-sample it.
+Cast by the global sun (`renderer.lights.sun`). A single `rgba16float` linear-depth ortho map is fitted around the camera position (half-extent `renderer.shadows.directional.distance`), texel-snapped, and `standard` materials PCF-sample it.
 
 ```ts
-renderer.shadows.enabled = true;   // off = skips the shadow pass AND receiver sampling
-renderer.shadows.softness = 1.0;   // PCF radius in texels
-renderer.shadows.bias = 0.001;
-renderer.shadows.distance = 45;    // ortho half-extent around the camera position
+renderer.shadows.directional.enabled = true;   // off = skips the shadow pass AND receiver sampling
+renderer.shadows.directional.softness = 1.0;   // PCF radius in texels
+renderer.shadows.directional.bias = 0.001;
+renderer.shadows.directional.distance = 45;    // ortho half-extent around the camera position
 
-renderer.setShadowResolution(2048); // rebuild + rebind (not per-frame)
+renderer.shadows.resolution = 2048; // rebuild + rebind (not per-frame)
 
 // Per material:
-const ground = renderer.createMaterial({ type: 'standard', shadow: { receive: true, cast: false } });
+const ground = renderer.materials.create({ type: 'standard', shadow: { receive: true, cast: false } });
 ```
 
 | Control | Default | Notes |
 |---|---|---|
-| `renderer.shadows.enabled` | `true` | Truthful toggle: disabled skips the pass and the fragment branch |
-| `renderer.shadows.softness` | `1` | PCF tap spacing, in texels |
-| `renderer.shadows.bias` | `0.003` | Depth compare bias (plus a normal-offset bias) |
-| `renderer.shadows.distance` | `45` | Ortho half-extent of the box fitted around the camera position |
-| `renderer.shadows.anchorStep` | `0` | Optional snap grid for the focus; `0` follows the camera exactly (box always covers around the camera, idle still caches) |
-| `renderer.shadows.resolution` | `2048` | Assignable at runtime; rebuilds the map and rebinds materials. `setShadowResolution(px)` is an alias |
+| `renderer.shadows.directional.enabled` | `true` | Truthful toggle: disabled skips the pass and the fragment branch |
+| `renderer.shadows.directional.softness` | `1` | PCF tap spacing, in texels |
+| `renderer.shadows.directional.bias` | `0.003` | Depth compare bias (plus a normal-offset bias) |
+| `renderer.shadows.directional.distance` | `45` | Ortho half-extent of the box fitted around the camera position |
+| `renderer.shadows.resolution` | `2048` | Assignable at runtime; rebuilds the map and rebinds materials |
 | `shadow: { cast }` / `{ receive }` | `true` | Per material. Transparent and alpha-tested materials default to `cast: false` (the shadow pass ignores alpha) |
 | `WebGPU3DRendererOptions.shadowResolution` | `2048` | Initial map size |
 
@@ -2977,7 +2996,7 @@ const ground = renderer.createMaterial({ type: 'standard', shadow: { receive: tr
 - **Spot** (up to 4/frame) — a perspective depth layer in a `texture_2d_array`; `standard` projects into it and 4-tap PCFs per light.
 - **Point** (up to 2/frame) — a `texture_cube_array` storing distance/far; `standard` samples by light direction and compares distance.
 
-Both are driven by the light's `castsShadow`/`shadowMapIndex`, gated per-system, and re-render every frame (not cached like the directional map); one global bias each. Controls: `renderer.spotShadows` / `renderer.pointShadows` (`.enabled`, `.bias`, `.maxShadows`, `.resolution`); renderer options `maxSpotShadows` (4), `maxPointShadows` (2), `pointShadowResolution` (512).
+Both are driven by the light's `castsShadow`/`shadowMapIndex`, gated per-system, and re-render every frame (not cached like the directional map); one global bias each. Controls: `renderer.shadows.spot` / `renderer.shadows.point` (`.enabled`, `.bias`, `.capacity`, `.resolution`); renderer options `maxSpotShadows` (4), `maxPointShadows` (2), `pointShadowResolution` (512).
 
 Casters are opaque instances, including skinned meshes (skinned casters share the animated bone matrices). **The directional map is only re-rendered when the sun, the snapped box, or a caster actually changes** (instances/skinned stores and skeletal animation carry a version counter); otherwise the previous map is reused and no shadow pass runs. Because the focus snaps to `anchorStep`, a static scene keeps the same map even while the camera moves within a cell. Limitations: one directional light; constant bias (no slope scale); a single fixed box around the camera, so casters beyond `distance` do not cast and detail falls off with distance. Custom `shader` fragments can read the map via the `shadow`, `shadowMap`, and `shadowSampler` free variables.
 
@@ -2986,8 +3005,8 @@ Casters are opaque instances, including skinned meshes (skinned casters share th
 Pooled surface marks (blood, scorch, AoE rings) drawn as instanced `plane` quads oriented to a surface normal, sampled from one atlas, faded over time. One draw call for the whole pool.
 
 ```ts
-const decals = renderer.createDecalLayer({ atlas: 'decals', quad: 'decalQuad', capacity: 256, cols: 4, rows: 4, life: 8 });
-decals.spawn(x, y, z, nx, ny, nz, { cell: 2, size: 0.8 });  // hit point + normal
+const decals = renderer.decals.createLayer({ atlas: 'decals', quad: 'decalQuad', capacity: 256, cols: 4, rows: 4, life: 8 });
+decals.add(x, y, z, nx, ny, nz, { cell: 2, size: 0.8 });  // returns a DecalHandle; hit point + normal
 ```
 
 - The atlas is an `AssetBucket` texture; each decal picks a cell via the per-instance channel (`x` = cell, `y` = spawn time), delivered to the fragment through the engine's `vCustom` varying.
@@ -3075,7 +3094,7 @@ interface MeshInstanceOptions {
   color?: readonly [r: number, g: number, b: number];   // flat RGB tint, SET-AT-SPAWN ONLY — there is no setColor on the handle
 }
 
-**Version note (0.1.8): `color` vs `tint`.** The 3D instance option is `color: [r, g, b]` — 3 components, RGB, set at spawn only. `tint` is the **2D sprite** option: `addSprite({ tint: [r, g, b, a] })` (4 components), plus the live `SpriteHandle.setTint(r, g, b, a)` method. Do not mix them — `addInstance({ tint: [...] })` and `addSprite({ color: [...] })` do not exist in 0.1.8. If you see 4-component `tint` passed to a 3D `addInstance`, that code is mixing the 2D API into 3D and the tint will be silently ignored (and won't type-check in TS).
+**Version note (0.1.8): `color` vs `tint`.** The 3D instance option is `color: [r, g, b]` — 3 components, RGB, set at spawn only. `tint` is the **2D sprite** option: `addSprite({ tint: [r, g, b, a] })` (4 components), plus the live `SpriteHandle.setTint(r, g, b, a)` method. Do not mix them — `instances.add({ tint: [...] })` and `addSprite({ color: [...] })` do not exist in 0.1.8. If you see 4-component `tint` passed to a 3D `instances.add`, that code is mixing the 2D API into 3D and the tint will be silently ignored (and won't type-check in TS).
 
 const renderer = new WebGPU3DRenderer(canvas, {
   assets,
@@ -3088,7 +3107,7 @@ const renderer = new WebGPU3DRenderer(canvas, {
 await renderer.init();
 
 const hero   = assets.prefabs.get('hero');
-const handle = renderer.addInstance({
+const handle = renderer.instances.add({
   prefab: hero,
   position: [0, 0, 0],
   rotation: [0, 0, 0],
@@ -3107,7 +3126,7 @@ handle.play?.(hero.animations.Idle, { loop: true, crossfade: 0.15, onEnd: () => 
 handle.stop?.();
 handle.destroy();                         // frees the slot + bone-matrix block; respawns reuse them
 
-renderer.removeInstance(handle as MeshInstanceHandle);
+renderer.instances.remove(handle.id);
 renderer.setAnimationCullDistance(20);
 renderer.maxSkinned;                      // capacity for skinned (animated) instances
 renderer.storePreviousState();            // call in 'pre-tick' for GPU lerp
@@ -3117,7 +3136,7 @@ renderer.raycast.update(input);           // cursor picking — see "Hitboxes & 
 renderer.raycast.hit({ filter });
 renderer.debug.hitboxes = true;           // draw hitbox wireframes (green = hovered, magenta = idle)
 
-// One-off / debug conveniences — return a ModelHandle / GltfModel for addInstance.
+// One-off / debug conveniences — return a ModelHandle / GltfModel for instances.add.
 // For anything you spawn more than once, declare a prefab in AssetBucket instead
 // (parallel load, typed ids, GPU sizing — see the AssetBucket section):
 const grid  = renderer.createGrid({ size: 50, step: 1, lineWidth: 0.01 });
@@ -3130,9 +3149,9 @@ const k     = renderer.createCompute('name', { workgroupSize: 256 });   // compu
 
 (`WebGPU2DRenderer` exposes the same `renderer.raycast` against sprite hitboxes, sorted topmost-first.)
 
-`addInstance` returns an `InstanceHandle`. For single-mesh prefabs it's also a `MeshInstanceHandle` at runtime — both names work; cast when calling `removeInstance`.
+`instances.add` returns an `InstanceHandle`. For single-mesh prefabs it's also a `MeshInstanceHandle` at runtime — both names work; pass the handle's `id` to `instances.remove`.
 
-**Per-instance color is immutable after spawn.** Set it once via `addInstance({ color: [r, g, b] })`. There is no `setColor` / `setTint` on the 3D handle — to recolor, `destroy()` the instance and re-add it. (2D sprites differ: `SpriteHandle.setTint(...)` is live — see the 2D section.) In 0.1.8 the 3D option is named `color` — any example showing `tint` on a 3D `addInstance` is using the 2D sprite API by mistake.
+**Per-instance color is immutable after spawn.** Set it once via `instances.add({ color: [r, g, b] })`. There is no `setColor` / `setTint` on the 3D handle — to recolor, `destroy()` the instance and re-add it. (2D sprites differ: `SpriteHandle.setTint(...)` is live — see the 2D section.) In 0.1.8 the 3D option is named `color` — any example showing `tint` on a 3D `instances.add` is using the 2D sprite API by mistake.
 
 ### Camera (2D)
 
@@ -3605,7 +3624,7 @@ inverseLerp(min: number, max: number, value: number): number;
 | `client.use(handlers)` | Handlers are server-only by design - `defineHandlers` does not type-check on the client |
 | Forgetting `renderer.storePreviousState()` in `pre-tick` | Add `loop.events.on('pre-tick', () => renderer.storePreviousState())` - without it, motion snaps at low tick rates |
 | Iterating `world.query(...)` to find despawned entities | Use `world.getDespawned()` + `world.flushDespawned()` - `O(deaths)`, not `O(maxEntities)` |
-| Calling `renderer.removeInstance(handle)` then `handle.setPosition(...)` later | `removeInstance` invalidates the handle - calls after are undefined |
+| Calling `handle.destroy()` then `handle.setPosition(...)` later | `destroy()` invalidates the handle - calls after are undefined |
 | `new World()` with no `components` array | All components must be registered up-front; `world.add(eid, NewComponent, ...)` will fail otherwise |
 | `defineComponent('Pos', { x: f32 })` for networked state | Networked components use the descriptor form: `defineComponent('Pos', { schema: { x: f32 }, sync: networked({...}) })` |
 | `'KeyW'` for the *letter* W key, `'W'` for shift+w | DOM `code` strings are always `KeyW`, `KeyA`, `Space`, `ShiftLeft`, `Digit1`, etc. - never the printed character |
@@ -3614,7 +3633,7 @@ inverseLerp(min: number, max: number, value: number): number;
 | `renderer.camera.position[0] = 5` | Tuple property is a shared reference; use `renderer.camera.setPosition(5, y, z)` |
 | `renderer.camera.fov = Math.PI / 3` (radians) | `fov` is DEGREES in 0.1.8 (default 60): `renderer.camera.fov = 60`. Radians give a ~1° view — effectively black |
 | `import { WebGPU3DRenderer } from "https://esm.sh/murow/webgpu"` (browser) | Not a supported browser entry point. Use the documented pair: jsDelivr `+esm` for core + `murow/dist/webgpu/esm/murow.webgpu.bundle.js` for the renderer |
-| `addInstance({ prefab: 'hero' })` relying on the string id | Pass the prefab object: `addInstance({ prefab: assets.prefabs.get('hero') })` — type-safe and avoids a runtime bucket lookup |
+| `instances.add({ prefab: 'hero' })` relying on the string id | Pass the prefab object: `instances.add({ prefab: assets.prefabs.get('hero') })` — type-safe and avoids a runtime bucket lookup |
 | Calling `prefabs.add(...)` after `bucket.load()` | All prefabs must be registered before `load()` |
 | `client.sendIntent('move', dx, dz)` (positional args) | `client.sendIntent('move', { dx, dz })` - intents are objects keyed by schema field names |
 | Calling `client.sendIntent(...)` before the server has assigned an entity | Returns `false` and emits an `'error'` event - the engine drops the call rather than running prediction against entity 0. Either listen for `'assigned'` first or check `client.assignedEntity !== null` |
@@ -3634,12 +3653,12 @@ inverseLerp(min: number, max: number, value: number): number;
 | Using `Math.random()` in a procgen system you also want as a replay | Seed a `SimpleRNG` instead - `new SimpleRNG(seed)` is deterministic and ~5x faster |
 | Calling `server.on('intent', handler)` to implement gameplay | That event is **observe-only** telemetry. Gameplay belongs in `defineHandlers(intents, {...})`. Both can coexist |
 | Casting `world.fields(C)` results to specific typed arrays | Don't - the return type is precisely inferred from the schema (`f32 -> Float32Array`, `u8 -> Uint8Array`, etc.). Casts only mask bugs |
-| Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `addInstance({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
+| Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `instances.add({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
 | Expecting a skybox or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and a material system (`standard` / `unlit` / `emissive` / custom `shader`), but no skybox or PBR. Write a custom `Base3DRenderer` backend if you need more |
-| `addInstance({ model: ... })` | The option key is `prefab`, not `model`. Use `addInstance({ prefab: assets.prefabs.get(id) })` |
+| `instances.add({ model: ... })` | The option key is `prefab`, not `model`. Use `instances.add({ prefab: assets.prefabs.get(id) })` |
 | `renderer.createCube({ size: 1 })` for the player / obstacles / ground | Declare reusable models as `AssetBucket` prefabs (`assets.prefabs.get('id')`) — the renderer `create*` / `load*` factories are one-off/debug conveniences: no parallel load, no typed ids, no bucket GPU sizing |
 | `.prefabs(({ bucket }) => { bucket.add(...); })` — block body doesn't return the bucket | `textures()` / `prefabs()` callbacks MUST return the bucket: expression body (`({ bucket }) => bucket.add(...)`) or explicit `return bucket.add(...)`. A block that only calls `.add(...)` returns `undefined` and registers nothing |
-| `addInstance({ tint: [r, g, b, a] })` (3D) | 3D uses `color: [r, g, b]` (3 components, set at spawn). `tint: [r, g, b, a]` is the 2D sprite option (`addSprite` / `SpriteHandle.setTint`) |
+| `instances.add({ tint: [r, g, b, a] })` (3D) | 3D uses `color: [r, g, b]` (3 components, set at spawn). `tint: [r, g, b, a]` is the 2D sprite option (`addSprite` / `SpriteHandle.setTint`) |
 | `window.addEventListener('keydown', ...)` while using `GameLoop` | `GameLoop` owns browser input — read `input.keys['KeyW']?.down` etc. from the tick payload. `InputManager` is only for loop-less setups |
 | `import { type Vec2 } from 'murow'` | Not exported. Use a `{ x: number; y: number }` literal (NavMesh, etc. accept it). `Vector2` exists at `murow/core/input` if you want a named type |
 | Treating `world.query(...)` as a fresh array you can keep | It's a reused, cached buffer rebuilt on any structural change. Iterate it now; re-query after spawn/despawn/add/remove. Same for `getEntities()` / `getDespawned()` |
@@ -3906,7 +3925,7 @@ const client = new GameClient({
 client.use(predictions);
 
 const handles = new Map<Entity, InstanceHandle>();
-client.on('spawn',   ({ entity }) => handles.set(entity, renderer.addInstance({ prefab: assets.prefabs.get('player'), position: [0, 0.45, 0] })));
+client.on('spawn',   ({ entity }) => handles.set(entity, renderer.instances.add({ prefab: assets.prefabs.get('player'), position: [0, 0.45, 0] })));
 client.on('despawn', ({ entity }) => { handles.get(entity)?.destroy(); handles.delete(entity); });
 
 // lerp in the GPU
