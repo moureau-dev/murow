@@ -1,4 +1,4 @@
-import { SlotMap } from "../../core";
+import { GenerationAllocator } from '../../core/collection';
 
 const NOOP = () => {};
 
@@ -13,24 +13,24 @@ interface Schedule {
 /**
  * Fixed-capacity, zero-GC scheduler of tick-timed callbacks for the game loop.
  *
- * Schedules are stored in a pre-allocated object pool indexed by a {@link SlotMap}
- * slot, so registering and cancelling reuse objects instead of producing garbage.
- * Ids returned by {@link every} and {@link in} pack the slot with a generation
- * counter, so an id left over from a finished schedule can never cancel the
- * schedule that later reuses its slot.
+ * Schedules are stored in a pre-allocated object pool indexed by a slot, so
+ * registering and cancelling reuse objects instead of producing garbage. Ids are
+ * generation-versioned ({@link GenerationAllocator}), so an id left over from a
+ * finished schedule can never cancel the schedule that later reuses its slot.
  */
 export class TickerSchedule {
     private readonly _capacity: number;
-    private readonly _slots: SlotMap;
-    private readonly _generations: Uint32Array;
+    private readonly _alloc: GenerationAllocator;
+    /** slot -> live id, so compaction can free by id. */
+    private readonly _ids: Int32Array;
     private readonly _pool: Schedule[];
     private _dirty = false;
     private _running = false;
 
     constructor(capacity: number) {
         this._capacity = Math.max(1, Math.floor(capacity));
-        this._slots = new SlotMap(this._capacity);
-        this._generations = new Uint32Array(this._capacity);
+        this._alloc = new GenerationAllocator(this._capacity);
+        this._ids = new Int32Array(this._capacity).fill(-1);
         this._pool = new Array<Schedule>(this._capacity);
         for (let i = 0; i < this._capacity; i++) {
             this._pool[i] = { interval: 0, next: 0, cb: NOOP, repeat: true, cancelled: false };
@@ -41,7 +41,7 @@ export class TickerSchedule {
      * Number of live schedules.
      */
     get size(): number {
-        return this._slots.size;
+        return this._alloc.size;
     }
 
     /**
@@ -59,8 +59,10 @@ export class TickerSchedule {
     every(intervalTicks: number, cb: () => void, currentTick: number): number {
         if (this._dirty && !this._running) this._compact();
 
-        const slot = this._slots.add();
-        if (slot === -1) return -1;
+        const id = this._alloc.allocate();
+        if (id === -1) return -1;
+        const slot = this._alloc.slotOf(id);
+        this._ids[slot] = id;
 
         const schedule = this._pool[slot];
         schedule.interval = Math.max(1, Math.round(intervalTicks));
@@ -69,7 +71,7 @@ export class TickerSchedule {
         schedule.repeat = true;
         schedule.cancelled = false;
 
-        return slot + this._generations[slot] * this._capacity;
+        return id;
     }
 
     /**
@@ -80,8 +82,10 @@ export class TickerSchedule {
     in(delayTicks: number, cb: () => void, currentTick: number): number {
         if (this._dirty && !this._running) this._compact();
 
-        const slot = this._slots.add();
-        if (slot === -1) return -1;
+        const id = this._alloc.allocate();
+        if (id === -1) return -1;
+        const slot = this._alloc.slotOf(id);
+        this._ids[slot] = id;
 
         const schedule = this._pool[slot];
         schedule.interval = Math.max(1, Math.round(delayTicks));
@@ -90,7 +94,7 @@ export class TickerSchedule {
         schedule.repeat = false;
         schedule.cancelled = false;
 
-        return slot + this._generations[slot] * this._capacity;
+        return id;
     }
 
     /**
@@ -98,12 +102,12 @@ export class TickerSchedule {
      * unknown, or already cancelled.
      */
     clear(id: number): boolean {
-        const slot = id % this._capacity;
-        if (slot < 0 || !this._slots.has(slot)) return false;
-        if (this._generations[slot] !== (id - slot) / this._capacity) return false;
+        if (!this._alloc.isLive(id)) return false;
+        const slot = this._alloc.slotOf(id);
+        const schedule = this._pool[slot];
+        if (schedule.cancelled) return false;
 
-        this._pool[slot].cancelled = true;
-        this._generations[slot]++;
+        schedule.cancelled = true;
         this._dirty = true;
         if (!this._running) this._compact();
         return true;
@@ -113,12 +117,10 @@ export class TickerSchedule {
      * Cancels every live schedule.
      */
     clearAll(): void {
-        const active = this._slots.activeSlots;
-        const count = this._slots.size;
+        const active = this._alloc.activeSlots;
+        const count = this._alloc.size;
         for (let i = 0; i < count; i++) {
-            const slot = active[i];
-            this._pool[slot].cancelled = true;
-            this._generations[slot]++;
+            this._pool[active[i]!]!.cancelled = true;
         }
         this._dirty = true;
         if (!this._running) this._compact();
@@ -133,18 +135,17 @@ export class TickerSchedule {
         if (this._dirty) this._compact();
 
         this._running = true;
-        const active = this._slots.activeSlots;
-        const count = this._slots.size;
+        const active = this._alloc.activeSlots;
+        const count = this._alloc.size;
         for (let i = 0; i < count; i++) {
-            const slot = active[i];
-            const schedule = this._pool[slot];
+            const slot = active[i]!;
+            const schedule = this._pool[slot]!;
             if (schedule.cancelled) continue;
             if (currentTick >= schedule.next) {
                 if (schedule.repeat) {
                     schedule.next = currentTick + schedule.interval;
                 } else {
                     schedule.cancelled = true;
-                    this._generations[slot]++;
                     this._dirty = true;
                 }
                 schedule.cb();
@@ -162,23 +163,25 @@ export class TickerSchedule {
     rebase(baseTick: number): void {
         if (this._dirty) this._compact();
 
-        const active = this._slots.activeSlots;
-        const count = this._slots.size;
+        const active = this._alloc.activeSlots;
+        const count = this._alloc.size;
         for (let i = 0; i < count; i++) {
-            const schedule = this._pool[active[i]];
+            const schedule = this._pool[active[i]!]!;
             schedule.next = baseTick + schedule.interval;
         }
     }
 
     private _compact(): void {
-        const slots = this._slots;
+        const alloc = this._alloc;
         let i = 0;
-        while (i < slots.size) {
-            const slot = slots.activeSlots[i];
-            if (this._pool[slot].cancelled) {
-                this._pool[slot].cb = NOOP;
-                this._pool[slot].cancelled = false;
-                slots.remove(slot);
+        while (i < alloc.size) {
+            const slot = alloc.activeSlots[i]!;
+            const schedule = this._pool[slot]!;
+            if (schedule.cancelled) {
+                schedule.cb = NOOP;
+                schedule.cancelled = false;
+                alloc.free(this._ids[slot]!);
+                this._ids[slot] = -1;
             } else {
                 i++;
             }

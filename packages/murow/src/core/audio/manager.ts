@@ -21,7 +21,7 @@
  * ```
  */
 
-import { SlotMap } from '../slot-map';
+import { GenerationAllocator } from '../collection';
 import { EventSystem } from '../events';
 import type { StringOr } from '../bucket/bucket';
 import { NullAudioOutput } from './sources/null';
@@ -45,8 +45,8 @@ import {
 } from './types';
 
 interface SourceRecord {
-    /** Handle generation; stale handles are rejected by comparing this. */
-    gen: number;
+    /** Packed handle id (slot + generation). */
+    id: number;
     outputId: number;
     clip: AudioClip;
     category: AudioCategory;
@@ -123,8 +123,7 @@ export class AudioManager<C extends AudioClipSource = AudioClipSource> {
     private readonly defaultDistance: DistanceOptions;
     private destroyed = false;
 
-    private readonly slotMap: SlotMap;
-    private readonly generations: Uint32Array;
+    private readonly alloc: GenerationAllocator;
     private readonly records: (SourceRecord | null)[];
 
     /** Persistent listener pose, mutated in place by the setters below. */
@@ -140,8 +139,7 @@ export class AudioManager<C extends AudioClipSource = AudioClipSource> {
         this.defaultDistance = opts.distance ?? {};
         this.output = opts.output ?? createDefaultAudioOutput(this.dimension, this.maxSources, opts.panRange);
 
-        this.slotMap = new SlotMap(this.maxSources);
-        this.generations = new Uint32Array(this.maxSources);
+        this.alloc = new GenerationAllocator(this.maxSources);
         this.records = new Array<SourceRecord | null>(this.maxSources).fill(null);
 
         for (const c of AUDIO_CATEGORIES) this.categoryVolume[c] = 1;
@@ -251,16 +249,16 @@ export class AudioManager<C extends AudioClipSource = AudioClipSource> {
         const clipDist = clip.distance ?? {};
         const defaultDist = this.defaultDistance;
 
-        let slot = this.slotMap.add();
-        if (slot === -1) {
+        let id = this.alloc.allocate();
+        if (id === -1) {
             this.evictFarthest();
-            slot = this.slotMap.add();
-            if (slot === -1) throw new Error(`AudioManager: maxSources (${this.maxSources}) reached`);
+            id = this.alloc.allocate();
+            if (id === -1) throw new Error(`AudioManager: maxSources (${this.maxSources}) reached`);
         }
+        const slot = this.alloc.slotOf(id);
 
-        const gen = (this.generations[slot] = (this.generations[slot] + 1) >>> 0);
         const record: SourceRecord = {
-            gen,
+            id,
             outputId: -1,
             clip,
             category,
@@ -286,11 +284,10 @@ export class AudioManager<C extends AudioClipSource = AudioClipSource> {
         };
         this.records[slot] = record;
 
-        record.outputId = this.output.createSource(this.spec(record), () => this.onSourceEnded(slot, gen));
+        record.outputId = this.output.createSource(this.spec(record), () => this.onSourceEnded(id));
 
-        const id = this.pack(slot, gen);
         this.events.emit('source-started', { id, clipId: clip.id, category });
-        return new Handle(this, slot, gen, id);
+        return new Handle(this, slot, id);
     }
 
     /** Stop and release a source. No-op for stale handles. */
@@ -306,8 +303,8 @@ export class AudioManager<C extends AudioClipSource = AudioClipSource> {
      */
     update(deltaTime: number): void {
         if (this.destroyed) return;
-        for (let i = this.slotMap.size - 1; i >= 0; i--) {
-            const slot = this.slotMap.activeSlots[i];
+        for (let i = this.alloc.size - 1; i >= 0; i--) {
+            const slot = this.alloc.activeSlots[i]!;
             const record = this.records[slot];
             if (!record) continue;
 
@@ -331,7 +328,7 @@ export class AudioManager<C extends AudioClipSource = AudioClipSource> {
     }
 
     get activeCount(): number {
-        return this.slotMap.size;
+        return this.alloc.size;
     }
 
     /**
@@ -341,17 +338,13 @@ export class AudioManager<C extends AudioClipSource = AudioClipSource> {
     destroy(): void {
         if (this.destroyed) return;
         this.destroyed = true;
-        while (this.slotMap.size > 0) this.freeSlot(this.slotMap.activeSlots[0], 'stopped');
+        while (this.alloc.size > 0) this.freeSlot(this.alloc.activeSlots[0]!, 'stopped');
         this.output.destroy();
     }
 
     /** @internal Resolve a packed handle id to a slot, or -1 if stale. */
     slotOf(id: number): number {
-        const slot = id % this.maxSources;
-        const gen = (id - slot) / this.maxSources;
-        const record = this.records[slot];
-        if (!record || record.gen !== gen || !this.slotMap.has(slot)) return -1;
-        return slot;
+        return this.alloc.isLive(id) ? this.alloc.slotOf(id) : -1;
     }
 
     /** @internal */ record(slot: number): SourceRecord | null {
@@ -424,10 +417,6 @@ export class AudioManager<C extends AudioClipSource = AudioClipSource> {
         this.output.setSourcePaused(record.outputId, effective);
     }
 
-    private pack(slot: number, gen: number): number {
-        return slot + gen * this.maxSources;
-    }
-
     private resolveClip(clipOrId: StringOr<ClipIdsOf<C>> | AudioClip): AudioClip {
         if (typeof clipOrId !== 'string') return clipOrId;
         if (!this.clips) {
@@ -469,8 +458,8 @@ export class AudioManager<C extends AudioClipSource = AudioClipSource> {
     private evictFarthest(): void {
         let victim = -1;
         let far = -Infinity;
-        for (let i = 0; i < this.slotMap.size; i++) {
-            const slot = this.slotMap.activeSlots[i];
+        for (let i = 0; i < this.alloc.size; i++) {
+            const slot = this.alloc.activeSlots[i]!;
             const record = this.records[slot];
             if (!record || record.category === 'music') continue;
             const d = this.hasListener ? this.distance(record) : 0;
@@ -486,24 +475,26 @@ export class AudioManager<C extends AudioClipSource = AudioClipSource> {
         const record = this.records[slot];
         if (!record) return;
         this.output.stopSource(record.outputId);
-        const id = this.pack(slot, record.gen);
+        const id = record.id;
         this.records[slot] = null;
-        this.slotMap.remove(slot);
+        this.alloc.free(id);
         const payload = { id, clipId: record.clip.id };
         if (reason === 'ended') this.events.emit('source-ended', payload);
         else if (reason === 'stopped') this.events.emit('source-stopped', payload);
         else this.events.emit('source-evicted', payload);
     }
 
-    private onSourceEnded(slot: number, gen: number): void {
+    private onSourceEnded(id: number): void {
+        if (!this.alloc.isLive(id)) return;
+        const slot = this.alloc.slotOf(id);
         const record = this.records[slot];
-        if (!record || record.gen !== gen) return;
+        if (!record) return;
         if (record.autoFree) {
             this.freeSlot(slot, 'ended');
             return;
         }
         record.playing = false;
-        this.events.emit('source-ended', { id: this.pack(slot, gen), clipId: record.clip.id });
+        this.events.emit('source-ended', { id, clipId: record.clip.id });
     }
 }
 
@@ -512,13 +503,11 @@ class Handle implements SourceHandle {
     constructor(
         private readonly manager: AudioManager,
         private readonly slot: number,
-        private readonly gen: number,
         readonly id: number,
     ) {}
 
     private get record(): SourceRecord | null {
-        const r = this.manager.record(this.slot);
-        return r && r.gen === this.gen ? r : null;
+        return this.manager.slotOf(this.id) !== -1 ? this.manager.record(this.slot) : null;
     }
 
     get clipId(): string { return this.record?.clip.id ?? ''; }
