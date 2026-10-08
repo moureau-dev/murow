@@ -27,6 +27,10 @@ export interface ModelEntry {
     halfX: number;
     halfY: number;
     halfZ: number;
+    /** Model-local AABB center (bbox center, not necessarily the origin). */
+    centerX: number;
+    centerY: number;
+    centerZ: number;
     hasTexture: boolean;
     textureBindGroup: GPUBindGroup | null;
     skinned: boolean;
@@ -164,6 +168,9 @@ export class ModelLibrary {
         const halfX = vertexCount ? (maxX - minX) * 0.5 : 0;
         const halfY = vertexCount ? (maxY - minY) * 0.5 : 0;
         const halfZ = vertexCount ? (maxZ - minZ) * 0.5 : 0;
+        const centerX = vertexCount ? (minX + maxX) * 0.5 : 0;
+        const centerY = vertexCount ? (minY + maxY) * 0.5 : 0;
+        const centerZ = vertexCount ? (minZ + maxZ) * 0.5 : 0;
 
         // Interleave position(3f) + normal(3f) + uv(2f) = 8 floats per vertex
         const interleaved = new Float32Array(vertexCount * 8);
@@ -231,6 +238,7 @@ export class ModelLibrary {
             indexFormat: indices instanceof Uint32Array ? 'uint32' as const : 'uint16' as const,
             boundingRadius,
             halfX, halfY, halfZ,
+            centerX, centerY, centerZ,
             hasTexture,
             textureBindGroup,
             skinned: false,
@@ -262,6 +270,9 @@ export class ModelLibrary {
         const halfX = vertexCount ? (maxX - minX) * 0.5 : 0;
         const halfY = vertexCount ? (maxY - minY) * 0.5 : 0;
         const halfZ = vertexCount ? (maxZ - minZ) * 0.5 : 0;
+        const centerX = vertexCount ? (minX + maxX) * 0.5 : 0;
+        const centerY = vertexCount ? (minY + maxY) * 0.5 : 0;
+        const centerZ = vertexCount ? (minZ + maxZ) * 0.5 : 0;
 
         // Interleave: pos(3f) + normal(3f) + uv(2f) + joints(4xu16) + weights(4f) = 56 bytes
         const buf = new ArrayBuffer(vertexCount * 56);
@@ -342,6 +353,7 @@ export class ModelLibrary {
             indexFormat: indices instanceof Uint32Array ? 'uint32' as const : 'uint16' as const,
             boundingRadius,
             halfX, halfY, halfZ,
+            centerX, centerY, centerZ,
             hasTexture,
             textureBindGroup,
             skinned: true,

@@ -251,6 +251,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             cx: number, cy: number, cz: number,
             sx: number, sy: number, sz: number,
             halfX: number, halfY: number, halfZ: number,
+            centerX: number, centerY: number, centerZ: number,
         ) => void,
     ): void {
         const models = this.deps.models;
@@ -269,7 +270,8 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
                 visit(handle,
                     dyn[dynBase + DYN_CURR_PX], dyn[dynBase + DYN_CURR_PY], dyn[dynBase + DYN_CURR_PZ],
                     stat[statBase + STAT_SX], stat[statBase + STAT_SY], stat[statBase + STAT_SZ],
-                    model.halfX, model.halfY, model.halfZ);
+                    model.halfX, model.halfY, model.halfZ,
+                    model.centerX, model.centerY, model.centerZ);
             }
         });
 
@@ -290,7 +292,8 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
                 visit(handle,
                     sDyn[dynBase + DYN_CURR_PX], sDyn[dynBase + DYN_CURR_PY], sDyn[dynBase + DYN_CURR_PZ],
                     sStat[statBase + SSTAT_SX], sStat[statBase + SSTAT_SY], sStat[statBase + SSTAT_SZ],
-                    model.halfX, model.halfY, model.halfZ);
+                    model.halfX, model.halfY, model.halfZ,
+                    model.centerX, model.centerY, model.centerZ);
             }
         });
     }

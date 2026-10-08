@@ -27,6 +27,7 @@ export interface RaycastTarget {
         cx: number, cy: number, cz: number,
         sx: number, sy: number, sz: number,
         halfX: number, halfY: number, halfZ: number,
+        centerX: number, centerY: number, centerZ: number,
     ) => void): void;
     /** The instance's declared hitbox, or `null` to use its bounding box. */
     resolveHitbox(handle: MeshInstanceHandle): Hitbox<'3d'> | null;
@@ -47,8 +48,8 @@ export class RaycastController {
         const minDistance = camera.near;
         const maxDistance = camera.far;
 
-        this.target.eachInstance((handle, cx, cy, cz, sx, sy, sz, halfX, halfY, halfZ) => {
-            const hit = this.test(ray, handle, cx, cy, cz, sx, sy, sz, halfX, halfY, halfZ);
+        this.target.eachInstance((handle, cx, cy, cz, sx, sy, sz, halfX, halfY, halfZ, centerX, centerY, centerZ) => {
+            const hit = this.test(ray, handle, cx, cy, cz, sx, sy, sz, halfX, halfY, halfZ, centerX, centerY, centerZ);
             if (hit === null) return;
             const t = hit.distance;
             if (t < minDistance || t > maxDistance) return;
@@ -66,6 +67,7 @@ export class RaycastController {
         cx: number, cy: number, cz: number,
         sx: number, sy: number, sz: number,
         halfX: number, halfY: number, halfZ: number,
+        centerX: number, centerY: number, centerZ: number,
     ): { distance: number; part: string | null } | null {
         const hitbox = this.target.resolveHitbox(handle);
         if (hitbox) {
@@ -73,7 +75,12 @@ export class RaycastController {
             return hit ? { distance: hit.distance, part: hit.part } : null;
         }
 
-        const t = ray.entryBox(cx, cy, cz, halfX * sx, halfY * sy, halfZ * sz);
+        // Default bounds: the model's AABB, whose center is the bbox center
+        // (scaled), not the instance origin (e.g. a character's feet).
+        const t = ray.entryBox(
+            cx + centerX * sx, cy + centerY * sy, cz + centerZ * sz,
+            halfX * sx, halfY * sy, halfZ * sz,
+        );
         return t === null ? null : { distance: t, part: null };
     }
 }
