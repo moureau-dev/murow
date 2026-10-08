@@ -4,7 +4,7 @@ import { tgpu, d, std } from '../../../../shaders/typegpu';
 import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
 import { lightContribution, tonemap } from '../../../../shaders/utils';
 import { SlotMap } from 'murow/core/slot-map';
-import type { MaterialId } from '../../collection/ids';
+import type { MaterialId } from '../../ids';
 import type { MeshPipelines } from '../../internals/mesh-pipelines/mesh-pipelines';
 import type { TextureRegistry } from '../../internals/texture-registry';
 import type { ShadowSystem } from '../shadows';

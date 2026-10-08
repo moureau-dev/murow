@@ -1,5 +1,5 @@
-import { EventSystem } from 'murow/core/events';
-import { Logger } from 'murow/core/logger';
+import { EventSystem } from '../../../core/events';
+import { Logger } from '../../../core/logger';
 import { GenerationAllocator } from '../generation-allocator';
 import type { HandleBase } from '../handle-base';
 import type { Collection, CollectionEventTuple, CollectionEvents } from '../collection';

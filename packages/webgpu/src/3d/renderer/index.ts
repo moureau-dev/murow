@@ -4,7 +4,7 @@ export type { Handles } from './handles';
 export * from './managers/materials';
 export * from './managers';
 export * from './handles';
-export * from './collection';
+export * from './ids';
 export { RendererCore } from './core';
 export { DEFAULT_CAPACITIES } from './defaults';
 export { ShadowSystem } from './managers/shadows';

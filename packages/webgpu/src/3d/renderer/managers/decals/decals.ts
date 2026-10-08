@@ -1,5 +1,5 @@
-import { PooledCollection } from '../../collection/pooled-collection';
-import type { DecalId, LayerId } from '../../collection/ids';
+import { PooledCollection } from 'murow/renderer/collection';
+import type { DecalId, LayerId } from '../../ids';
 import type { Logger } from 'murow/core';
 import type { MaterialHandle } from '../materials/material-library';
 import type { MaterialSpec } from '../materials/specs';

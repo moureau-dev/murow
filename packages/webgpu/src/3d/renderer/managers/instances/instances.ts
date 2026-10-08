@@ -1,6 +1,6 @@
-import { PooledCollection } from '../../collection/pooled-collection';
+import { PooledCollection } from 'murow/renderer/collection';
 import type { Interpolator } from '../../types';
-import type { InstanceId } from '../../collection/ids';
+import type { InstanceId } from '../../ids';
 import type { Logger } from 'murow/core';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { Hitbox } from 'murow/core/hitbox';

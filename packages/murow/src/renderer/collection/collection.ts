@@ -1,4 +1,4 @@
-import type { EventSystem } from 'murow/core/events';
+import type { EventSystem } from '../../core/events';
 import type { HandleBase } from './handle-base';
 
 /** Lifecycle events every collection emits. The payload is the affected handle. */

@@ -1,5 +1,5 @@
-import { PooledCollection } from '../../collection/pooled-collection';
-import type { EmitterId } from '../../collection/ids';
+import { PooledCollection } from 'murow/renderer/collection';
+import type { EmitterId } from '../../ids';
 import type { Logger } from 'murow/core';
 import type { Frustum } from '../../internals/frustum';
 import {

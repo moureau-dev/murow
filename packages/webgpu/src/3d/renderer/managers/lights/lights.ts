@@ -1,6 +1,6 @@
-import { PooledCollection } from '../../collection/pooled-collection';
+import { PooledCollection } from 'murow/renderer/collection';
 import type { Interpolator } from '../../types';
-import type { LightId } from '../../collection/ids';
+import type { LightId } from '../../ids';
 import type { Logger } from 'murow/core';
 import type { Handles } from '../../handles';
 import type { LightSpec } from './light-system';

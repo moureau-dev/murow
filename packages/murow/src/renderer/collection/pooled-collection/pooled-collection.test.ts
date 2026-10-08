@@ -1,6 +1,6 @@
 import { test, expect, describe } from 'bun:test';
-import { Logger } from 'murow/core/logger';
-import type { SlotId } from 'murow/core/slot-map';
+import { Logger } from '../../../core/logger';
+import type { SlotId } from '../../../core/slot-map';
 import type { HandleBase } from '../handle-base';
 import { PooledCollection } from './pooled-collection';
 

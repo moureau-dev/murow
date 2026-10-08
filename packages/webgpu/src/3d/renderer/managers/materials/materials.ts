@@ -1,6 +1,6 @@
 import type { AnyWgslData } from 'typegpu/data';
-import { PooledCollection } from '../../collection/pooled-collection';
-import type { MaterialId } from '../../collection/ids';
+import { PooledCollection } from 'murow/renderer/collection';
+import type { MaterialId } from '../../ids';
 import type { Logger } from 'murow/core';
 import type { MaterialLibrary, MaterialHandle } from './material-library';
 import type { MaterialSpec } from './specs';

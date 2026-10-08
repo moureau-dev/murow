@@ -6,8 +6,8 @@
  * types are re-exported at the top level of the package for convenience.
  */
 import type { PlayOptions, TexturePrefab } from 'murow/renderer';
-import type { HandleBase } from '../collection/handle-base';
-import type { DecalId, EmitterId, InstanceId, LayerId, LightId } from '../collection/ids';
+import type { HandleBase } from 'murow/renderer/collection';
+import type { DecalId, EmitterId, InstanceId, LayerId, LightId } from '../ids';
 
 export declare namespace Handles {
     /** A GPU mesh resource. */
