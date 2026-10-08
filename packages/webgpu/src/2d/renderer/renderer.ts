@@ -21,6 +21,7 @@ import type {
 } from 'murow/renderer';
 import { Logger } from 'murow/core';
 import { DynamicSprite, StaticSprite, SpriteUniforms } from '../../core/types';
+import { CameraEffectStack } from '../../camera-effects';
 import { Renderer2DCore } from './core';
 import {
     CameraManager2D,
@@ -58,6 +59,11 @@ export interface WebGPU2DRendererOptions<A extends AssetBucket<'2d', any, any> =
      * `[murow]` prefix; pass a `Logger` to route them yourself.
      */
     debug?: boolean | Logger;
+    /**
+     * Capacity of the camera-effect chain. Bounds the number of live effects
+     * and the renderer's compiled-effect resources. Default 20.
+     */
+    maxEffects?: number;
 }
 
 export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucket<'2d', any, any>> extends BaseRenderer<Renderer2DOptions> {
@@ -67,6 +73,11 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     private readonly core: Renderer2DCore;
     private readonly logger: Logger;
     private readonly _prefabs: PrefabBucket2D | null;
+    private readonly maxEffects: number;
+    private cameraEffects!: CameraEffectStack;
+    private lastRenderTime = 0;
+    /** Accumulated render time (seconds), exposed to effects as `scene.time`. */
+    private elapsed = 0;
 
     /** Pooled sprite facade. */
     sprites!: SpriteManager;
@@ -86,9 +97,10 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         const resolvedMaxSprites = options.maxSprites ?? options.maxInstances ?? 1024;
         super(canvas, { ...options, maxSprites: resolvedMaxSprites });
         this.maxSprites = resolvedMaxSprites;
+        this.maxEffects = options.maxEffects ?? 20;
         this.core = new Renderer2DCore();
         this.logger = Logger.resolve(options.debug);
-        this.core.camera = new CameraManager2D(canvas.width || 800, canvas.height || 600);
+        this.core.camera = new CameraManager2D(canvas.width || 800, canvas.height || 600, { maxEffects: this.maxEffects });
         this.core.width = canvas.width || 1;
         this.core.height = canvas.height || 1;
         this._prefabs = (options.assets?.prefabs as unknown as PrefabBucket2D | undefined) ?? null;
@@ -198,6 +210,11 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         });
         this.geometry = new GeometryManager(this.core, this.canvas, () => this._clearColor);
         this.compute = new ComputeManager(this.core.root);
+        this.cameraEffects = new CameraEffectStack({
+            root: this.core.root,
+            format: this.core.format,
+            maxEffects: this.maxEffects,
+        });
 
         if (this._prefabs) {
             this.uploadPrefabBucket(this._prefabs);
@@ -294,6 +311,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     render(alpha: number): void {
         if (!this._initialized) return;
 
+        this.advanceTime();
         this.camera.interpolate(alpha);
 
         // Pack the frame's batches and upload the sprite buffers.
@@ -312,12 +330,20 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
             uniformData.buffer, uniformData.byteOffset, 64,
         );
 
+        // Camera effects render the sprite pass off-screen, then present the
+        // result to the swapchain through the effect chain. With none enabled,
+        // the sprite pass targets the swapchain directly (unchanged path).
+        const swapchainView = this.core.context.getCurrentTexture().createView();
+        const enabledEffects = this.camera.effects.enableCount();
+        const targetView = enabledEffects > 0
+            ? this.cameraEffects.sceneTarget(this._width, this._height)
+            : swapchainView;
+
         // Render pass
-        const textureView = this.core.context.getCurrentTexture().createView();
         const encoder = this.core.device.createCommandEncoder();
         const pass = encoder.beginRenderPass({
             colorAttachments: [{
-                view: textureView,
+                view: targetView,
                 loadOp: 'clear',
                 storeOp: 'store',
                 clearValue: {
@@ -346,13 +372,35 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         }
 
         pass.end();
+
+        if (enabledEffects > 0) {
+            this.cameraEffects.apply(
+                encoder,
+                swapchainView,
+                this.camera.effects,
+                this.elapsed,
+                this._width,
+                this._height,
+            );
+        }
+
         this.core.device.queue.submit([encoder.finish()]);
+    }
+
+    /** Advance the render clock; the frame delta is clamped to avoid a large jump on resume. */
+    private advanceTime(): void {
+        const now = performance.now();
+        if (this.lastRenderTime > 0) {
+            this.elapsed += Math.min((now - this.lastRenderTime) / 1000, 0.1);
+        }
+        this.lastRenderTime = now;
     }
 
     destroy(): void {
         this.resizeObserver?.disconnect();
         this.resizeObserver = null;
         this.resizeCallbacks.length = 0;
+        this.cameraEffects?.destroy();
         this.core?.dynamicBuffer?.destroy();
         this.core?.staticBuffer?.destroy();
         this.core?.uniformBuffer?.destroy();

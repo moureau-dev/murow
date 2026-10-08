@@ -5,12 +5,20 @@
  */
 import { lerp } from "murow/core/lerp";
 import type { Camera2DState } from 'murow/renderer';
+import { CameraEffectList } from './camera-effect';
+
+export interface Camera2DOptions {
+    /** Capacity of the camera-effect chain. Default 20. */
+    maxEffects?: number;
+}
 
 export class Camera2D implements Camera2DState {
     x: number = 0;
     y: number = 0;
     zoom: number = 1;
     rotation: number = 0;
+    /** Ordered fullscreen camera effects. Non-empty enables the off-screen path. */
+    readonly effects: CameraEffectList;
 
     private _prevX = 0;
     private _prevY = 0;
@@ -28,9 +36,10 @@ export class Camera2D implements Camera2DState {
     /** Column-major 3x3 matrix stored as 12 floats (std140 padded) */
     private _matrix = new Float32Array(12);
 
-    constructor(width: number, height: number) {
+    constructor(width: number, height: number, options: Camera2DOptions = {}) {
         this._width = width;
         this._height = height;
+        this.effects = new CameraEffectList(options.maxEffects ?? 20);
     }
 
     get width(): number { return this._width; }

@@ -1,8 +1,8 @@
 import type { TgpuRoot, TgpuBuffer } from 'typegpu';
 import type { AnyWgslData } from 'typegpu/data';
-import { tgpu, d, std } from '../../../../shaders/typegpu';
-import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
-import type { CameraEffect, CameraEffectList } from '../../../../camera/camera-effect';
+import { tgpu, d, std } from '../shaders/typegpu';
+import { attachShaderMetadata } from '../shaders/runtime-transpile';
+import type { CameraEffect, CameraEffectList } from '../camera/camera-effect';
 import { CAMERA_EFFECT_WGSL, EFFECT_SCENE_UNIFORMS } from './camera-effect-shaders';
 
 /** Uniform slot stride, aligned to the WebGPU min uniform offset alignment. */

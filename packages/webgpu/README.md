@@ -255,7 +255,7 @@ from `'murow'`.
 - [`DecalLayer`](./src/3d/renderer/managers/decals/decal-layer.ts) — `renderer.decals.createLayer({ atlas, quad, capacity })`; `add(x,y,z,nx,ny,nz,{cell,size})` returns a `DecalHandle` for a pooled, atlas-sampled, time-faded mark (backed by core `RingStore`)
 
 ### Camera effects
-- [`CameraEffectStack`](./src/3d/renderer/managers/camera/camera-effects.ts) — off-screen targets + ping-pong fullscreen passes
+- [`CameraEffectStack`](./src/camera-effects/camera-effects.ts) — off-screen targets + ping-pong fullscreen passes (shared by the 2D and 3D renderers)
 - `CameraEffect` / `CameraEffectList` / `CameraEffectSpec` — the `renderer.camera.effects` API (`add`/`set`/`remove`), built-in + custom shader effects
 
 ### Camera

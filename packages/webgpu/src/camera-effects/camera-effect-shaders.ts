@@ -1,4 +1,4 @@
-import { d } from '../../../../shaders/typegpu';
+import { d } from '../shaders/typegpu';
 
 /** Shared uniforms for custom camera effects: time + drawable resolution. */
 export const EFFECT_SCENE_UNIFORMS = d.struct({

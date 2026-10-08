@@ -35,10 +35,10 @@ import {
     ParticleManager,
     ParticleSystem3D,
     CameraManager,
-    CameraEffectStack,
     ModelsManager,
     ComputeManager,
 } from './managers';
+import { CameraEffectStack } from '../../camera-effects';
 import {
     TextureRegistry,
     ResizeController,
