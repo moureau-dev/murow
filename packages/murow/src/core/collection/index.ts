@@ -1,4 +1,3 @@
-export * from './collection';
-export * from './handle-base';
+export * from './types';
 export * from './generation-allocator';
 export * from './pooled-collection';

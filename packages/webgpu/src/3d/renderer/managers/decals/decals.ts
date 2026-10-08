@@ -1,4 +1,4 @@
-import { PooledCollection } from 'murow/renderer/collection';
+import { PooledCollection } from 'murow/core/collection';
 import type { DecalId, LayerId } from '../../ids';
 import type { Logger } from 'murow/core';
 import type { MaterialHandle } from '../materials/material-library';
@@ -39,12 +39,12 @@ export class DecalManager extends PooledCollection<LayerId, ManagedDecalLayer, n
      */
     createLayer(spec: DecalLayerOptions): ManagedDecalLayer | null {
         this.pendingOptions = spec;
-        const allocated = this.allocateHandle();
+        const allocated = this.allocateItem();
         this.pendingOptions = null;
-        return allocated ? allocated.handle : null;
+        return allocated ? allocated.item : null;
     }
 
-    protected createHandle(id: LayerId, slot: number): ManagedDecalLayer {
+    protected createItem(id: LayerId, slot: number): ManagedDecalLayer {
         const layer = new DecalLayer({
             createMaterial: (spec) => this.deps.createMaterial(spec),
             addDecalInstance: (prefab, material) => this.deps.addDecalInstance(prefab, material),
@@ -54,11 +54,11 @@ export class DecalManager extends PooledCollection<LayerId, ManagedDecalLayer, n
         return new ManagedDecalLayerImpl(id, layer, () => this.remove(id));
     }
 
-    protected releaseHandle(id: LayerId): void {
+    protected releaseItem(id: LayerId): void {
         if (!this.allocator.isLive(id)) return;
         const slot = this.allocator.slotOf(id);
         this.inner[slot] = null;
-        super.releaseHandle(id);
+        super.releaseItem(id);
     }
 }
 

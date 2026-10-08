@@ -1,4 +1,4 @@
-import { PooledCollection } from 'murow/renderer/collection';
+import { PooledCollection } from 'murow/core/collection';
 import type { EmitterId } from '../../ids';
 import type { Logger } from 'murow/core';
 import type { Frustum } from '../../internals/frustum';
@@ -42,9 +42,9 @@ export class ParticleManager extends PooledCollection<EmitterId, ParticleEmitter
      */
     addEmitter(spec: ParticleEmitter3DOptions = {}): ParticleEmitter | null {
         this.pendingSpec = spec;
-        const allocated = this.allocateHandle();
+        const allocated = this.allocateItem();
         this.pendingSpec = null;
-        return allocated ? allocated.handle : null;
+        return allocated ? allocated.item : null;
     }
 
     /** Global spawn-rate multiplier for quality scaling. */
@@ -79,7 +79,7 @@ export class ParticleManager extends PooledCollection<EmitterId, ParticleEmitter
         this.rawEmitters[slot] = null;
     }
 
-    protected createHandle(id: EmitterId, slot: number): ParticleEmitter {
+    protected createItem(id: EmitterId, slot: number): ParticleEmitter {
         const raw = this.system.addEmitter(this.pendingSpec ?? {});
         this.rawEmitters[slot] = raw;
         const emitter = raw as unknown as ParticleEmitter;

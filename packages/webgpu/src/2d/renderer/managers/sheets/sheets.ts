@@ -1,4 +1,4 @@
-import { GenerationAllocator } from 'murow/renderer/collection';
+import { GenerationAllocator } from 'murow/core/collection';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type {
     ParsedSpritesheet,

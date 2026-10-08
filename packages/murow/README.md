@@ -34,6 +34,7 @@ import { WebGPU2DRenderer } from 'murow/webgpu';
 - [`Bucket`](./src/core/bucket) — Generic typed registry for loadable resources (renderer assets, audio clips)
 - [`FreeList`](./src/core/free-list) — Slot allocator for reusable handles
 - [`Ring` / `RingStore` / `RingBuffer`](./src/core/ring) — Fixed-capacity oldest-eviction rings for bounded histories and pools
+- [`Collection` framework](./src/core/collection) — pooled versioned items (`Collection`, `CollectionItem`, `PooledCollection`, `GenerationAllocator`) that every renderer manager builds on
 - [`SparseBatcher`](./src/core/sparse-batcher) — Layer/sheet bucketing for batched rendering
 - [`SimpleRNG`](./src/core/simple-rng) — Seedable deterministic random number generator
 - [`Ray2D` / `Ray3D`](./src/core/ray) — Zero-allocation ray intersection tests (segment, circle/sphere, AABB, plane, triangle)

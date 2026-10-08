@@ -23,3 +23,4 @@ export * from './ray';
 export * from './raycast';
 export * from './hitbox';
 export * from '../renderer';
+export * from './collection';

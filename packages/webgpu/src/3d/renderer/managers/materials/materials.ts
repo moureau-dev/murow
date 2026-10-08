@@ -1,5 +1,5 @@
 import type { AnyWgslData } from 'typegpu/data';
-import { PooledCollection } from 'murow/renderer/collection';
+import { PooledCollection } from 'murow/core/collection';
 import type { MaterialId } from '../../ids';
 import type { Logger } from 'murow/core';
 import type { MaterialLibrary, MaterialHandle } from './material-library';
@@ -39,9 +39,9 @@ export class MaterialManager extends PooledCollection<MaterialId, MaterialHandle
      */
     create<U extends Record<string, AnyWgslData> = {}>(spec: MaterialSpec & { uniforms?: U }): MaterialHandle<U> | null {
         this.pendingSpec = spec;
-        const allocated = this.allocateHandle();
+        const allocated = this.allocateItem();
         this.pendingSpec = null;
-        return (allocated ? allocated.handle : null) as unknown as MaterialHandle<U> | null;
+        return (allocated ? allocated.item : null) as unknown as MaterialHandle<U> | null;
     }
 
     protected destroySlot(slot: number): void {
@@ -49,7 +49,7 @@ export class MaterialManager extends PooledCollection<MaterialId, MaterialHandle
         this.origDestroy[slot] = null;
     }
 
-    protected createHandle(id: MaterialId, slot: number): MaterialHandle<any> {
+    protected createItem(id: MaterialId, slot: number): MaterialHandle<any> {
         const raw = this.library.createMaterial(this.pendingSpec!, id);
         const orig = raw.destroy.bind(raw);
         this.origDestroy[slot] = orig;

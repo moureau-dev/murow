@@ -1,8 +1,7 @@
-import { EventSystem } from '../../../core/events';
-import { Logger } from '../../../core/logger';
+import { EventSystem } from '../../events';
+import { Logger } from '../../logger';
 import { GenerationAllocator } from '../generation-allocator';
-import type { HandleBase } from '../handle-base';
-import type { Collection, CollectionEventTuple, CollectionEvents } from '../collection';
+import type { Collection, CollectionItem, CollectionEventTuple, CollectionEvents } from '../types';
 
 /** Options shared by every pooled collection. */
 export interface PooledCollectionOptions<Capacity> {
@@ -15,29 +14,29 @@ export interface PooledCollectionOptions<Capacity> {
 }
 
 /**
- * Shared machinery for pooled managers: a generation-versioned slot space, one
- * handle per slot, lifecycle events, and the shared read contract.
+ * Shared machinery for pooled collections: a generation-versioned slot space,
+ * one item per slot, lifecycle events, and the shared read contract.
  *
  * Subclasses own their domain storage in parallel arrays indexed by slot, name
- * their own creation method, and implement `createHandle`.
+ * their own creation method, and implement `createItem`.
  */
 export abstract class PooledCollection<
     Id extends number,
-    Handle extends HandleBase<Id>,
+    Item extends CollectionItem<Id>,
     Capacity = number,
-> implements Collection<Id, Handle, Capacity> {
+> implements Collection<Id, Item, Capacity> {
     protected readonly allocator: GenerationAllocator;
     protected readonly logger: Logger;
-    readonly events: CollectionEvents<Handle>;
-    private readonly handles: (Handle | null)[];
+    readonly events: CollectionEvents<Item>;
+    private readonly items: (Item | null)[];
     private readonly capacityValue: Capacity;
 
     protected constructor(options: PooledCollectionOptions<Capacity>) {
         this.allocator = new GenerationAllocator(options.poolSize);
         this.logger = options.logger;
         this.capacityValue = options.capacity;
-        this.handles = new Array<Handle | null>(options.poolSize).fill(null);
-        this.events = new EventSystem<CollectionEventTuple<Handle>>({
+        this.items = new Array<Item | null>(options.poolSize).fill(null);
+        this.events = new EventSystem<CollectionEventTuple<Item>>({
             events: ['add', 'remove', 'clear'],
         });
     }
@@ -50,9 +49,9 @@ export abstract class PooledCollection<
         return this.allocator.size;
     }
 
-    get(id: Id): Handle | undefined {
+    get(id: Id): Item | undefined {
         if (!this.allocator.isLive(id)) return undefined;
-        return this.handles[this.allocator.slotOf(id)] ?? undefined;
+        return this.items[this.allocator.slotOf(id)] ?? undefined;
     }
 
     has(id: Id): boolean {
@@ -60,23 +59,23 @@ export abstract class PooledCollection<
     }
 
     remove(id: Id): void {
-        this.releaseHandle(id);
+        this.releaseItem(id);
     }
 
-    each(cb: (handle: Handle) => void): void {
+    each(cb: (item: Item) => void): void {
         const active = this.allocator.activeSlots;
         const size = this.allocator.size;
-        for (let i = 0; i < size; i++) cb(this.handles[active[i]!]!);
+        for (let i = 0; i < size; i++) cb(this.items[active[i]!]!);
     }
 
     clear(): void {
         const active = this.allocator.activeSlots;
         for (let i = this.allocator.size - 1; i >= 0; i--) {
             const slot = active[i]!;
-            const handle = this.handles[slot];
+            const item = this.items[slot];
             this.destroySlot(slot);
-            this.handles[slot] = null;
-            if (handle) this.events.emit('remove', handle);
+            this.items[slot] = null;
+            if (item) this.events.emit('remove', item);
         }
         this.allocator.clear();
         this.events.emit('clear', undefined);
@@ -91,10 +90,10 @@ export abstract class PooledCollection<
     }
 
     /**
-     * Allocate a slot, create and store its handle, and emit `add`.
-     * @returns the new id, slot and handle, or `null` (after logging) when full.
+     * Allocate a slot, create and store its item, and emit `add`.
+     * @returns the new id, slot and item, or `null` (after logging) when full.
      */
-    protected allocateHandle(): { id: Id; slot: number; handle: Handle } | null {
+    protected allocateItem(): { id: Id; slot: number; item: Item } | null {
         const packed = this.allocator.allocate();
         if (packed === -1) {
             this.logger.error(`collection at capacity (${this.allocator.capacity}); add aborted`);
@@ -102,25 +101,25 @@ export abstract class PooledCollection<
         }
         const slot = this.allocator.slotOf(packed);
         const id = packed as Id;
-        const handle = this.createHandle(id, slot);
-        this.handles[slot] = handle;
-        this.events.emit('add', handle);
-        return { id, slot, handle };
+        const item = this.createItem(id, slot);
+        this.items[slot] = item;
+        this.events.emit('add', item);
+        return { id, slot, item };
     }
 
-    /** Release one handle and its slot, emitting `remove`. No-op if stale. */
-    protected releaseHandle(id: Id): void {
+    /** Release one item and its slot, emitting `remove`. No-op if stale. */
+    protected releaseItem(id: Id): void {
         if (!this.allocator.isLive(id)) return;
         const slot = this.allocator.slotOf(id);
-        const handle = this.handles[slot];
-        this.handles[slot] = null;
+        const item = this.items[slot];
+        this.items[slot] = null;
         this.destroySlot(slot);
         this.allocator.free(id);
-        if (handle) this.events.emit('remove', handle);
+        if (item) this.events.emit('remove', item);
     }
 
-    /** Create the handle for a freshly allocated slot. */
-    protected abstract createHandle(id: Id, slot: number): Handle;
+    /** Create the item for a freshly allocated slot. */
+    protected abstract createItem(id: Id, slot: number): Item;
 
     /**
      * Release the domain resources for one slot. Called on remove and clear.

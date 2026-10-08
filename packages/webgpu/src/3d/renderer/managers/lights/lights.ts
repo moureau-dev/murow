@@ -1,4 +1,4 @@
-import { PooledCollection } from 'murow/renderer/collection';
+import { PooledCollection } from 'murow/core/collection';
 import type { Interpolator } from '../../types';
 import type { LightId } from '../../ids';
 import type { Logger } from 'murow/core';
@@ -37,9 +37,9 @@ export class LightManager extends PooledCollection<LightId, LightHandle, number>
      */
     add(spec: LightSpec): LightHandle | null {
         this.pendingSpec = spec;
-        const allocated = this.allocateHandle();
+        const allocated = this.allocateItem();
         this.pendingSpec = null;
-        return allocated ? allocated.handle : null;
+        return allocated ? allocated.item : null;
     }
 
     /** Set the global ambient term. Defaults to `(0.3, 0.3, 0.3)`. */
@@ -110,7 +110,7 @@ export class LightManager extends PooledCollection<LightId, LightHandle, number>
         this.origDestroy[slot] = null;
     }
 
-    protected createHandle(id: LightId, slot: number): LightHandle {
+    protected createItem(id: LightId, slot: number): LightHandle {
         const raw = this.system.add(this.pendingSpec!, id);
         const orig = raw.destroy.bind(raw);
         this.origDestroy[slot] = orig;

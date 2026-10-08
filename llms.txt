@@ -3073,6 +3073,21 @@ renderer.onResize((w, h) => { /* ... */ });
 
 `renderer.sprites` is a collection manager: `get(id)`, `has(id)`, `each(cb)`, `remove(id)`, `clear()`, `capacity`, `count`, and an `events` system. Sprites carry a versioned `id` and an `alive` flag; `sprite.destroy()` is idempotent and frees the slot. `renderer.sheets`, `renderer.geometry`, and `renderer.compute` are the other 2D managers.
 
+### Collection framework — `murow/core/collection`
+
+The shared pooling machinery behind every manager, in both the 2D and 3D renderers. Pure CPU, no GPU, no backend types.
+
+```ts
+import { Collection, CollectionItem, PooledCollection, GenerationAllocator } from 'murow/core/collection';
+```
+
+- `CollectionItem<Id>` — the whole requirement for a stored item: `id` + `destroy()`. Backends add to this (`@murow/webgpu` adds `HandleBase`: `CollectionItem` + an `alive` flag).
+- `Collection<Id, Handle, Capacity>` — the read contract: `get(id)`, `has(id)`, `remove(id)`, `each(cb)`, `capacity`, `count`, `events`.
+- `PooledCollection` — abstract base implementing that contract over a `SlotMap`. Subclasses own their domain storage (parallel arrays indexed by slot), call `allocateItem()`, and implement `createItem`/`destroySlot`.
+- `GenerationAllocator` — versioned slot ids (`id = generation * capacity + slot`), so a stale id fails lookup instead of aliasing a recycled slot.
+
+Ids are branded via `SlotId<Brand>` (from `murow/core/slot-map`); a plain `number` is not assignable. The concrete managers and their branded id aliases live in the backend (`@murow/webgpu`). This is a lower-level building block; most games use `renderer.instances` / `renderer.sprites` etc. directly.
+
 ### 3D — `WebGPU3DRenderer`
 
 ```ts
@@ -3237,6 +3252,7 @@ for (const e of renderer.camera.effects.all('fxaa')) e.enabled = false;  // read
 
 - Built-ins: `vignette`, `grade` (saturation/contrast/brightness), `grayscale`, `chromatic`, `scanlines`, `posterize`, `motionBlur` (temporal accumulation), `fxaa` (anti-aliasing), `fog` (exponential depth fog; the built-in effect library can sample scene depth via bindings 4/5 and camera `near`/`far`).
 - Custom: `new CameraEffect({ type: 'shader', fragment, uniforms?, defaultUniforms? })`. The fragment gets `input.vUV`, `textures.src`/`textures.sampler`, `material.<name>`, `scene.time`/`scene.resolutionX/Y`, and `history`; retune via `effect.params`. Chain capacity = `maxCameraEffects` (default 20).
+- Both renderers support this: `renderer.camera.effects` on `WebGPU3DRenderer` and `WebGPU2DRenderer` alike. The 2D renderer enables the off-screen path the same way (`maxEffects` option, default 20); it has no scene depth, so depth-based effects (`fog`) use a 1x1 fallback depth target (effectively a no-op).
 
 ### Particles (2D)
 

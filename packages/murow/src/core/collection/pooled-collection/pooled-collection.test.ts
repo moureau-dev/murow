@@ -6,7 +6,7 @@ import { PooledCollection } from './pooled-collection';
 
 type TestId = SlotId<'test'>;
 
-class TestHandle implements HandleBase<TestId> {
+class TestHandle implements CollectionItem<TestId> {
     constructor(
         private readonly manager: TestCollection,
         readonly id: TestId,
@@ -24,10 +24,10 @@ class TestCollection extends PooledCollection<TestId, TestHandle, number> {
         super({ poolSize: capacity, capacity, logger });
     }
     add(): TestHandle | null {
-        const allocated = this.allocateHandle();
-        return allocated ? allocated.handle : null;
+        const allocated = this.allocateItem();
+        return allocated ? allocated.item : null;
     }
-    protected createHandle(id: TestId): TestHandle {
+    protected createItem(id: TestId): TestHandle {
         return new TestHandle(this, id);
     }
 }

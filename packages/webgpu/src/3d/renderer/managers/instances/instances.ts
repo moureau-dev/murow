@@ -1,4 +1,4 @@
-import { PooledCollection } from 'murow/renderer/collection';
+import { PooledCollection } from 'murow/core/collection';
 import type { Interpolator } from '../../types';
 import type { InstanceId } from '../../ids';
 import type { Logger } from 'murow/core';
@@ -334,7 +334,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         this.rawHandles[slot] = null;
     }
 
-    protected createHandle(id: InstanceId, slot: number): MeshInstanceHandle {
+    protected createItem(id: InstanceId, slot: number): MeshInstanceHandle {
         const p = this.pending!;
         const raw = p.kind === 'skinned'
             ? this.deps.skinned.spawn(p.opts, p.modelHandle, p.skinIndex, p.skinModel, p.linkedSlot, p.prefabId, id)
@@ -358,9 +358,9 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         materialId: number,
     ): MeshInstanceHandle | null {
         this.pending = { kind: 'static', opts, modelHandle, prefabId, materialId };
-        const allocated = this.allocateHandle();
+        const allocated = this.allocateItem();
         this.pending = null;
-        return allocated ? allocated.handle : null;
+        return allocated ? allocated.item : null;
     }
 
     private spawnSkinned(
@@ -376,9 +376,9 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             kind: 'skinned', opts, modelHandle, skinIndex,
             skinModel: skinModel as unknown as SkinModelLike, linkedSlot, prefabId,
         };
-        const allocated = this.allocateHandle();
+        const allocated = this.allocateItem();
         this.pending = null;
-        return allocated ? allocated.handle : null;
+        return allocated ? allocated.item : null;
     }
 
     private addGltf(opts: MeshInstanceOptions<any>, gltf: GltfModel, prefabId: string | null): MeshInstanceHandle {

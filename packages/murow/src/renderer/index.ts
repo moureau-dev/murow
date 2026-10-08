@@ -1,9 +1,6 @@
 // Core types
 export * from "./types";
 
-// Generic collection framework (pooled handles, generation allocator)
-export * from "./collection";
-
 // Base renderer contracts (abstract)
 export * from "./base/renderer";
 export * from "./base/renderer-2d";

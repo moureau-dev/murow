@@ -1,4 +1,4 @@
-import { PooledCollection } from 'murow/renderer/collection';
+import { PooledCollection } from 'murow/core/collection';
 import type { Logger } from 'murow/core';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { Hitbox } from 'murow/core/hitbox';
@@ -112,9 +112,9 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
         const hitbox = hitboxName && lib ? (lib.get(hitboxName as never) as Hitbox<'2d'>) : null;
 
         this.pending = { opts, sheet, hitbox };
-        const allocated = this.allocateHandle();
+        const allocated = this.allocateItem();
         this.pending = null;
-        return allocated ? allocated.handle : null;
+        return allocated ? allocated.item : null;
     }
 
     /**
@@ -200,7 +200,7 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
         return this.hitboxes[handle.slot] ?? null;
     }
 
-    protected createHandle(id: SpriteId, slot: number): SpriteAccessor {
+    protected createItem(id: SpriteId, slot: number): SpriteAccessor {
         const p = this.pending!;
         const opts = p.opts;
         const dynBase = slot * DYNAMIC_FLOATS_PER_SPRITE;

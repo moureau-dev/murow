@@ -1,4 +1,4 @@
-import { SlotMap } from '../../../core/slot-map';
+import { SlotMap } from '../../slot-map';
 
 /**
  * Allocates dense slots and hands out generation-versioned ids.
