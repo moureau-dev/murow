@@ -2,6 +2,7 @@ import type { TgpuRoot, TgpuVertexFn, TgpuFragmentFn } from 'typegpu';
 import { tgpu, d, std } from '../../../../shaders/typegpu';
 import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
 import { DynamicMesh, SkinnedStaticMesh, StaticMesh } from '../../../../core/types';
+import type { RendererCore } from '../../core/renderer-core';
 
 /** Light-space matrix + tunables, shared by the shadow pass and receivers. */
 export const ShadowUniforms = d.struct({
@@ -17,18 +18,12 @@ export const ShadowUniforms = d.struct({
 });
 
 export interface ShadowSystemDeps {
-    root: TgpuRoot;
-    dynamicBuffer: GPUBuffer;
-    staticBuffer: GPUBuffer;
+    core: RendererCore;
     maxInstances: number;
-    /** Skinned buffers; enables skinned casters when provided. */
+    /** Skinned sizing; enables skinned casters when provided. */
     skinned?: {
-        dynamicBuffer: GPUBuffer;
-        staticBuffer: GPUBuffer;
-        boneBuffer: GPUBuffer;
         maxInstances: number;
         maxBones: number;
-        vertexBufferLayout: GPUVertexBufferLayout;
     };
 }
 
@@ -101,8 +96,8 @@ export class ShadowSystem {
     private resolutionHook: (() => void) | null = null;
 
     constructor(deps: ShadowSystemDeps, options: ShadowOptions = {}) {
-        this.root = deps.root;
-        this.device = deps.root.device;
+        this.root = deps.core.root;
+        this.device = deps.core.root.device;
         this.maxInstances = deps.maxInstances;
         this.resolutionValue = options.resolution ?? 2048;
         this.slotIndexBuffer = this.device.createBuffer({
@@ -159,8 +154,8 @@ export class ShadowSystem {
             layout: bgl,
             entries: [
                 { binding: 0, resource: { buffer: this.uniformBuffer } },
-                { binding: 1, resource: { buffer: deps.dynamicBuffer } },
-                { binding: 2, resource: { buffer: deps.staticBuffer } },
+                { binding: 1, resource: { buffer: deps.core.pipelines.rawDynamicBuffer } },
+                { binding: 2, resource: { buffer: deps.core.pipelines.rawStaticBuffer } },
                 { binding: 3, resource: { buffer: this.slotIndexBuffer } },
             ],
         });
@@ -179,7 +174,7 @@ export class ShadowSystem {
             this.skinnedPipeline = this.device.createRenderPipeline({
                 label: 'shadow-skinned',
                 layout: this.device.createPipelineLayout({ bindGroupLayouts: [skinnedBgl] }),
-                vertex: { module: skinnedModule, buffers: [s.vertexBufferLayout] },
+                vertex: { module: skinnedModule, buffers: [deps.core.pipelines.skinnedVertexBufferLayout] },
                 fragment: { module: skinnedModule, targets: [{ format: 'rgba16float' }] },
                 primitive: { topology: 'triangle-list', cullMode: 'none' },
                 depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
@@ -188,10 +183,10 @@ export class ShadowSystem {
                 layout: skinnedBgl,
                 entries: [
                     { binding: 0, resource: { buffer: this.uniformBuffer } },
-                    { binding: 1, resource: { buffer: s.dynamicBuffer } },
-                    { binding: 2, resource: { buffer: s.staticBuffer } },
+                    { binding: 1, resource: { buffer: deps.core.pipelines.rawSkinnedDynamicBuffer } },
+                    { binding: 2, resource: { buffer: deps.core.pipelines.rawSkinnedStaticBuffer } },
                     { binding: 3, resource: { buffer: this.skinnedSlotIndexBuffer } },
-                    { binding: 4, resource: { buffer: s.boneBuffer } },
+                    { binding: 4, resource: { buffer: deps.core.pipelines.rawBoneMatrixBuffer } },
                 ],
             });
         } else {

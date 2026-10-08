@@ -1,3 +1,4 @@
+export * from './main-pass';
 export * from './mesh-pipelines';
 export * from './model-library';
 export * from './texture-registry';

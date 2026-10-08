@@ -46,7 +46,7 @@ These are the rules LLMs most often get wrong. Internalize them before writing c
 - `input.keys[code].down` = held; `.hit` = pressed during the current tick. Mouse buttons expose the same `.down` / `.hit`.
 - Assets are registered through `AssetBucket`; prefabs go through the `.prefabs()` callback — which MUST return the bucket.
 - After `await assets.load()`, consume registered prefabs via `assets.prefabs.get(id)` and pass them to `renderer.instances.add({ prefab: ... })` — the option key is `prefab`, NOT `model`.
-- Declare every reusable model as an `AssetBucket` prefab. `renderer.createCube()` / `createGrid()` / `loadModel()` / `loadGltf()` are one-off/debug conveniences — not the way to declare game models.
+- Declare every reusable model as an `AssetBucket` prefab. The `renderer.models` helpers (`create*` / `load*`) are one-off/debug conveniences — not the way to declare game models.
 - Do not invent a separate prefab loading/registration mechanism.
 - Simulation (movement, AI, input reads) belongs in `tick`; drawing belongs in `render`.
 - Use `pre-tick` + `renderer.storePreviousState()` before simulation when interpolation is desired; draw with `renderer.render(alpha)`.
@@ -330,7 +330,7 @@ Do not invent these — they will not type-check or will silently do nothing:
 
 - `renderer.setColor(...)` / `renderer.setTint(...)` — tint is set at spawn (3D `color: [r, g, b]`) or via the 2D `SpriteHandle.setTint(...)` method; there is no renderer-level setter
 - `renderer.camera.lookAt(...)` — not part of the Camera2D / Camera3D API (see the Camera sections for what exists)
-- `renderer.addMesh(...)` — models come from `AssetBucket` prefabs (preferred) or the renderer's `create*` / `load*` factories, then `instances.add`
+- `renderer.addMesh(...)` — models come from `AssetBucket` prefabs (preferred) or the `renderer.models` factories (`create*` / `load*`), then `instances.add`
 - `entity.position = ...` / `entity.setPosition(...)` — entities are plain numbers; position lives in components or on renderer instance handles
 - `scene.add(...)` / `scene.remove(...)` / `new Scene()` — there is no scene graph
 - `new Vector3()` / `new Vector2()` / `new Quaternion()` — no vector/quaternion classes (see "What does NOT ship" above)
@@ -2822,7 +2822,7 @@ You don't write any of this. The renderer handles it under the hood as long as y
 
 ### Managers and handles
 
-The renderer is a composition root: `new WebGPU3DRenderer(canvas, options)`, `init()`, `render(alpha)`, `storePreviousState()`, `destroy()`, `onResize`, `worldToScreen`, `createCompute`, and the `create*` / `load*` model factories stay on it. Each subsystem is a manager reached off it:
+The renderer is a composition root: `new WebGPU3DRenderer(canvas, options)`, `init()`, `render(alpha)`, `storePreviousState()`, `destroy()`, `onResize`, `worldToScreen`, and `createCompute` stay on it. Each subsystem, including `renderer.models` for mesh creation/loading, is a manager reached off it:
 
 | Manager | Creation | Returns |
 |---|---|---|
@@ -3139,11 +3139,11 @@ renderer.debug.hitboxes = true;           // draw hitbox wireframes (green = hov
 // One-off / debug conveniences — return a ModelHandle / GltfModel for instances.add.
 // For anything you spawn more than once, declare a prefab in AssetBucket instead
 // (parallel load, typed ids, GPU sizing — see the AssetBucket section):
-const grid  = renderer.createGrid({ size: 50, step: 1, lineWidth: 0.01 });
-const cube  = renderer.createCube({ size: 1 });
-const model = renderer.loadModel(rawModelData);          // raw geometry (ModelData), no bucket
-const gltf  = await renderer.loadGltf('https://example.com/model.glb', { animations: ['Idle'] });  // manual glTF path
-const up    = renderer.uploadParsedGltf(parsedGltf);     // GPU-upload an already-parsed glTF (CPU/GPU split)
+const grid  = renderer.models.createGrid({ size: 50, step: 1, lineWidth: 0.01 });
+const cube  = renderer.models.createCube({ size: 1 });
+const model = renderer.models.loadModel(rawModelData);          // raw geometry (ModelData), no bucket
+const gltf  = await renderer.models.loadGltf('https://example.com/model.glb', { animations: ['Idle'] });  // manual glTF path
+const up    = renderer.models.uploadParsedGltf(parsedGltf);     // GPU-upload an already-parsed glTF (CPU/GPU split)
 const k     = renderer.createCompute('name', { workgroupSize: 256 });   // compute kernel (see Compute Shaders)
 ```
 
@@ -3656,7 +3656,7 @@ inverseLerp(min: number, max: number, value: number): number;
 | Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `instances.add({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
 | Expecting a skybox or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and a material system (`standard` / `unlit` / `emissive` / custom `shader`), but no skybox or PBR. Write a custom `Base3DRenderer` backend if you need more |
 | `instances.add({ model: ... })` | The option key is `prefab`, not `model`. Use `instances.add({ prefab: assets.prefabs.get(id) })` |
-| `renderer.createCube({ size: 1 })` for the player / obstacles / ground | Declare reusable models as `AssetBucket` prefabs (`assets.prefabs.get('id')`) — the renderer `create*` / `load*` factories are one-off/debug conveniences: no parallel load, no typed ids, no bucket GPU sizing |
+| `renderer.models.createCube({ size: 1 })` for the player / obstacles / ground | Declare reusable models as `AssetBucket` prefabs (`assets.prefabs.get('id')`) — the `renderer.models` factories are one-off/debug conveniences: no parallel load, no typed ids, no bucket GPU sizing |
 | `.prefabs(({ bucket }) => { bucket.add(...); })` — block body doesn't return the bucket | `textures()` / `prefabs()` callbacks MUST return the bucket: expression body (`({ bucket }) => bucket.add(...)`) or explicit `return bucket.add(...)`. A block that only calls `.add(...)` returns `undefined` and registers nothing |
 | `instances.add({ tint: [r, g, b, a] })` (3D) | 3D uses `color: [r, g, b]` (3 components, set at spawn). `tint: [r, g, b, a]` is the 2D sprite option (`addSprite` / `SpriteHandle.setTint`) |
 | `window.addEventListener('keydown', ...)` while using `GameLoop` | `GameLoop` owns browser input — read `input.keys['KeyW']?.down` etc. from the tick payload. `InputManager` is only for loop-less setups |

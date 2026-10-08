@@ -1,4 +1,12 @@
 import { placePart3D, type HitboxPart } from 'murow/core/hitbox';
+import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../../core/types';
+import type { InstanceManager } from '../renderer/managers/instances';
+import type { RaycastState } from '../renderer/internals/raycast';
+import {
+    DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ,
+    STAT_SX, STAT_SY, STAT_SZ,
+    SSTAT_SX, SSTAT_SY, SSTAT_SZ,
+} from '../renderer/managers/instances/offsets';
 
 function buildUnitSphereWireframe(segments = 16): Float32Array {
     const out: number[] = [];
@@ -216,6 +224,66 @@ export class HitboxDebugRenderer {
             pass.setBindGroup(0, bindGroup, [e.offset]);
             pass.draw(e.vertexCount, 1, 0, 0);
         }
+    }
+
+    /**
+     * Walk every live instance (non-skinned and skinned), emit the wireframe of
+     * each declared hitbox part, and flush the draws. `state` marks hovered
+     * instances with the highlight color.
+     */
+    drawInstances(
+        pass: GPURenderPassEncoder,
+        vp: Float32Array,
+        instances: InstanceManager,
+        state: RaycastState,
+    ): void {
+        this.begin(vp);
+
+        const dyn = instances.store.dynamicData;
+        const stat = instances.store.staticData;
+        instances.store.batcher.each((_modelId, slots, count) => {
+            for (let i = 0; i < count; i++) {
+                const slot = slots[i]!;
+                const handle = instances.store.instanceHandles[slot];
+                if (handle === null) continue;
+                const hb = instances.resolveHitbox(handle);
+                if (!hb) continue;
+                const dynBase = slot * DYNAMIC_MESH_FLOATS;
+                const statBase = slot * STATIC_MESH_FLOATS;
+                const hovered = state.containsId(handle.id);
+                for (const part of hb.parts) {
+                    this.emit(
+                        part, hovered,
+                        dyn[dynBase + DYN_CURR_PX], dyn[dynBase + DYN_CURR_PY], dyn[dynBase + DYN_CURR_PZ],
+                        stat[statBase + STAT_SX], stat[statBase + STAT_SY], stat[statBase + STAT_SZ],
+                    );
+                }
+            }
+        });
+
+        const sDyn = instances.skinnedStore.dynamicData;
+        const sStat = instances.skinnedStore.staticData;
+        instances.skinnedStore.batcher.each((_modelId, slots, count) => {
+            for (let i = 0; i < count; i++) {
+                const slot = slots[i]!;
+                const handle = instances.skinnedStore.instanceHandles[slot];
+                if (handle === null) continue;
+                const hb = instances.resolveHitbox(handle);
+                if (!hb) continue;
+                const dynBase = slot * DYNAMIC_MESH_FLOATS;
+                const statBase = slot * SKINNED_STATIC_MESH_FLOATS;
+                const hovered = state.containsId(handle.id);
+                for (const part of hb.parts) {
+                    this.emit(
+                        part, hovered,
+                        sDyn[dynBase + DYN_CURR_PX], sDyn[dynBase + DYN_CURR_PY], sDyn[dynBase + DYN_CURR_PZ],
+                        sStat[statBase + SSTAT_SX], sStat[statBase + SSTAT_SY], sStat[statBase + SSTAT_SZ],
+                    );
+                }
+            }
+        });
+
+        this.flush(pass);
     }
 
     /**

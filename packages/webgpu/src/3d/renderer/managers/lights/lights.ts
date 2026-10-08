@@ -97,6 +97,19 @@ export class LightManager extends PooledCollection<LightId, LightHandle, number>
         this.system.writeUniforms(uniformData, offset, count);
     }
 
+    /**
+     * @internal Pack live lights, upload the light buffer, and write the light
+     * block of the scene uniforms. Returns the packed light count.
+     */
+    uploadLights(device: GPUDevice, lightBuffer: GPUBuffer, uniformData: Float32Array, offset: number): number {
+        const packed = this.system.pack();
+        if (packed.count > 0) {
+            device.queue.writeBuffer(lightBuffer, 0, packed.data.buffer, packed.data.byteOffset, packed.byteLength);
+        }
+        this.system.writeUniforms(uniformData, offset, packed.count);
+        return packed.count;
+    }
+
     /** @internal Spot caster poses for the spot shadow pass. */
     get spotCasters(): LightSystem['spotCasters'] {
         return this.system.spotCasters;

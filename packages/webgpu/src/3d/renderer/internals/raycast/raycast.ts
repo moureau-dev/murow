@@ -8,7 +8,7 @@ import {
 } from 'murow/renderer';
 
 import type { MeshInstanceHandle } from '../../types';
-import type { WebGPU3DRenderer } from '../../renderer';
+import type { RaycastController } from './raycast-controller';
 
 type Point = [number, number, number];
 type Hit = RaycastHit<MeshInstanceHandle, Point>;
@@ -22,11 +22,11 @@ export class WebGPURaycast3D extends Raycast<MeshInstanceHandle, Point> {
     private resultBuffer: BufferedHit<MeshInstanceHandle, Point>[] = [];
     private readonly memos: WebGPURaycastMemo3D[] = [];
 
-    constructor(private renderer: WebGPU3DRenderer) { super(); }
+    constructor(private readonly controller: RaycastController) { super(); }
 
     update(input: InputSnapshot): void {
         this.state.reset();
-        this.renderer._collectRaycastHitsInto(input.mouse.position.x, input.mouse.position.y, this.state);
+        this.controller.collect(input.mouse.position.x, input.mouse.position.y, this.state);
         for (let i = 0; i < this.memos.length; i++) this.memos[i]!._invalidate();
     }
 

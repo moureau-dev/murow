@@ -2,6 +2,7 @@ import type { TgpuRoot, TgpuVertexFn, TgpuFragmentFn } from 'typegpu';
 import { tgpu, d, std } from '../../../../shaders/typegpu';
 import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
 import { DynamicMesh, StaticMesh } from '../../../../core/types';
+import type { RendererCore } from '../../core/renderer-core';
 import type { ShadowDrawBatch, ShadowModelLike } from './shadow-system';
 import { createSkinnedLightLayout, createSkinnedLightVertex, createLightDistanceFragment } from './light-shadow-shaders';
 
@@ -28,18 +29,12 @@ const PASS_FLOATS = 20;
 const FLOATS = MAX_SPOT_SHADOWS * 16 + MAX_SPOT_SHADOWS * 4 + 4;
 
 export interface SpotShadowSystemDeps {
-    root: TgpuRoot;
-    dynamicBuffer: GPUBuffer;
-    staticBuffer: GPUBuffer;
+    core: RendererCore;
     maxInstances: number;
-    /** Skinned buffers; enables skinned casters when provided. */
+    /** Skinned sizing; enables skinned casters when provided. */
     skinned?: {
-        dynamicBuffer: GPUBuffer;
-        staticBuffer: GPUBuffer;
-        boneBuffer: GPUBuffer;
         maxInstances: number;
         maxBones: number;
-        vertexBufferLayout: GPUVertexBufferLayout;
     };
 }
 
@@ -90,8 +85,8 @@ export class SpotShadowSystem {
     enabled = true;
 
     constructor(deps: SpotShadowSystemDeps, options: SpotShadowOptions = {}) {
-        this.root = deps.root;
-        this.device = deps.root.device;
+        this.root = deps.core.root;
+        this.device = deps.core.root.device;
         this.maxInstances = deps.maxInstances;
         this.maxShadows = Math.max(1, Math.min(options.maxShadows ?? MAX_SPOT_SHADOWS, MAX_SPOT_SHADOWS));
         this.slotIndexBuffer = this.device.createBuffer({
@@ -140,8 +135,8 @@ export class SpotShadowSystem {
                 layout: bgl,
                 entries: [
                     { binding: 0, resource: { buffer: buf } },
-                    { binding: 1, resource: { buffer: deps.dynamicBuffer } },
-                    { binding: 2, resource: { buffer: deps.staticBuffer } },
+                    { binding: 1, resource: { buffer: deps.core.pipelines.rawDynamicBuffer } },
+                    { binding: 2, resource: { buffer: deps.core.pipelines.rawStaticBuffer } },
                     { binding: 3, resource: { buffer: this.slotIndexBuffer } },
                 ],
             }));
@@ -159,7 +154,7 @@ export class SpotShadowSystem {
             this.skinnedPipeline = this.device.createRenderPipeline({
                 label: 'spot-shadow-skinned',
                 layout: this.device.createPipelineLayout({ bindGroupLayouts: [skinnedBgl] }),
-                vertex: { module: skinnedModule, buffers: [s.vertexBufferLayout] },
+                vertex: { module: skinnedModule, buffers: [deps.core.pipelines.skinnedVertexBufferLayout] },
                 fragment: { module: skinnedModule, targets: [{ format: 'rgba16float' }] },
                 primitive: { topology: 'triangle-list', cullMode: 'none' },
                 depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
@@ -169,10 +164,10 @@ export class SpotShadowSystem {
                     layout: skinnedBgl,
                     entries: [
                         { binding: 0, resource: { buffer: this.passBuffers[i]! } },
-                        { binding: 1, resource: { buffer: s.dynamicBuffer } },
-                        { binding: 2, resource: { buffer: s.staticBuffer } },
+                        { binding: 1, resource: { buffer: deps.core.pipelines.rawSkinnedDynamicBuffer } },
+                        { binding: 2, resource: { buffer: deps.core.pipelines.rawSkinnedStaticBuffer } },
                         { binding: 3, resource: { buffer: this.skinnedSlotIndexBuffer } },
-                        { binding: 4, resource: { buffer: s.boneBuffer } },
+                        { binding: 4, resource: { buffer: deps.core.pipelines.rawBoneMatrixBuffer } },
                     ],
                 }));
             }

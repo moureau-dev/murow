@@ -5,6 +5,7 @@ import type { ModelLibrary } from '../internals/model-library';
 import type { TextureRegistry } from '../internals/texture-registry';
 import type { MaterialLibrary } from '../managers/materials';
 import { Frustum } from '../internals/frustum';
+import type { SceneUniforms } from './scene';
 
 /**
  * RendererCore holds the shared GPU resources and frame state that every
@@ -26,6 +27,9 @@ export class RendererCore {
 
     /** Shared uniform block written once per frame. */
     readonly uniformData = new Float32Array(MESH_UNIFORM_FLOATS);
+
+    /** Writes and uploads the shared per-frame uniforms. */
+    scene!: SceneUniforms;
 
     /** Render target size in physical pixels. */
     width = 1;

@@ -12,71 +12,50 @@ import type { AnyWgslData } from 'typegpu/data';
 import { Base3DRenderer } from 'murow/renderer';
 import { tgpu } from '../../shaders/typegpu';
 import { ComputeBuilder, type ComputeOptions } from '../../compute/compute-builder';
-import {
-    DYNAMIC_MESH_FLOATS,
-    STATIC_MESH_FLOATS,
-    SKINNED_STATIC_MESH_FLOATS,
-    MESH_UNIFORM_ALPHA_OFFSET,
-    MESH_UNIFORM_LIGHT_OFFSET,
-    MESH_UNIFORM_CAMERA_OFFSET,
-    MESH_UNIFORM_TIME_OFFSET,
-    MESH_UNIFORM_RESOLUTION_OFFSET,
-    MESH_UNIFORM_FLOATS,
-} from '../../core/types';
-import { LightSystem } from './managers/lights';
-import { SparseBatcher } from 'murow/core/sparse-batcher';
-import { MaterialLibrary } from './managers/materials';
-import { ShadowSystem } from './managers/shadows';
-import { SpotShadowSystem } from './managers/shadows/spot-shadow-system';
-import { PointShadowSystem } from './managers/shadows/point-shadow-system';
-import type { MaterialSpec } from './managers/materials/specs';
-import { CameraEffectStack } from './managers/camera/camera-effects';
+import { MESH_UNIFORM_LIGHT_OFFSET } from '../../core/types';
 import { Logger } from 'murow/core';
-import { ParticleSystem3D } from './managers/particles/particle-system-3d';
-import { ModelsManager } from './managers/models';
-import { TextureRegistry } from './internals/texture-registry';
-import { ResizeController } from './internals/resize-controller';
-import { RaycastController } from './internals/raycast';
-import { InstanceStore, SkinnedInstanceStore } from './managers/instances';
-import { MeshPipelines } from './internals/mesh-pipelines';
-import { SkeletalRuntime } from './internals/skeletal-runtime';
-import { ModelLibrary } from './internals/model-library';
 import {
-    DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ,
-    STAT_SX, STAT_SY, STAT_SZ,
-    SSTAT_SX, SSTAT_SY, SSTAT_SZ, SSTAT_MATERIAL_ID,
-} from './managers/instances/offsets';
-import { MAX_LIGHTS } from '../shader';
-import {
-    type ParsedGltf,
     type AssetBucket,
     type PrefabBucket3D,
-    type Prefab3D,
-    type CompositePrefab,
-    type ConePrefab,
-    type CubePrefab,
-    type CylinderPrefab,
-    type MeshPrefab,
-    type PlanePrefab,
-    type SpherePrefab,
-    type TexturePrefab,
     type PlayOptions,
 } from 'murow/renderer';
-import { type Hitbox } from 'murow/core/hitbox';
-import { WebGPURaycast3D, type RaycastState } from './internals/raycast';
+import {
+    InstanceManager,
+    InstanceStore,
+    SkinnedInstanceStore,
+    MaterialManager,
+    MaterialLibrary,
+    type MaterialSpec,
+    LightManager,
+    LightSystem,
+    ShadowManager,
+    ShadowSystem,
+    SpotShadowSystem,
+    PointShadowSystem,
+    DecalManager,
+    ParticleManager,
+    ParticleSystem3D,
+    CameraManager,
+    CameraEffectStack,
+    ModelsManager,
+} from './managers';
+import {
+    TextureRegistry,
+    ResizeController,
+    RaycastController,
+    WebGPURaycast3D,
+    MeshPipelines,
+    SkeletalRuntime,
+    ModelLibrary,
+    SkinCull,
+} from './internals';
+import { RendererCore, SceneUniforms } from './core';
+import { MainPass } from './internals';
 import { HitboxDebugRenderer } from '../hitbox';
-import { SkinCull } from './internals/skin-cull';
-import { RendererCore } from './core/renderer-core';
-import { InstanceManager, setPrefabHandle } from './managers/instances';
-import { MaterialManager } from './managers/materials';
-import { LightManager } from './managers/lights';
-import { ShadowManager } from './managers/shadows';
-import { DecalManager } from './managers/decals';
-import { ParticleManager } from './managers/particles';
-import { CameraManager } from './managers/camera';
-import type { Interpolator } from './types';
+import { MAX_LIGHTS } from '../shader';
 import { DEFAULT_CAPACITIES } from './defaults';
 import type {
+    Interpolator,
     ModelData,
     ModelHandle,
     GltfModel,
@@ -86,7 +65,6 @@ import type {
     MeshInstanceOptions,
     WebGPU3DRendererOptions,
 } from './types';
-import type { CubeUvMode } from 'murow/renderer';
 
 /** Compute auto-sizing stats from a loaded prefab bucket. */
 function computeBucketStats(bucket: PrefabBucket3D): { maxSkinnedParts: number; maxJointCount: number } {
@@ -127,7 +105,6 @@ function cameraBasis(
 export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Base3DRenderer {
     private core!: RendererCore;
     private resize!: ResizeController;
-    private raycastController!: RaycastController;
 
     private readonly maxTotalBones: number;
 
@@ -139,13 +116,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     private readonly skinCull: SkinCull;
 
-    /** Per-model visible batch offsets for the main non-skinned pass. Reused each frame. */
-    private readonly batchOffsets: { modelId: number; materialId: number; offset: number; count: number }[] = [];
-    /** Per-model visible batch offsets for the main skinned pass. Reused each frame. */
-    private readonly skinnedBatchOffsets: { modelId: number; offset: number; count: number }[] = [];
-
     readonly camera: CameraManager;
-    readonly raycast: WebGPURaycast3D;
+    raycast!: WebGPURaycast3D;
     private lastRenderTime = 0;
     /** Accumulated render time (seconds), exposed to shaders as `scene.time`. */
     private elapsed = 0;
@@ -179,6 +151,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     debug: { hitboxes: boolean } = { hitboxes: false };
 
     private hitboxDebug = new HitboxDebugRenderer();
+    private mainPass!: MainPass;
 
     constructor(canvas: HTMLCanvasElement, options: WebGPU3DRendererOptions<A>) {
         // Resolve maxInstances from the bucket before delegating to super:
@@ -191,12 +164,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.maxCameraEffects = options.maxCameraEffects ?? 20;
         this.logger = Logger.resolve(options.debug);
         this.camera = new CameraManager({ maxEffects: this.maxCameraEffects });
-        this.raycastController = new RaycastController({
-            camera: this.camera,
-            eachInstance: (visit) => this.eachInstance(visit),
-            resolveHitbox: (handle) => this.resolveHitbox(handle),
-        });
-        this.raycast = new WebGPURaycast3D(this);
 
         this._assets = options.assets ?? null;
         this._prefabs = options.assets?.prefabs as unknown as PrefabBucket3D ?? null;
@@ -263,52 +230,35 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             width: this._width,
             height: this._height,
         });
+        this.core.scene = new SceneUniforms(this.core.device, this.core.pipelines.rawUniformBuffer, this.core.uniformData);
 
         this.cameraEffects = new CameraEffectStack({ root: this.core.root, format: this.core.format, maxEffects: this.maxCameraEffects });
         this.cameraEffects.setDepth(this.core.pipelines.depthTexture.createView(), this.core.pipelines.depthSampler, this.camera.near, this.camera.far);
 
         const shadowSystem = new ShadowSystem({
-            root: this.core.root,
-            dynamicBuffer: this.core.pipelines.rawDynamicBuffer,
-            staticBuffer: this.core.pipelines.rawStaticBuffer,
+            core: this.core,
             maxInstances: this.maxInstances,
             skinned: {
-                dynamicBuffer: this.core.pipelines.rawSkinnedDynamicBuffer,
-                staticBuffer: this.core.pipelines.rawSkinnedStaticBuffer,
-                boneBuffer: this.core.pipelines.rawBoneMatrixBuffer,
                 maxInstances: this.maxSkinnedInstances,
                 maxBones: this.maxTotalBones,
-                vertexBufferLayout: this.core.pipelines.skinnedVertexBufferLayout,
             },
         }, { resolution: (this.options as WebGPU3DRendererOptions).shadowResolution ?? 2048 });
 
         const spotShadowSystem = new SpotShadowSystem({
-            root: this.core.root,
-            dynamicBuffer: this.core.pipelines.rawDynamicBuffer,
-            staticBuffer: this.core.pipelines.rawStaticBuffer,
+            core: this.core,
             maxInstances: this.maxInstances,
             skinned: {
-                dynamicBuffer: this.core.pipelines.rawSkinnedDynamicBuffer,
-                staticBuffer: this.core.pipelines.rawSkinnedStaticBuffer,
-                boneBuffer: this.core.pipelines.rawBoneMatrixBuffer,
                 maxInstances: this.maxSkinnedInstances,
                 maxBones: this.maxTotalBones,
-                vertexBufferLayout: this.core.pipelines.skinnedVertexBufferLayout,
             },
         }, { maxShadows: (this.options as WebGPU3DRendererOptions).maxSpotShadows });
 
         const pointShadowSystem = new PointShadowSystem({
-            root: this.core.root,
-            dynamicBuffer: this.core.pipelines.rawDynamicBuffer,
-            staticBuffer: this.core.pipelines.rawStaticBuffer,
+            core: this.core,
             maxInstances: this.maxInstances,
             skinned: {
-                dynamicBuffer: this.core.pipelines.rawSkinnedDynamicBuffer,
-                staticBuffer: this.core.pipelines.rawSkinnedStaticBuffer,
-                boneBuffer: this.core.pipelines.rawBoneMatrixBuffer,
                 maxInstances: this.maxSkinnedInstances,
                 maxBones: this.maxTotalBones,
-                vertexBufferLayout: this.core.pipelines.skinnedVertexBufferLayout,
             },
         }, {
             maxShadows: (this.options as WebGPU3DRendererOptions).maxPointShadows,
@@ -407,10 +357,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             textures: this.core.textures,
             onSkinLoaded: (skinData, animClips) => this.animation.addSkin(skinData, animClips),
         });
-        this.models = new ModelsManager(this.core.models);
+        this.models = new ModelsManager(this.core, this.animation);
 
         if (this._prefabs) {
-            await this.uploadPrefabBucket(this._assets!);
+            await this.models.uploadBucket(this._assets!);
         }
 
         this.instances = new InstanceManager({
@@ -423,6 +373,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             prefabs: this._prefabs,
             getSkinModel: (index) => this.core.models.skinnedModel(index),
         });
+        this.raycast = new WebGPURaycast3D(new RaycastController({
+            camera: this.camera,
+            eachInstance: this.instances.eachInstance.bind(this.instances),
+            resolveHitbox: this.instances.resolveHitbox.bind(this.instances),
+        }));
         this.shadows = new ShadowManager({
             directional: shadowSystem,
             spot: spotShadowSystem,
@@ -450,6 +405,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         // Snapshot order is irrelevant; the three snapshots are independent.
         this.interpolators = [this.camera, this.instances, this.lights];
 
+        this.mainPass = new MainPass(this.core, this.instances, this.materials);
+
         this.hitboxDebug.init(this.core.device, this.core.format);
         this.resize = new ResizeController(
             this.canvas,
@@ -459,79 +416,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         );
         this.resize.start(this._width, this._height);
         this._initialized = true;
-    }
-
-    /**
-     * Upload every prefab in the bucket to the GPU and stash the handle on
-     * each prefab so `bucket.get(id)` resolves to a usable model. Also
-     * subscribes the resync coordinator to the bucket's `clips-changed`
-     * channel for lazy load/unload.
-     */
-    private async uploadPrefabBucket(assets: AssetBucket<'3d', any, any>): Promise<void> {
-        const bucket = assets.prefabs as unknown as PrefabBucket3D;
-        this.animation.attachBucket(bucket);
-
-        // Upload textures from the asset's texture bucket
-        // Must await all texture uploads so createPlane() finds them in gpuTextures.
-        const texturePromises: Promise<void>[] = [];
-        for (const prefab of assets.textures.entries()) {
-            if (prefab.type === 'texture') {
-                texturePromises.push(this.core.textures.upload(prefab as TexturePrefab));
-            }
-        }
-        await Promise.all(texturePromises);
-
-        for (const prefab of bucket.entries()) {
-            if (prefab.type === 'gltf') {
-                const beforeSkinCount = this.core.models.skinnedModelCount();
-                const model = this.models.uploadParsedGltf(prefab.parsed);
-                setPrefabHandle(prefab, model);
-                if (this.core.models.skinnedModelCount() > beforeSkinCount) {
-                    this.animation.registerSkin(prefab.id, beforeSkinCount);
-                }
-            } else if (prefab.type === 'grid') {
-                const model = this.models.createGrid({
-                    size: prefab.size,
-                    step: prefab.step,
-                    lineWidth: prefab.lineWidth,
-                });
-                setPrefabHandle(prefab, model);
-            } else if (prefab.type === 'cube') {
-                const cube = prefab as unknown as CubePrefab;
-                const model = this.models.createCube({ size: cube.size, textureId: (cube as any).texture, uv: cube.uv });
-                setPrefabHandle(prefab, model);
-            } else if (prefab.type === 'plane') {
-                const plane = prefab as PlanePrefab;
-                const model = this.models.createPlane({
-                    width: plane.width,
-                    height: plane.height,
-                    textureId: plane.texture,
-                });
-                setPrefabHandle(prefab, model);
-            } else if (prefab.type === 'sphere') {
-                const sphere = prefab as unknown as SpherePrefab;
-                const model = this.models.createSphere({ segments: sphere.segments, textureId: (sphere as any).texture });
-                setPrefabHandle(prefab, model);
-            } else if (prefab.type === 'cylinder') {
-                const cyl = prefab as unknown as CylinderPrefab;
-                const model = this.models.createCylinder({ segments: cyl.segments, textureId: (cyl as any).texture });
-                setPrefabHandle(prefab, model);
-            } else if (prefab.type === 'cone') {
-                const cone = prefab as unknown as ConePrefab;
-                const model = this.models.createCone({ segments: cone.segments, textureId: (cone as any).texture });
-                setPrefabHandle(prefab, model);
-            } else if (prefab.type === 'mesh') {
-                const meshPrefab = prefab as unknown as MeshPrefab;
-                const model = this.core.models.createMesh({
-                    positions: meshPrefab.positions,
-                    normals: meshPrefab.normals,
-                    uvs: meshPrefab.uvs,
-                    indices: meshPrefab.indices,
-                    textureId: (meshPrefab as any).texture,
-                });
-                setPrefabHandle(prefab, model);
-            }
-        }
     }
 
     // textures upload/sampling lives in ./textures (TextureRegistry).
@@ -634,74 +518,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         }
     }
 
-    /** Resolve an instance's declared hitbox name to its Hitbox via the bucket's library. */
-    private resolveHitbox(handle: MeshInstanceHandle): Hitbox<'3d'> | null {
-        if (!this._prefabs || !handle.prefabId) return null;
-        const lib = this._prefabs.hitboxLibrary;
-        if (!lib) return null;
-        const prefab = this._prefabs.get(handle.prefabId) as unknown as Prefab3D | undefined;
-        const name = prefab?.hitbox;
-        return name ? (lib.get(name as never) as Hitbox<'3d'>) : null;
-    }
-
-    /**
-     * Pick test for a single instance. Returns the ray-`t` and the struck
-     * part name, or `null`. Uses the prefab's declared hitbox when
-     * available; falls back to the model's axis-aligned bounding box.
-     */
-    _collectRaycastHitsInto(screenX: number, screenY: number, rc: RaycastState): void {
-        this.raycastController.collect(screenX, screenY, rc);
-    }
-
-    /** Visit every live instance with world position, scale and half-extents. */
-    private eachInstance(
-        visit: (
-            handle: MeshInstanceHandle,
-            cx: number, cy: number, cz: number,
-            sx: number, sy: number, sz: number,
-            halfX: number, halfY: number, halfZ: number,
-        ) => void,
-    ): void {
-        const dyn = this.instances.store.dynamicData;
-        const stat = this.instances.store.staticData;
-        const models = this.core.models;
-        this.instances.store.batcher.each((_, instances, count) => {
-            for (let i = 0; i < count; i++) {
-                const slot = instances[i];
-                const handle = this.instances.store.instanceHandles[slot];
-                if (handle === null) continue;
-                const model = models.get(handle.modelId);
-                if (!model) continue;
-                const dynBase = slot * DYNAMIC_MESH_FLOATS;
-                const statBase = slot * STATIC_MESH_FLOATS;
-                visit(handle,
-                    dyn[dynBase + DYN_CURR_PX], dyn[dynBase + DYN_CURR_PY], dyn[dynBase + DYN_CURR_PZ],
-                    stat[statBase + STAT_SX], stat[statBase + STAT_SY], stat[statBase + STAT_SZ],
-                    model.halfX, model.halfY, model.halfZ);
-            }
-        });
-
-        const sDyn = this.instances.skinnedStore.dynamicData;
-        const sStat = this.instances.skinnedStore.staticData;
-        this.instances.skinnedStore.batcher.each((_, instances, count) => {
-            for (let i = 0; i < count; i++) {
-                const slot = instances[i];
-                const handle = this.instances.skinnedStore.instanceHandles[slot];
-                if (handle === null) continue;
-                const model = models.get(handle.modelId);
-                if (!model) continue;
-                const skin = this.core.models.skinnedModel(model.skinIndex);
-                if (!skin) continue;
-                const dynBase = slot * DYNAMIC_MESH_FLOATS;
-                const statBase = slot * SKINNED_STATIC_MESH_FLOATS;
-                visit(handle,
-                    sDyn[dynBase + DYN_CURR_PX], sDyn[dynBase + DYN_CURR_PY], sDyn[dynBase + DYN_CURR_PZ],
-                    sStat[statBase + SSTAT_SX], sStat[statBase + SSTAT_SY], sStat[statBase + SSTAT_SZ],
-                    model.halfX, model.halfY, model.halfZ);
-            }
-        });
-    }
-
     render(alpha: number): void {
         if (!this._initialized) return;
 
@@ -767,8 +583,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         return frameDelta;
     }
 
-    /** Upload instance transforms and bone matrices, then pack the visible main-pass slot indices. */
+    /** Upload instance transforms and bone matrices for the frame's packed batches. */
     private uploadInstanceBuffers(): void {
+        // Gather, cull and pack the visible batch lists into the manager.
+        this.instances.prepareFrame(this.core.frustum);
+
         // Upload dynamic data
         this.core.device.queue.writeBuffer(
             this.core.pipelines.rawDynamicBuffer, 0,
@@ -784,54 +603,11 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             this.instances.store.staticDirty = false;
         }
 
-        // Pack slot indices per model, with frustum culling
-        let indexOffset = 0;
-        const batchOffsets = this.batchOffsets;
-        batchOffsets.length = 0;
-        const dyn = this.instances.store.dynamicData;
-        const stat = this.instances.store.staticData;
-
-        this.instances.store.batcher.each((modelId, instances, count, key) => {
-            const materialId = (key / SparseBatcher.MAX_SHEETS) | 0;
-            const model = this.core.models.get(modelId);
-            if (!model) return;
-            const baseRadius = model.boundingRadius;
-            const batchStart = indexOffset;
-
-            for (let i = 0; i < count; i++) {
-                const slot = instances[i];
-                const base = slot * DYNAMIC_MESH_FLOATS;
-                const sBase = slot * STATIC_MESH_FLOATS;
-
-                // Use current position for culling
-                const cx = dyn[base + DYN_CURR_PX];
-                const cy = dyn[base + DYN_CURR_PY];
-                const cz = dyn[base + DYN_CURR_PZ];
-
-                // Scale the bounding radius by max scale axis
-                const sx = stat[sBase + STAT_SX];
-                const sy = stat[sBase + STAT_SY];
-                const sz = stat[sBase + STAT_SZ];
-                const maxScale = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
-                const radius = baseRadius * maxScale;
-
-                // Frustum sphere test
-                if (this.core.frustum.intersectsSphere(cx, cy, cz, radius)) {
-                    this.instances.store.slotIndexData[indexOffset++] = slot;
-                }
-            }
-
-            const visibleCount = indexOffset - batchStart;
-            if (visibleCount > 0) {
-                batchOffsets.push({ modelId, materialId, offset: batchStart, count: visibleCount });
-            }
-        });
-
-        if (indexOffset > 0) {
+        if (this.instances.slotIndexCount > 0) {
             this.core.device.queue.writeBuffer(
                 this.core.pipelines.rawSlotIndexBuffer, 0,
                 this.instances.store.slotIndexData.buffer, this.instances.store.slotIndexData.byteOffset,
-                indexOffset * 4,
+                this.instances.slotIndexCount * 4,
             );
         }
 
@@ -852,57 +628,13 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         // Upload bone matrices from CPU only if GPU compute is not active
         this.animation.flushBoneMatrices();
 
-        // Pack skinned slot indices
-        let skinnedIndexOffset = 0;
-        const skinnedBatchOffsets = this.skinnedBatchOffsets;
-        skinnedBatchOffsets.length = 0;
-        const sDyn = this.instances.skinnedStore.dynamicData;
-        const sStat = this.instances.skinnedStore.staticData;
-
-        this.instances.skinnedStore.batcher.each((modelId, instances, count) => {
-            const model = this.core.models.get(modelId);
-            if (!model) return;
-            const batchStart = skinnedIndexOffset;
-
-            // Frustum cull skinned instances using per-skin bounding radius
-            const skinModel = model.skinIndex >= 0 ? this.core.models.skinnedModel(model.skinIndex) : null;
-            const baseRadius = skinModel?.boundingRadius ?? 10;
-
-            for (let i = 0; i < count; i++) {
-                const slot = instances[i];
-                const base = slot * DYNAMIC_MESH_FLOATS;
-                const sBase = slot * SKINNED_STATIC_MESH_FLOATS;
-
-                const cx = sDyn[base + DYN_CURR_PX];
-                const cy = sDyn[base + DYN_CURR_PY];
-                const cz = sDyn[base + DYN_CURR_PZ];
-
-                // Scale the bounding radius by instance scale
-                const sx = sStat[sBase + SSTAT_SX];
-                const sy = sStat[sBase + SSTAT_SY];
-                const sz = sStat[sBase + SSTAT_SZ];
-                const maxScale = Math.abs(sx) > Math.abs(sy) ? (Math.abs(sx) > Math.abs(sz) ? Math.abs(sx) : Math.abs(sz)) : (Math.abs(sy) > Math.abs(sz) ? Math.abs(sy) : Math.abs(sz));
-                const radius = baseRadius * maxScale;
-
-                if (this.core.frustum.intersectsSphere(cx, cy, cz, radius)) {
-                    this.instances.skinnedStore.slotIndexData[skinnedIndexOffset++] = slot;
-                }
-            }
-
-            const visibleCount = skinnedIndexOffset - batchStart;
-            if (visibleCount > 0) {
-                skinnedBatchOffsets.push({ modelId, offset: batchStart, count: visibleCount });
-            }
-        });
-
-        if (skinnedIndexOffset > 0) {
+        if (this.instances.skinnedSlotIndexCount > 0) {
             this.core.device.queue.writeBuffer(
                 this.core.pipelines.rawSkinnedSlotIndexBuffer, 0,
                 this.instances.skinnedStore.slotIndexData.buffer, this.instances.skinnedStore.slotIndexData.byteOffset,
-                skinnedIndexOffset * 4,
+                this.instances.skinnedSlotIndexCount * 4,
             );
         }
-
     }
 
     /** Delegate each shadow pass to its manager (caster gather plus encode). */
@@ -914,203 +646,28 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     /** Pack the light buffer and write the frame uniforms. Runs after the light assignments. */
     private uploadLightsAndUniforms(alpha: number, vpMatrix: Float32Array): void {
-        const packed = this.lights.pack();
-        if (packed.count > 0) {
-            this.core.device.queue.writeBuffer(
-                this.core.pipelines.rawLightBuffer, 0,
-                packed.data.buffer, packed.data.byteOffset, packed.byteLength,
-            );
-        }
-
-        this.core.uniformData.set(vpMatrix, 0);
-        this.core.uniformData[MESH_UNIFORM_ALPHA_OFFSET] = alpha;
-        this.lights.writeUniforms(this.core.uniformData, MESH_UNIFORM_LIGHT_OFFSET, packed.count);
-        const camPos = this.camera.position;
-        this.core.uniformData[MESH_UNIFORM_CAMERA_OFFSET] = camPos[0];
-        this.core.uniformData[MESH_UNIFORM_CAMERA_OFFSET + 1] = camPos[1];
-        this.core.uniformData[MESH_UNIFORM_CAMERA_OFFSET + 2] = camPos[2];
-        this.core.uniformData[MESH_UNIFORM_TIME_OFFSET] = this.elapsed;
-        this.core.uniformData[MESH_UNIFORM_RESOLUTION_OFFSET] = this._width;
-        this.core.uniformData[MESH_UNIFORM_RESOLUTION_OFFSET + 1] = this._height;
-        this.core.device.queue.writeBuffer(
-            this.core.pipelines.rawUniformBuffer, 0,
-            this.core.uniformData.buffer, this.core.uniformData.byteOffset,
-            this.core.uniformData.byteLength,
+        this.lights.uploadLights(
+            this.core.device,
+            this.core.pipelines.rawLightBuffer,
+            this.core.uniformData,
+            MESH_UNIFORM_LIGHT_OFFSET,
         );
+        this.core.scene.write({
+            vpMatrix,
+            alpha,
+            time: this.elapsed,
+            cameraPos: this.camera.position,
+            width: this._width,
+            height: this._height,
+        });
     }
 
     /** Draw the batched non-skinned and skinned meshes, then debug hitboxes. */
     private renderMainPass(pass: GPURenderPassEncoder, vpMatrix: Float32Array): void {
-        // --- Draw non-skinned models (pass 0: opaque, pass 1: transparent) ---
-        let currentPipeline: GPURenderPipeline | null = null;
-
-        for (let passIndex = 0; passIndex < 2; passIndex++) {
-            currentPipeline = null;
-
-            for (const batch of this.batchOffsets) {
-                const model = this.core.models.get(batch.modelId);
-                if (!model) continue;
-
-                const material = batch.materialId > 0 ? this.materials.library.get(batch.materialId) : null;
-                const transparent = material ? material.transparent : false;
-                if ((passIndex === 1) !== transparent) continue;
-
-                if (material) {
-                    if (material.pipeline !== currentPipeline) {
-                        pass.setPipeline(material.pipeline);
-                        pass.setBindGroup(0, this.core.pipelines.rawBindGroup);
-                        currentPipeline = material.pipeline;
-                    }
-                    pass.setBindGroup(1, material.bindGroup);
-                    pass.setVertexBuffer(0, model.rawVertexBuffer);
-                    if (model.rawIndexBuffer) {
-                        pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                        pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
-                    } else {
-                        pass.draw(model.vertexCount, batch.count, 0, batch.offset);
-                    }
-                    continue;
-                }
-
-                // Check if any instance in this batch has a per-instance texture override
-                let hasCustomTex = false;
-                for (let i = 0; i < batch.count; i++) {
-                    const slot = this.instances.store.slotIndexData[batch.offset + i];
-                    if (this.instances.store.textureBindGroup(slot) !== undefined) {
-                        hasCustomTex = true;
-                        break;
-                    }
-                }
-
-                const needsTextured = model.hasTexture || hasCustomTex;
-                const pipeline = needsTextured ? this.core.pipelines.rawTexturedPipeline : this.core.pipelines.rawPipeline;
-                if (pipeline !== currentPipeline) {
-                    pass.setPipeline(pipeline);
-                    pass.setBindGroup(0, this.core.pipelines.rawBindGroup);
-                    currentPipeline = pipeline;
-                }
-
-                if (!needsTextured) {
-                    // Untextured — draw entire batch at once
-                    pass.setVertexBuffer(0, model.rawVertexBuffer);
-                    if (model.rawIndexBuffer) {
-                        pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                        pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
-                    } else {
-                        pass.draw(model.vertexCount, batch.count, 0, batch.offset);
-                    }
-                    continue;
-                }
-
-                // Textured — per-instance bind group (custom override, model default, or white fallback)
-                pass.setVertexBuffer(0, model.rawVertexBuffer);
-                if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                const whiteBG = this.core.textures.white;
-                for (let i = 0; i < batch.count; i++) {
-                    const slot = this.instances.store.slotIndexData[batch.offset + i];
-                    const customBG = this.instances.store.textureBindGroup(slot);
-                    pass.setBindGroup(1, customBG ?? model.textureBindGroup ?? whiteBG);
-                    if (model.rawIndexBuffer) {
-                        pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
-                    } else {
-                        pass.draw(model.vertexCount, 1, 0, batch.offset + i);
-                    }
-                }
-            }
+        this.mainPass.record(pass);
+        if (this.debug.hitboxes && this._prefabs) {
+            this.hitboxDebug.drawInstances(pass, vpMatrix, this.instances, this.raycast.state);
         }
-
-        // --- Draw skinned models ---
-        currentPipeline = null;
-
-        for (const batch of this.skinnedBatchOffsets) {
-            const model = this.core.models.get(batch.modelId);
-            if (!model) continue;
-
-            // Material support: if any instance in the batch has a compiled skinned
-            // material, draw per instance (materials can differ within a batch).
-            let hasMaterial = false;
-            for (let i = 0; i < batch.count; i++) {
-                const slot = this.instances.skinnedStore.slotIndexData[batch.offset + i];
-                const mid = this.instances.skinnedStore.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
-                if (mid > 0) {
-                    const m = this.materials.library.get(mid);
-                    if (m && m.skinnedPipeline) { hasMaterial = true; break; }
-                }
-            }
-            if (hasMaterial) {
-                pass.setVertexBuffer(0, model.rawVertexBuffer);
-                if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                const whiteBG = this.core.textures.white;
-                for (let i = 0; i < batch.count; i++) {
-                    const slot = this.instances.skinnedStore.slotIndexData[batch.offset + i];
-                    const mid = this.instances.skinnedStore.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID]!;
-                    const material = mid > 0 ? this.materials.library.get(mid) : null;
-                    if (material && material.skinnedPipeline) {
-                        pass.setPipeline(material.skinnedPipeline);
-                        pass.setBindGroup(0, this.core.pipelines.rawSkinnedBindGroup);
-                        pass.setBindGroup(1, material.bindGroup);
-                    } else {
-                        const customBG = this.instances.skinnedStore.textureBindGroup(slot);
-                        const needsTex = model.hasTexture || customBG !== undefined;
-                        pass.setPipeline(needsTex ? this.core.pipelines.rawSkinnedTexturedPipeline : this.core.pipelines.rawSkinnedPipeline);
-                        pass.setBindGroup(0, this.core.pipelines.rawSkinnedBindGroup);
-                        if (needsTex) pass.setBindGroup(1, customBG ?? model.textureBindGroup ?? whiteBG);
-                    }
-                    if (model.rawIndexBuffer) pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
-                    else pass.draw(model.vertexCount, 1, 0, batch.offset + i);
-                }
-                currentPipeline = null;
-                continue;
-            }
-
-            // Check for per-instance texture overrides in this batch
-            let hasCustomTex = false;
-            for (let i = 0; i < batch.count; i++) {
-                const slot = this.instances.skinnedStore.slotIndexData[batch.offset + i];
-                if (this.instances.skinnedStore.textureBindGroup(slot) !== undefined) {
-                    hasCustomTex = true;
-                    break;
-                }
-            }
-
-            const needsTextured = model.hasTexture || hasCustomTex;
-            const pipeline = needsTextured ? this.core.pipelines.rawSkinnedTexturedPipeline : this.core.pipelines.rawSkinnedPipeline;
-            if (pipeline !== currentPipeline) {
-                pass.setPipeline(pipeline);
-                pass.setBindGroup(0, this.core.pipelines.rawSkinnedBindGroup);
-                currentPipeline = pipeline;
-            }
-
-            if (!needsTextured) {
-                pass.setVertexBuffer(0, model.rawVertexBuffer);
-                if (model.rawIndexBuffer) {
-                    pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                    pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
-                } else {
-                    pass.draw(model.vertexCount, batch.count, 0, batch.offset);
-                }
-                continue;
-            }
-
-            pass.setVertexBuffer(0, model.rawVertexBuffer);
-            if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-            const whiteBG = this.core.textures.white;
-            for (let i = 0; i < batch.count; i++) {
-                const slot = this.instances.skinnedStore.slotIndexData[batch.offset + i];
-                const customBG = this.instances.skinnedStore.textureBindGroup(slot);
-                pass.setBindGroup(1, customBG ?? model.textureBindGroup ?? whiteBG);
-                if (model.rawIndexBuffer) {
-                    pass.drawIndexed(model.indexCount, 1, 0, 0, batch.offset + i);
-                } else {
-                    pass.draw(model.vertexCount, 1, 0, batch.offset + i);
-                }
-            }
-        }
-
-        if (this.debug.hitboxes) {
-            this.drawDebugHitboxes(pass, vpMatrix);
-        }
-
     }
 
     /** Draw the particle systems into the current pass. */
@@ -1124,59 +681,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         if (enabledEffects > 0) {
             this.cameraEffects.apply(encoder, swapchainView, this.camera.effects, this.elapsed, this._width, this._height);
         }
-    }
-
-    private drawDebugHitboxes(pass: GPURenderPassEncoder, vp: Float32Array): void {
-        if (!this._prefabs) return;
-        const debug = this.hitboxDebug;
-        const state = this.raycast.state;
-        debug.begin(vp);
-
-        const dyn = this.instances.store.dynamicData;
-        const stat = this.instances.store.staticData;
-        this.instances.store.batcher.each((_, instances, count) => {
-            for (let i = 0; i < count; i++) {
-                const slot = instances[i];
-                const handle = this.instances.store.instanceHandles[slot];
-                if (handle === null) continue;
-                const hb = this.resolveHitbox(handle);
-                if (!hb) continue;
-                const dynBase = slot * DYNAMIC_MESH_FLOATS;
-                const statBase = slot * STATIC_MESH_FLOATS;
-                const hovered = state.containsId(handle.id);
-                for (const part of hb.parts) {
-                    debug.emit(
-                        part, hovered,
-                        dyn[dynBase + DYN_CURR_PX], dyn[dynBase + DYN_CURR_PY], dyn[dynBase + DYN_CURR_PZ],
-                        stat[statBase + STAT_SX], stat[statBase + STAT_SY], stat[statBase + STAT_SZ],
-                    );
-                }
-            }
-        });
-
-        const sDyn = this.instances.skinnedStore.dynamicData;
-        const sStat = this.instances.skinnedStore.staticData;
-        this.instances.skinnedStore.batcher.each((_, instances, count) => {
-            for (let i = 0; i < count; i++) {
-                const slot = instances[i];
-                const handle = this.instances.skinnedStore.instanceHandles[slot];
-                if (handle === null) continue;
-                const hb = this.resolveHitbox(handle);
-                if (!hb) continue;
-                const dynBase = slot * DYNAMIC_MESH_FLOATS;
-                const statBase = slot * SKINNED_STATIC_MESH_FLOATS;
-                const hovered = state.containsId(handle.id);
-                for (const part of hb.parts) {
-                    debug.emit(
-                        part, hovered,
-                        sDyn[dynBase + DYN_CURR_PX], sDyn[dynBase + DYN_CURR_PY], sDyn[dynBase + DYN_CURR_PZ],
-                        sStat[statBase + SSTAT_SX], sStat[statBase + SSTAT_SY], sStat[statBase + SSTAT_SZ],
-                    );
-                }
-            }
-        });
-
-        debug.flush(pass);
     }
 
     // Visibility + skinning culling lives in ./cull (Frustum, SkinCull).
