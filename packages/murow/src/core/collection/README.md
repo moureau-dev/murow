@@ -73,6 +73,24 @@ The id/slot allocator underneath. A dense `SlotMap` plus a per-slot generation:
 stored id for a destroyed item fails `isLive` instead of aliasing a recycled
 slot. Decoded with arithmetic (not 32-bit bitwise) so it stays exact.
 
+## Which one?
+
+- **`PooledCollection`** (this module) — a set of live items added and removed at
+  random, referenced by a stable versioned id. Renderer managers, `AudioManager`,
+  `TickerScheduler`, ECS. Slots are recycled; a stale id fails lookup instead of
+  aliasing.
+- **[`Ring`/`RingStore`/`RingBuffer`](../ring)** — a bounded history or pool you
+  append to, evicting the oldest. No random removal, no ids.
+- **[`SlotStore`](../slot-map)** — items keyed by an *external* id you supply (a
+  string translated to a number, a larger id space, an ECS entity id). Use when
+  identity is not just "the next free slot".
+- **`SlotMap` / `SlotSet` / `FreeList`** — the bare primitives, when you want dense
+  iteration or an allocator and will manage generations yourself.
+
+There is deliberately no non-recycled ("ids never reused") collection:
+`PooledCollection` with generations already makes stale ids fail, and bounded
+append-only data is `Ring`.
+
 ## Notes
 
 - **Ids are versioned.** `get(staleId)` returns `undefined`; it never returns a

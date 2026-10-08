@@ -3088,6 +3088,8 @@ import { Collection, CollectionItem, PooledCollection, GenerationAllocator } fro
 
 Ids are branded via `SlotId<Brand>` (from `murow/core/slot-map`); a plain `number` is not assignable. The concrete managers and their branded id aliases live in the backend (`@murow/webgpu`). This is a lower-level building block; most games use `renderer.instances` / `renderer.sprites` etc. directly.
 
+Choosing a container: **`PooledCollection`** for live items added/removed at random with stable versioned ids (renderer managers, `AudioManager`, `TickerScheduler`); **`Ring`/`RingStore`** (`murow/core/ring`) for bounded append-and-evict histories; **`SlotStore`** (`murow/core/slot-map`) for items keyed by an external id (string, larger id space, ECS entity id); the raw **`SlotMap`/`SlotSet`/`FreeList`** when you want only dense iteration or an allocator. There is deliberately no non-recycled collection: generations already make stale ids fail to look up.
+
 ### 3D — `WebGPU3DRenderer`
 
 ```ts
