@@ -132,11 +132,10 @@ export class InputManager {
     }
 
     private onMouseMove(e: MouseEvent) {
-        const rect = (e.target as HTMLElement).getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        const target = e.target as HTMLElement;
+        const rect = target.getBoundingClientRect();
 
-        const locked = typeof document !== 'undefined' && document.pointerLockElement === e.target;
+        const locked = typeof document !== 'undefined' && document.pointerLockElement === target;
         if (locked) {
             this.mouse.dx += e.movementX;
             this.mouse.dy += e.movementY;
@@ -148,8 +147,13 @@ export class InputManager {
         this.lastClientX = e.clientX;
         this.lastClientY = e.clientY;
 
-        this.mouse.x = x;
-        this.mouse.y = y;
+        if (locked) {
+            this.mouse.x = rect.width / 2;
+            this.mouse.y = rect.height / 2;
+        } else {
+            this.mouse.x = e.clientX - rect.left;
+            this.mouse.y = e.clientY - rect.top;
+        }
     }
 
     private onMouseDown(e: MouseEvent) {

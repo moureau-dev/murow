@@ -1240,6 +1240,8 @@ const all = renderer.raycast.cast();                              // RaycastHit[
 const at  = renderer.raycast.cast({ screen: [sx, sy], camera });  // explicit point / viewport
 ```
 
+`input.mouse.position` is canvas-relative CSS pixels (top-left origin). While **Pointer Lock** is held there is no on-screen cursor, so it reports the viewport center; `update(input)` + `hit()` therefore picks the reticle identically locked or unlocked. For event-driven picks off the cursor, pass `cast({ screen: [clientX - rect.left, clientY - rect.top] })`; Pointer Lock freezes `clientX/clientY`, so drive locked picking from `input` (center), not DOM events.
+
 Prefabs **without** a hitbox fall back to the model's axis-aligned bounding box (3D) or the sprite's rendered quad (2D) — picking still works, just coarser. Returned hit objects are pool-backed and valid only until the next `update()`; copy what you keep, or use `memo`.
 
 Hitboxes are static model-space volumes (position + scale, not animated/skinned). This serves hitscan picking and gameplay hit zones (headshots); it is not bone-accurate.
