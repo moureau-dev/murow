@@ -108,6 +108,17 @@
       "import": "./dist/esm/renderer/*.js",
       "require": "./dist/cjs/renderer/*.js"
     },
+    "./dom": {
+      "types": "./dist/types/dom/index.d.ts",
+      "import": "./dist/esm/dom/index.js",
+      "require": "./dist/cjs/dom/index.js",
+      "default": "./dist/esm/dom/index.js"
+    },
+    "./dom/*": {
+      "types": "./dist/types/dom/*.d.ts",
+      "import": "./dist/esm/dom/*.js",
+      "require": "./dist/cjs/dom/*.js"
+    },
     "./webgpu": {
       "types": "./dist/webgpu/types/index.d.ts",
       "import": "./dist/webgpu/esm/index.js",

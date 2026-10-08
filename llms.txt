@@ -268,6 +268,9 @@ import {
 // Input lives at a subpath
 import { InputManager, BrowserInputSource, MouseLook, ScrollZoom } from 'murow/core/input';
 
+// World-anchored HTML overlays (nameplates, health bars, damage numbers)
+import { HTMLDom } from 'murow/dom';
+
 // Browser WebSocket transport (separate adapter)
 import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-websocket';
 
@@ -1306,6 +1309,27 @@ const resolved = Logger.resolve(debugOption);       // boolean | Logger -> Logge
 ```
 
 Renderers/systems accept `debug?: boolean | Logger`; `true` uses a console logger, an object routes through it.
+
+### `HTMLDom` — world-anchored HTML overlays
+
+DOM elements that follow a world point, projected by a renderer each frame. For nameplates, health bars and damage numbers, where CSS gives you the look. DOM-only (no GPU); the renderer (2D or 3D) supplies the projection, so it works with both.
+
+```ts
+import { HTMLDom } from 'murow/dom';
+
+const dom = new HTMLDom({ renderer, budget: 32 });            // renderer.worldToScreen(...)
+const dmg = dom.createOverlay({ selector: 'template#dmg', maxChildren: 8 });
+const node = dmg.spawn({ position: [x, y, z] });             // anchor at spawn
+node.element.textContent = '42';                             // the cloned element
+node.moveTo(x, y, z);                                        // follow the model
+dom.update();                                                // once per frame, after rendering
+```
+
+- `budget` caps live nodes across every overlay; `maxChildren` caps one overlay. Oldest are evicted; removed nodes are pooled.
+- `node`: `.element` (the clone), `.position` (live getter/setter), `.scale`, `.moveTo`, `.setText`, `.snap()`, `.remove`. The node is an outer `.murow-node` div wrapping your clone, so the per-frame transform never fights an animation on the clone.
+- `refreshRate` (Hz) is optional: when set, each node gets a CSS `transition` of one interval and `dom.update()` should run on `loop.tick` instead of `loop.render`; the browser lerps between ticks. Pass `refreshRate: loop.ticker.rate` to match the loop. Call `node.snap()` after a teleport so it does not slide. Omit it to write transforms every frame.
+- `rotation` is `'camera'` (billboard); a numeric rotation needs a world size + `matrix3d` and is not implemented.
+- No depth occlusion: labels draw over walls. Scales to dozens of labels; for hundreds use a canvas/GPU overlay.
 
 ### `FreeList` — O(1) slot allocator (used internally by renderers and ECS)
 

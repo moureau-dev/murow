@@ -74,6 +74,9 @@ Renderer-agnostic primitives consumed by any backend (`@murow/webgpu`, future Pi
 - `parseGltf` / `parseSpritesheet` — pure CPU parsers (no GPU, no canvas)
 - `SkeletalAnimation` — CPU-side bone evaluation for skinned meshes
 
+### [DOM](./src/dom) — World-anchored HTML overlays
+`HTMLDom` ties DOM elements to world points via a renderer's `worldToScreen`, for nameplates, health bars and damage numbers. Renderer-agnostic (2D or 3D), pooled with a global budget.
+
 ### [WebGPU](./src/../webgpu) — WebGPU rendering backend
 The WebGPU renderer is bundled with murow and accessible via `murow/webgpu`:
 

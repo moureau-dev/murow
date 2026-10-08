@@ -172,6 +172,22 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         this.spriteHitboxes = new Array(resolvedMaxSprites).fill(null);
     }
 
+    /**
+     * Project a 2D world point to canvas CSS pixels (for HTML overlays via
+     * `murow/dom`). Writes `[x, y, depth]` into `out` (`z` is ignored in 2D).
+     */
+    worldToScreen(x: number, y: number, _z: number, out: Float32Array): boolean {
+        const m = this.camera.getMatrix();
+        const ndcX = m[0]! * x + m[4]! * y + m[8]!;
+        const ndcY = m[1]! * x + m[5]! * y + m[9]!;
+        const w = this.canvas.clientWidth || this._width;
+        const h = this.canvas.clientHeight || this._height;
+        out[0] = (ndcX * 0.5 + 0.5) * w;
+        out[1] = (0.5 - ndcY * 0.5) * h;
+        out[2] = 1 / Math.max(this.camera.zoom, 1e-4);
+        return true;
+    }
+
     async init(): Promise<void> {
         this.root = await tgpu.init();
         this._device = this.root.device;
