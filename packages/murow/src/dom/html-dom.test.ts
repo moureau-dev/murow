@@ -162,6 +162,27 @@ describe('HTMLDom', () => {
         expect(node.snapNext).toBe(true);
     });
 
+    test('interactive opts the node into pointer events', () => {
+        const dom = new HTMLDom({ renderer: new FakeProjector() });
+        const overlay = dom.createOverlay({ selector: 'template#dmg', interactive: true });
+        const node = overlay.spawn({ position: [0, 0, 1] });
+        expect(node.anchor.style.pointerEvents).toBe('auto');
+        expect(node.anchor.style.cursor).toBe('pointer');
+    });
+
+    test('per-spawn interactive overrides the overlay default', () => {
+        const dom = new HTMLDom({ renderer: new FakeProjector() });
+        const overlay = dom.createOverlay({ selector: 'template#dmg' });
+        const node = overlay.spawn({ position: [0, 0, 1], interactive: true });
+        expect(node.anchor.style.pointerEvents).toBe('auto');
+    });
+
+    test('non-interactive nodes stay click-through', () => {
+        const dom = new HTMLDom({ renderer: new FakeProjector() });
+        const node = dom.createOverlay({ selector: 'template#dmg' }).spawn({ position: [0, 0, 1] });
+        expect(node.anchor.style.pointerEvents).toBe('');
+    });
+
     test('unknown selector throws', () => {
         const dom = new HTMLDom({ renderer: new FakeProjector() });
         expect(() => dom.createOverlay({ selector: 'template#missing' })).toThrow();

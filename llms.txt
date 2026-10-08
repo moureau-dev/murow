@@ -1327,6 +1327,7 @@ dom.update();                                                // once per frame, 
 
 - `budget` caps live nodes across every overlay; `maxChildren` caps one overlay. Oldest are evicted; removed nodes are pooled.
 - `node`: `.element` (the clone), `.position` (live getter/setter), `.scale`, `.moveTo`, `.setText`, `.snap()`, `.remove`. The node is an outer `.murow-node` div wrapping your clone, so the per-frame transform never fights an animation on the clone.
+- The layer is `pointer-events:none` (click-through). Pass `interactive: true` on `createOverlay` or a single `spawn` to opt a node in (`pointer-events:auto` + `cursor:pointer`); add listeners to `node.element`. Non-interactive nodes keep the canvas receiving clicks; `display:none` nodes are not clickable.
 - `refreshRate` (Hz) is optional: when set, each node gets a CSS `transition` of one interval and `dom.update()` should run on `loop.tick` instead of `loop.render`; the browser lerps between ticks. Pass `refreshRate: loop.ticker.rate` to match the loop. Call `node.snap()` after a teleport so it does not slide. Omit it to write transforms every frame.
 - `rotation` is `'camera'` (billboard); a numeric rotation needs a world size + `matrix3d` and is not implemented.
 - No depth occlusion: labels draw over walls. Scales to dozens of labels; for hundreds use a canvas/GPU overlay.

@@ -27,12 +27,13 @@ dom.update();
   creates the layer (a full-screen, `pointer-events:none` div unless `container`
   is given). `budget` caps live nodes across every overlay; the oldest are
   evicted. `refreshRate` is in Hz (see below).
-- `dom.createOverlay({ selector, maxChildren? })` clones `selector` (a
-  `<template>`'s first child, or the element itself) per spawn, up to
-  `maxChildren` live nodes.
-- `overlay.spawn({ position, rotation?, scale? })` returns an `HtmlNode`.
-  `rotation` defaults to `'camera'` (billboard). The node is positioned by
-  `renderer.worldToScreen`.
+- `dom.createOverlay({ selector, maxChildren?, interactive? })` clones `selector`
+  (a `<template>`'s first child, or the element itself) per spawn, up to
+  `maxChildren` live nodes. `interactive` is the default for every node.
+- `overlay.spawn({ position, rotation?, scale?, interactive? })` returns an
+  `HtmlNode`. `rotation` defaults to `'camera'` (billboard). The node is
+  positioned by `renderer.worldToScreen`. `interactive` overrides the overlay
+  default.
 - `dom.update()` repositions every live node and scales it by distance
   (`referenceDepth / depth`, clamped). Call it once per frame. If you pass
   `refreshRate`, call it on `loop.tick` instead (see below).
@@ -67,6 +68,22 @@ This cuts DOM writes at the cost of a small drift: CSS lerps the screen position
 linearly, while the scene interpolates in world space and re-projects. Call
 `node.snap()` after a teleport so the label does not slide across the screen. It
 also does not reduce the number of elements animated, only the JavaScript work.
+
+## Interactivity
+
+The layer is `pointer-events:none`, so labels are click-through by default.
+Pass `interactive: true` (on the overlay or a single spawn) to make a node a hit
+target — it gets `pointer-events:auto` and `cursor:pointer`. Add listeners to
+the node's element directly:
+
+```ts
+const nameplates = dom.createOverlay({ selector: 'template#nameplate', interactive: true });
+const node = nameplates.spawn({ position: [x, y, z] });
+node.element.querySelector('.hp').addEventListener('click', () => inspect());
+```
+
+Only interactive nodes capture clicks; the rest of the canvas keeps receiving
+them. A node hidden off-camera (`display:none`) is not clickable.
 
 ## Notes
 

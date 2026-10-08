@@ -189,6 +189,9 @@ export class HtmlOverlay {
         node.scale = options.scale ?? 1;
         node.position = options.position;
         node.anchor.style.display = 'block';
+        const interactive = options.interactive ?? this.interactive;
+        node.anchor.style.pointerEvents = interactive ? 'auto' : '';
+        node.anchor.style.cursor = interactive ? 'pointer' : '';
 
         this.active.push(node);
         this.dom.track(node);
@@ -279,7 +282,7 @@ export class HTMLDom {
     createOverlay(options: OverlayOptions): HtmlOverlay {
         const template = document.querySelector(options.selector);
         if (!template) throw new Error(`HTMLDom: no element matches "${options.selector}"`);
-        const overlay = new HtmlOverlay(this, template, options.maxChildren ?? 8);
+        const overlay = new HtmlOverlay(this, template, options.maxChildren ?? 8, options.interactive ?? false);
         this.overlays.push(overlay);
         return overlay;
     }
