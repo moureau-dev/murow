@@ -17,7 +17,7 @@ import type { RendererCore } from '../../core/renderer-core';
 import { setPrefabHandle } from '../instances/prefab-handle';
 
 /**
- * The skeletal runtime surface `uploadBucket` needs: attach the clip-resync
+ * The skeletal runtime surface `upload` needs: attach the clip-resync
  * coordinator and register skinned prefabs.
  */
 export interface PrefabUploadAnimation {
@@ -88,7 +88,7 @@ export class ModelsManager {
      * subscribes the resync coordinator to the bucket's `clips-changed`
      * channel for lazy load/unload.
      */
-    async uploadBucket(assets: AssetBucket<'3d', any, any>): Promise<void> {
+    async upload(assets: AssetBucket<'3d', any, any>): Promise<void> {
         const bucket = assets.prefabs as unknown as PrefabBucket3D;
         this.animation.attachBucket(bucket);
 

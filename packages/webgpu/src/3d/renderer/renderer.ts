@@ -360,7 +360,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.models = new ModelsManager(this.core, this.animation);
 
         if (this._prefabs) {
-            await this.models.uploadBucket(this._assets!);
+            await this.models.upload(this._assets!);
         }
 
         this.instances = new InstanceManager({
@@ -646,7 +646,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     /** Pack the light buffer and write the frame uniforms. Runs after the light assignments. */
     private uploadLightsAndUniforms(alpha: number, vpMatrix: Float32Array): void {
-        this.lights.uploadLights(
+        this.lights.upload(
             this.core.device,
             this.core.pipelines.rawLightBuffer,
             this.core.uniformData,

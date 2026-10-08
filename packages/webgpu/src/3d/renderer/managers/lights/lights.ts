@@ -59,11 +59,6 @@ export class LightManager extends PooledCollection<LightId, LightHandle, number>
         this.system.setDirectional(direction, color, intensity);
     }
 
-    /** Number of live dynamic lights. */
-    get lightCount(): number {
-        return this.count;
-    }
-
     /**
      * Snapshot curr -> prev for every live light.
      * @internal Called by the renderer's pre-tick, not for direct user calls.
@@ -87,21 +82,11 @@ export class LightManager extends PooledCollection<LightId, LightHandle, number>
         return this.system.assignPointShadows(max);
     }
 
-    /** @internal Pack live lights for upload to the storage buffer. */
-    pack(): ReturnType<LightSystem['pack']> {
-        return this.system.pack();
-    }
-
-    /** @internal Write the directional/ambient/count block into the uniforms. */
-    writeUniforms(uniformData: Float32Array, offset: number, count: number): void {
-        this.system.writeUniforms(uniformData, offset, count);
-    }
-
     /**
      * @internal Pack live lights, upload the light buffer, and write the light
      * block of the scene uniforms. Returns the packed light count.
      */
-    uploadLights(device: GPUDevice, lightBuffer: GPUBuffer, uniformData: Float32Array, offset: number): number {
+    upload(device: GPUDevice, lightBuffer: GPUBuffer, uniformData: Float32Array, offset: number): number {
         const packed = this.system.pack();
         if (packed.count > 0) {
             device.queue.writeBuffer(lightBuffer, 0, packed.data.buffer, packed.data.byteOffset, packed.byteLength);
