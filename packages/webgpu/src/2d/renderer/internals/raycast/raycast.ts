@@ -8,7 +8,7 @@ import {
 } from 'murow/renderer';
 
 import type { SpriteHandle } from 'murow/renderer';
-import type { WebGPU2DRenderer } from './renderer';
+import type { RaycastController2D } from './raycast-controller';
 
 type Point = [number, number];
 type Hit = RaycastHit<SpriteHandle, Point>;
@@ -22,11 +22,11 @@ export class WebGPURaycast2D extends Raycast<SpriteHandle, Point> {
     private resultBuffer: BufferedHit<SpriteHandle, Point>[] = [];
     private readonly memos: WebGPURaycastMemo2D[] = [];
 
-    constructor(private renderer: WebGPU2DRenderer) { super(); }
+    constructor(private readonly controller: RaycastController2D) { super(); }
 
     update(input: InputSnapshot): void {
         this.state.reset();
-        this.renderer._collectRaycastHitsInto(input.mouse.position.x, input.mouse.position.y, this.state);
+        this.controller.collect(input.mouse.position.x, input.mouse.position.y, this.state);
         for (let i = 0; i < this.memos.length; i++) this.memos[i]!._invalidate();
     }
 

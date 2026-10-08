@@ -5,8 +5,8 @@
  *
  * Usage:
  * ```ts
- * const geom = renderer
- *     .createGeometry('particles', { maxInstances: 5000, geometry: 'quad' })
+ * const geom = renderer.geometry
+ *     .create('particles', { maxInstances: 5000, geometry: 'quad' })
  *     .instanceLayout({ dynamic: { position: d.vec2f }, static: { color: d.vec4f } })
  *     .uniforms({ time: d.f32 })
  *     .shaders((layout) => ({
@@ -718,12 +718,12 @@ export class GeometryBuilder<
      * Zero-copy: the render shader reads directly from the compute buffer.
      *
      * ```ts
-     * const compute = renderer.createCompute('physics', { workgroupSize: 256 })
+     * const compute = renderer.compute.create('physics', { workgroupSize: 256 })
      *     .buffers({ particles: { storage: d.arrayOf(ParticleStruct, MAX), readwrite: true } })
      *     .shader(...)
      *     .build();
      *
-     * const render = renderer.createGeometry('vis', { maxInstances: MAX, geometry: 'quad' })
+     * const render = renderer.geometry.create('vis', { maxInstances: MAX, geometry: 'quad' })
      *     .fromCompute(compute, 'particles')
      *     .uniforms({ resolution: d.vec2f })
      *     .shaders({ ... })

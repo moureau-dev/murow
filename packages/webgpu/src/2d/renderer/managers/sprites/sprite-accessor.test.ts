@@ -23,7 +23,7 @@ import {
     STATIC_OFFSET_UV_MIN_Y,
     STATIC_OFFSET_UV_MAX_X,
     STATIC_OFFSET_UV_MAX_Y,
-} from '../core/constants';
+} from '../../../../core/constants';
 
 function createAccessor(slot = 0, sheetId = 0) {
     const dynamicData = new Float32Array(DYNAMIC_FLOATS_PER_SPRITE * 4);

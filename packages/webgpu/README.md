@@ -69,7 +69,7 @@ await assets.load();
 const renderer = new WebGPU2DRenderer(canvas, { assets, maxInstances: 10000 });
 await renderer.init();
 
-const player = renderer.addSprite({
+const player = renderer.sprites.add({
   sheet: assets.prefabs.get('characters'),
   sprite: 0,
   position: [400, 300],
@@ -77,6 +77,8 @@ const player = renderer.addSprite({
 player.x = 500; // Direct buffer writes
 renderer.render(alpha);
 ```
+
+`renderer.sprites` is a collection manager (`get`, `has`, `each`, `remove`, `clear`, `capacity`, `count`, `events`); sprites carry a versioned `id` and an `alive` flag, and `sprite.destroy()` is idempotent. `renderer.sheets`, `renderer.geometry`, and `renderer.compute` are the other 2D managers.
 </details>
 
 <details>
@@ -160,8 +162,8 @@ Types: `MaterialSpec` (`EngineMaterialSpec | ShaderMaterialSpec`), `MaterialHand
 ```typescript
 import { d, std } from 'murow/webgpu';
 
-const geom = renderer
-  .createGeometry('starfield', { maxInstances: 1000, geometry: 'quad' })
+const geom = renderer.geometry
+  .create('starfield', { maxInstances: 1000, geometry: 'quad' })
   .instanceLayout({
     dynamic: { position: d.vec2f },
     static: { speed: d.f32, phase: d.f32 },
@@ -200,8 +202,8 @@ import { d, std } from 'murow/webgpu';
 
 const Particle = d.struct({ posX: d.f32, posY: d.f32, velX: d.f32, velY: d.f32 });
 
-const compute = renderer
-  .createCompute('physics', { workgroupSize: 256 })
+const compute = renderer.compute
+  .create('physics', { workgroupSize: 256 })
   .buffers({
     particles: { storage: d.arrayOf(Particle, 10000), readwrite: true },
     config: { uniform: d.struct({ deltaTime: d.f32, gravity: d.f32 }) },
@@ -213,8 +215,8 @@ const compute = renderer
   })
   .build();
 
-const render = renderer
-  .createGeometry('particles', { maxInstances: 10000, geometry: 'quad' })
+const render = renderer.geometry
+  .create('particles', { maxInstances: 10000, geometry: 'quad' })
   .instanceLayout({ dynamic: { posX: d.f32, posY: d.f32, velX: d.f32, velY: d.f32 } })
   .fromCompute(compute, 'particles') // Zero-copy binding
   .build();
@@ -234,7 +236,7 @@ spritesheet helpers) live in [`murow`](../murow/src/renderer) and are imported
 from `'murow'`.
 
 ### Renderers
-- [`WebGPU2DRenderer`](./src/2d/renderer.ts) — Sprite renderer with batching and interpolation
+- [`WebGPU2DRenderer`](./src/2d/renderer/renderer.ts) — Sprite renderer with batching and interpolation
 - [`WebGPU3DRenderer`](./src/3d/renderer/renderer.ts) — Mesh renderer with glTF, skinning, frustum culling
 
 ### Geometry & Compute
@@ -262,11 +264,11 @@ from `'murow'`.
 
 ### Animation
 - [`MorphAnimation`](./src/3d/morph-animation/morph-animation.ts) — Morph target animation (GPU buffer write path)
-- [`AnimationController`](./src/2d/animation.ts) — 2D spritesheet animation
+- [`AnimationController`](./src/2d/renderer/internals/animation/animation.ts) — 2D spritesheet animation
 - `SkeletalAnimation` lives in [`murow`](../murow/src/renderer/gltf) — CPU-side bone evaluation, renderer-agnostic
 
 ### Utilities
-- [`SpriteAccessor`](./src/2d/sprite-accessor.ts) — Direct buffer access for sprites
+- [`SpriteAccessor`](./src/2d/renderer/managers/sprites/sprite-accessor.ts) — Direct buffer access for sprites
 - [`ParticleEmitter`](./src/particle/emitter.ts) — CPU 2D particle system
 - [`ParticleSystem3D`](./src/3d/renderer/managers/particles/particle-system-3d.ts) — GPU-first 3D particles (`renderer.particles`)
 - [`Spritesheet`](./src/spritesheet/spritesheet.ts) — GPU-bound texture atlas (built from a parsed bucket prefab)

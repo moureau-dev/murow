@@ -25,18 +25,21 @@ import {
     STATIC_OFFSET_UV_MAX_Y,
     STATIC_OFFSET_UV_MIN_X,
     STATIC_OFFSET_UV_MIN_Y,
-} from "../core/constants";
+} from "../../../../core/constants";
 import type { SpriteHandle } from "murow/renderer";
+import type { HandleBase } from "murow/renderer/collection";
+import type { SpriteId } from "../../ids";
 
-export class SpriteAccessor implements SpriteHandle {
+export class SpriteAccessor implements SpriteHandle, HandleBase<SpriteId> {
     private dynamicData: Float32Array;
     private staticData: Float32Array;
     private dynamicBase: number;
     private staticBase: number;
-    private _id: number;
+    private _id: SpriteId;
     private _slot: number;
     private _sheetId: number;
     private _onStaticDirty: () => void;
+    private _alive = true;
 
     constructor(
         dynamicData: Float32Array,
@@ -48,7 +51,7 @@ export class SpriteAccessor implements SpriteHandle {
     ) {
         this.dynamicData = dynamicData;
         this.staticData = staticData;
-        this._id = id;
+        this._id = id as SpriteId;
         this._slot = slot;
         this._sheetId = sheetId;
         this.dynamicBase = slot * DYNAMIC_FLOATS_PER_SPRITE;
@@ -56,9 +59,17 @@ export class SpriteAccessor implements SpriteHandle {
         this._onStaticDirty = onStaticDirty;
     }
 
-    get id(): number { return this._id; }
+    get id(): SpriteId { return this._id; }
     get slot(): number { return this._slot; }
     get sheetId(): number { return this._sheetId; }
+
+    /** False after the manager frees this sprite's slot. */
+    get alive(): boolean { return this._alive; }
+
+    /** Idempotent. Returns the slot to the pool through the owning manager. */
+    destroy(): void {
+        this._alive = false;
+    }
 
     // --- Dynamic properties (updated every tick) ---
 

@@ -23,8 +23,9 @@
  */
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotSet } from 'murow/core/slot-map';
-import type { SpriteHandle, SpritesheetHandle } from 'murow/renderer';
+import type { SpritesheetHandle } from 'murow/renderer';
 import type { WebGPU2DRenderer } from '../2d/renderer';
+import type { SpriteAccessor } from '../2d/renderer';
 
 export interface Range {
     min: number;
@@ -50,7 +51,7 @@ export class ParticleEmitter {
     private config: ParticleEmitterConfig;
 
     // Pre-allocated particle state arrays (zero-GC)
-    private sprites: (SpriteHandle | null)[];
+    private sprites: (SpriteAccessor | null)[];
     private lifetimes: Float32Array;
     private maxLifetimes: Float32Array;
     private velocitiesX: Float32Array;
@@ -80,7 +81,7 @@ export class ParticleEmitter {
 
             // If this slot is occupied, remove the old particle
             if (this.sprites[idx] !== null) {
-                this.renderer.removeSprite(this.sprites[idx]!);
+                this.sprites[idx]!.destroy();
                 this.sprites[idx] = null;
                 this.active.remove(idx);
             }
@@ -99,7 +100,7 @@ export class ParticleEmitter {
 
             // Create sprite in the renderer
             if (this.config.sheet) {
-                const sprite = this.renderer.addSprite({
+                const sprite = this.renderer.sprites.add({
                     sheet: this.config.sheet,
                     sprite: this.config.sprite ?? 0,
                     position: [x, y],
@@ -108,8 +109,10 @@ export class ParticleEmitter {
                     tint: this.config.color,
                     layer: 255, // particles on top
                 });
-                this.sprites[idx] = sprite;
-                this.active.add(idx);
+                if (sprite) {
+                    this.sprites[idx] = sprite;
+                    this.active.add(idx);
+                }
             }
         }
     }
@@ -131,7 +134,7 @@ export class ParticleEmitter {
 
             this.lifetimes[idx] -= deltaTime;
             if (this.lifetimes[idx] <= 0) {
-                this.renderer.removeSprite(sprite);
+                sprite.destroy();
                 this.sprites[idx] = null;
                 active.remove(idx);
                 continue;
@@ -160,7 +163,7 @@ export class ParticleEmitter {
             const idx = dense[i]!;
             const sprite = this.sprites[idx];
             if (sprite !== null) {
-                this.renderer.removeSprite(sprite);
+                sprite.destroy();
                 this.sprites[idx] = null;
             }
         }

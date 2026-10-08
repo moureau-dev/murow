@@ -5,8 +5,8 @@
  *
  * Usage:
  * ```ts
- * const physics = renderer
- *     .createCompute('particle-physics', { workgroupSize: 64 })
+ * const physics = renderer.compute
+ *     .create('particle-physics', { workgroupSize: 64 })
  *     .buffers({
  *         particles: { storage: d.arrayOf(ParticleStruct, MAX), readwrite: true },
  *         config: { uniform: ConfigStruct },

@@ -3042,9 +3042,9 @@ renderer.camera.screenToWorld(sx, sy);   // [wx, wy]
 // Sprite-sheet from the AssetBucket:
 const sheet = assets.prefabs.get('characters');
 // Or directly (no bucket):
-const sheet2 = await renderer.loadSpritesheet({ image: '/sprites.png', frameWidth: 32, frameHeight: 32 });
+const sheet2 = await renderer.sheets.load({ image: '/sprites.png', frameWidth: 32, frameHeight: 32 });
 
-const sprite = renderer.addSprite({
+const sprite = renderer.sprites.add({
   sheet,
   sprite: 0,                     // frame index
   position: [100, 200],
@@ -3052,7 +3052,7 @@ const sprite = renderer.addSprite({
   layer: 0,                      // optional, for back-to-front draw order
 });
 
-// addSprite returns a SpriteHandle (a SpriteAccessor at runtime). Transform,
+// sprites.add returns a SpriteHandle (a SpriteAccessor at runtime). Transform,
 // opacity, layer, and flip are PROPERTIES (assign directly); tint is a method.
 sprite.x = 150;                  // direct property assignment — picked up next render
 sprite.y = 200;
@@ -3064,12 +3064,14 @@ sprite.flipX = true;             // properties, not setFlip()
 sprite.flipY = false;
 sprite.layer = 2;
 sprite.setTint(1, 0, 0, 1);      // setTint IS a method (r, g, b, a=1)
-renderer.removeSprite(sprite);   // no sprite.destroy() — remove via the renderer
+sprite.destroy();                // or renderer.sprites.remove(sprite.id)
 
 renderer.storePreviousState();   // call in 'pre-tick' for GPU lerp
 renderer.render(alpha);
 renderer.onResize((w, h) => { /* ... */ });
 ```
+
+`renderer.sprites` is a collection manager: `get(id)`, `has(id)`, `each(cb)`, `remove(id)`, `clear()`, `capacity`, `count`, and an `events` system. Sprites carry a versioned `id` and an `alive` flag; `sprite.destroy()` is idempotent and frees the slot. `renderer.sheets`, `renderer.geometry`, and `renderer.compute` are the other 2D managers.
 
 ### 3D — `WebGPU3DRenderer`
 
@@ -3094,7 +3096,7 @@ interface MeshInstanceOptions {
   color?: readonly [r: number, g: number, b: number];   // flat RGB tint, SET-AT-SPAWN ONLY — there is no setColor on the handle
 }
 
-**Version note (0.1.8): `color` vs `tint`.** The 3D instance option is `color: [r, g, b]` — 3 components, RGB, set at spawn only. `tint` is the **2D sprite** option: `addSprite({ tint: [r, g, b, a] })` (4 components), plus the live `SpriteHandle.setTint(r, g, b, a)` method. Do not mix them — `instances.add({ tint: [...] })` and `addSprite({ color: [...] })` do not exist in 0.1.8. If you see 4-component `tint` passed to a 3D `instances.add`, that code is mixing the 2D API into 3D and the tint will be silently ignored (and won't type-check in TS).
+**Version note (0.1.8): `color` vs `tint`.** The 3D instance option is `color: [r, g, b]` — 3 components, RGB, set at spawn only. `tint` is the **2D sprite** option: `renderer.sprites.add({ tint: [r, g, b, a] })` (4 components), plus the live `SpriteHandle.setTint(r, g, b, a)` method. Do not mix them — `instances.add({ tint: [...] })` and `renderer.sprites.add({ color: [...] })` do not exist in 0.1.8. If you see 4-component `tint` passed to a 3D `instances.add`, that code is mixing the 2D API into 3D and the tint will be silently ignored (and won't type-check in TS).
 
 const renderer = new WebGPU3DRenderer(canvas, {
   assets,
@@ -3395,8 +3397,8 @@ class ComputeKernel<TBuffers> {
 Usage:
 
 ```ts
-const compute = renderer
-  .createCompute('particle-physics', { workgroupSize: 256 })
+const compute = renderer.compute
+  .create('particle-physics', { workgroupSize: 256 })
   .buffers({
     particles: { storage: d.arrayOf(Particle, 10_000), readwrite: true },
     config:    { uniform: d.struct({ deltaTime: d.f32, gravity: d.f32, count: d.u32 }) },
@@ -3467,8 +3469,8 @@ class InstanceContext<TDynamic, TStatic> {
 Usage:
 
 ```ts
-const render = renderer
-  .createGeometry('particle-vis', { maxInstances: 10_000, geometry: 'quad' })
+const render = renderer.geometry
+  .create('particle-vis', { maxInstances: 10_000, geometry: 'quad' })
   .instanceLayout({
     dynamic: { posX: d.f32, posY: d.f32, life: d.f32 },   // updated per frame
     static:  { hue:  d.f32 },                              // set once

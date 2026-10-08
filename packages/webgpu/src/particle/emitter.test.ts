@@ -4,19 +4,23 @@ import type { WebGPU2DRenderer } from '../2d/renderer';
 import type { SpritesheetHandle } from 'murow/renderer';
 
 class MockRenderer {
-    readonly sprites = new Set<{ x: number; y: number; opacity: number }>();
+    readonly live = new Set<{ x: number; y: number; opacity: number }>();
     added = 0;
     removed = 0;
-    addSprite(_opts: unknown) {
-        const s = { x: 0, y: 0, opacity: 1 };
-        this.sprites.add(s);
-        this.added++;
-        return s;
-    }
-    removeSprite(s: { x: number; y: number; opacity: number }) {
-        this.sprites.delete(s);
-        this.removed++;
-    }
+    readonly sprites = {
+        add: (_opts: unknown) => {
+            const s = {
+                x: 0, y: 0, opacity: 1,
+                destroy: () => {
+                    this.live.delete(s);
+                    this.removed++;
+                },
+            };
+            this.live.add(s);
+            this.added++;
+            return s;
+        },
+    };
 }
 
 const sheet = {} as SpritesheetHandle;

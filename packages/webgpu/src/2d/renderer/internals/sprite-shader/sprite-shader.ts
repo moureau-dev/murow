@@ -6,9 +6,9 @@
  *
  * NOTE: TGSL bodies must use `function` syntax, not arrow functions.
  */
-import { tgpu, d, std } from '../shaders/typegpu';
-import { DynamicSprite, StaticSprite, SpriteUniforms } from '../core/types';
-import { attachShaderMetadata } from '../shaders/runtime-transpile';
+import { tgpu, d, std } from '../../../../shaders/typegpu';
+import { DynamicSprite, StaticSprite, SpriteUniforms } from '../../../../core/types';
+import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
 
 // --- Bind group layouts ---
 

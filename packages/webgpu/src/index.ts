@@ -16,9 +16,22 @@ export { d, std } from './shaders/typegpu';
 // 2D Renderer
 export { WebGPU2DRenderer } from './2d/renderer';
 export type { WebGPU2DRendererOptions } from './2d/renderer';
-export { SpriteAccessor } from './2d/sprite-accessor';
-export { AnimationController } from './2d/animation';
-export type { AnimationClip, AnimationState, AnimationClipConfig } from './2d/animation';
+export {
+    Renderer2DCore,
+    SpriteManager,
+    SpriteAccessor,
+    SpritesheetManager,
+    GeometryManager,
+    ComputeManager,
+    CameraManager2D,
+    RaycastController2D,
+    WebGPURaycast2D,
+    WebGPURaycastMemo2D,
+} from './2d/renderer';
+export type { SpriteAddOptions, SpriteBatch, RaycastState2D } from './2d/renderer';
+export type { SpriteId, SheetId } from './2d/renderer';
+export { AnimationController } from './2d/renderer/internals/animation';
+export type { AnimationClip, AnimationState, AnimationClipConfig } from './2d/renderer/internals/animation';
 
 // 3D Renderer
 export { WebGPU3DRenderer } from './3d/renderer';
