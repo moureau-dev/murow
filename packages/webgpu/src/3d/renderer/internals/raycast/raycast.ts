@@ -3,10 +3,12 @@ import { HitBuffer, type BufferedHit } from 'murow/core/raycast';
 import {
     Raycast,
     RaycastMemo,
+    type RaycastCastOptions,
     type RaycastHit,
     type RaycastOptions,
 } from 'murow/renderer';
 
+import type { Camera3D } from '../../../../camera/camera-3d';
 import type { MeshInstanceHandle } from '../../types';
 import type { RaycastController } from './raycast-controller';
 
@@ -16,13 +18,18 @@ type Opts = RaycastOptions<MeshInstanceHandle>;
 
 export type RaycastState = HitBuffer<MeshInstanceHandle, Point>;
 
-export class WebGPURaycast3D extends Raycast<MeshInstanceHandle, Point> {
+export class WebGPURaycast3D extends Raycast<MeshInstanceHandle, Point, Camera3D> {
     readonly state: RaycastState = new HitBuffer<MeshInstanceHandle, Point>(3);
 
     private resultBuffer: BufferedHit<MeshInstanceHandle, Point>[] = [];
+    private readonly castState: RaycastState = new HitBuffer<MeshInstanceHandle, Point>(3);
+    private castResult: BufferedHit<MeshInstanceHandle, Point>[] = [];
     private readonly memos: WebGPURaycastMemo3D[] = [];
 
-    constructor(private readonly controller: RaycastController) { super(); }
+    constructor(
+        private readonly controller: RaycastController,
+        private readonly canvas: HTMLCanvasElement,
+    ) { super(); }
 
     update(input: InputSnapshot): void {
         this.state.reset();
@@ -46,6 +53,18 @@ export class WebGPURaycast3D extends Raycast<MeshInstanceHandle, Point> {
     hitAll(opts?: Opts): readonly Hit[] {
         this.state.collectInto(this.resultBuffer, opts?.filter, opts?.maxDistance ?? Infinity);
         return this.resultBuffer;
+    }
+
+    cast(opts: RaycastCastOptions<MeshInstanceHandle, Camera3D> & { filter: (handle: MeshInstanceHandle) => boolean }): Hit | null;
+    cast(opts?: RaycastCastOptions<MeshInstanceHandle, Camera3D>): readonly Hit[];
+    cast(opts?: RaycastCastOptions<MeshInstanceHandle, Camera3D>): Hit | null | readonly Hit[] {
+        const x = opts?.screen ? opts.screen[0] : this.canvas.clientWidth / 2;
+        const y = opts?.screen ? opts.screen[1] : this.canvas.clientHeight / 2;
+        this.castState.reset();
+        this.controller.collect(x, y, this.castState, opts?.camera);
+        if (opts?.filter) return this.castState.nearest(opts.filter, opts.maxDistance ?? Infinity);
+        this.castState.collectInto(this.castResult, undefined, opts?.maxDistance ?? Infinity);
+        return this.castResult;
     }
 
     memo(opts: Opts): WebGPURaycastMemo3D {

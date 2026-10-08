@@ -1231,6 +1231,13 @@ if (hit) {
 }
 renderer.raycast.hitAll();           // all hits, nearest first (reused array)
 const memo = renderer.raycast.memo({ filter });  // retained query, lazily recomputed on update()
+
+// Stateless pick -- no update()/state needed. `screen` defaults to the canvas
+// center (reticle) and `camera` to the renderer's camera.
+// With `filter` -> one nearest hit (or null); without -> all hits, nearest first.
+const hit = renderer.raycast.cast({ filter });                    // RaycastHit | null
+const all = renderer.raycast.cast();                              // RaycastHit[]
+const at  = renderer.raycast.cast({ screen: [sx, sy], camera });  // explicit point / viewport
 ```
 
 Prefabs **without** a hitbox fall back to the model's axis-aligned bounding box (3D) or the sprite's rendered quad (2D) — picking still works, just coarser. Returned hit objects are pool-backed and valid only until the next `update()`; copy what you keep, or use `memo`.

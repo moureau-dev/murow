@@ -34,8 +34,8 @@ type Point = [number, number];
 export class RaycastController2D {
     constructor(private readonly target: RaycastTarget2D) {}
 
-    collect(screenX: number, screenY: number, sink: RaycastSink2D): void {
-        const [wx, wy] = this.target.camera.screenToWorld(screenX, screenY);
+    collect(screenX: number, screenY: number, sink: RaycastSink2D, camera: Camera2D = this.target.camera): void {
+        const [wx, wy] = camera.screenToWorld(screenX, screenY);
 
         this.target.eachSprite((handle) => {
             const hb = this.target.resolveHitbox(handle);

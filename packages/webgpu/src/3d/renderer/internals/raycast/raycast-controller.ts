@@ -40,8 +40,7 @@ export interface RaycastTarget {
 export class RaycastController {
     constructor(private readonly target: RaycastTarget) {}
 
-    collect(screenX: number, screenY: number, sink: RaycastSink): void {
-        const camera = this.target.camera;
+    collect(screenX: number, screenY: number, sink: RaycastSink, camera: Camera3D = this.target.camera): void {
         const ray = camera.screenToRay(screenX, screenY);
         const ox = ray.origin[0], oy = ray.origin[1], oz = ray.origin[2];
         const dx = ray.direction[0], dy = ray.direction[1], dz = ray.direction[2];

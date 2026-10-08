@@ -224,7 +224,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
             camera: this.camera,
             eachSprite: this.sprites.eachSprite.bind(this.sprites),
             resolveHitbox: this.sprites.resolveHitbox.bind(this.sprites),
-        }));
+        }), this.canvas);
 
         this.setupResizeObserver();
         this._initialized = true;

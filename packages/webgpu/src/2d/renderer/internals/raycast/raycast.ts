@@ -3,11 +3,13 @@ import { HitBuffer, type BufferedHit } from 'murow/core/raycast';
 import {
     Raycast,
     RaycastMemo,
+    type RaycastCastOptions,
     type RaycastHit,
     type RaycastOptions,
 } from 'murow/renderer';
 
 import type { SpriteHandle } from 'murow/renderer';
+import type { Camera2D } from '../../../../camera/camera-2d';
 import type { RaycastController2D } from './raycast-controller';
 
 type Point = [number, number];
@@ -16,13 +18,18 @@ type Opts = RaycastOptions<SpriteHandle>;
 
 export type RaycastState2D = HitBuffer<SpriteHandle, Point>;
 
-export class WebGPURaycast2D extends Raycast<SpriteHandle, Point> {
+export class WebGPURaycast2D extends Raycast<SpriteHandle, Point, Camera2D> {
     readonly state: RaycastState2D = new HitBuffer<SpriteHandle, Point>(2);
 
     private resultBuffer: BufferedHit<SpriteHandle, Point>[] = [];
+    private readonly castState: RaycastState2D = new HitBuffer<SpriteHandle, Point>(2);
+    private castResult: BufferedHit<SpriteHandle, Point>[] = [];
     private readonly memos: WebGPURaycastMemo2D[] = [];
 
-    constructor(private readonly controller: RaycastController2D) { super(); }
+    constructor(
+        private readonly controller: RaycastController2D,
+        private readonly canvas: HTMLCanvasElement,
+    ) { super(); }
 
     update(input: InputSnapshot): void {
         this.state.reset();
@@ -46,6 +53,18 @@ export class WebGPURaycast2D extends Raycast<SpriteHandle, Point> {
     hitAll(opts?: Opts): readonly Hit[] {
         this.state.collectInto(this.resultBuffer, opts?.filter, opts?.maxDistance ?? Infinity);
         return this.resultBuffer;
+    }
+
+    cast(opts: RaycastCastOptions<SpriteHandle, Camera2D> & { filter: (handle: SpriteHandle) => boolean }): Hit | null;
+    cast(opts?: RaycastCastOptions<SpriteHandle, Camera2D>): readonly Hit[];
+    cast(opts?: RaycastCastOptions<SpriteHandle, Camera2D>): Hit | null | readonly Hit[] {
+        const x = opts?.screen ? opts.screen[0] : this.canvas.clientWidth / 2;
+        const y = opts?.screen ? opts.screen[1] : this.canvas.clientHeight / 2;
+        this.castState.reset();
+        this.controller.collect(x, y, this.castState, opts?.camera);
+        if (opts?.filter) return this.castState.nearest(opts.filter, opts.maxDistance ?? Infinity);
+        this.castState.collectInto(this.castResult, undefined, opts?.maxDistance ?? Infinity);
+        return this.castResult;
     }
 
     memo(opts: Opts): WebGPURaycastMemo2D {

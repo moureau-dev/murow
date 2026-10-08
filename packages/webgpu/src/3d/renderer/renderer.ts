@@ -380,7 +380,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             camera: this.camera,
             eachInstance: this.instances.eachInstance.bind(this.instances),
             resolveHitbox: this.instances.resolveHitbox.bind(this.instances),
-        }));
+        }), this.canvas);
         this.shadows = new ShadowManager({
             directional: shadowSystem,
             spot: spotShadowSystem,
