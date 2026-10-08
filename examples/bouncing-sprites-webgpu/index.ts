@@ -40,7 +40,7 @@ const AMOUNT_OF_ENTITIES = 60_000;
 
 /**
  * Generate a 64x32 spritesheet with a green and red circle.
- * Returns a blob URL that loadSpritesheet can fetch.
+ * Returns a blob URL that sheets.load can fetch.
  */
 function createCircleSpritesheet(): Promise<string> {
     const canvas = document.createElement('canvas');
@@ -91,7 +91,7 @@ class WebGPUSpriteRenderer {
         this.gpu.camera.y = HEIGHT / 2;
 
         const sheetUrl = await createCircleSpritesheet();
-        this.sheet = await this.gpu.loadSpritesheet({
+        this.sheet = await this.gpu.sheets.load({
             image: sheetUrl,
             frameWidth: 32,
             frameHeight: 32,
@@ -118,7 +118,7 @@ class WebGPUSpriteRenderer {
             if (!handle) {
                 const spriteData = world.get(eid, Components.Sprite);
                 const pos = world.get(eid, Components.Position);
-                handle = this.gpu.addSprite({
+                handle = this.gpu.sprites.add({
                     sheet: this.sheet,
                     sprite: spriteData.textureId,
                     position: [pos.x, pos.y],
@@ -142,7 +142,7 @@ class WebGPUSpriteRenderer {
             const eid = despawned[i];
             const handle = this.handles[eid];
             if (handle !== null) {
-                this.gpu.removeSprite(handle);
+                handle.destroy();
                 this.handles[eid] = null;
             }
         }

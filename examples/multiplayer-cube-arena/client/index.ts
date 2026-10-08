@@ -62,8 +62,8 @@ const renderer = new WebGPU3DRenderer(canvas, {
 await renderer.init();
 
 // Static grid floor — never moves, no per-tick update needed.
-renderer.addInstance({
-    model: assets.prefabs.get('floor'),
+renderer.instances.add({
+    prefab: assets.prefabs.get('floor'),
     color: [0.2, 0.25, 0.35],
     position: [0, 0, 0],
 });
@@ -110,8 +110,8 @@ let localEntity: Entity | null = null;
 client.on('spawn', ({ entity }) => {
     const c = arena.world.has(entity, Components.Color) ? arena.world.get(entity, Components.Color) : { r: 200, g: 200, b: 200 };
     const p = arena.world.has(entity, Components.Position) ? arena.world.get(entity, Components.Position) : { x: 0, z: 0 };
-    const handle = renderer.addInstance({
-        model: assets.prefabs.get('player'),
+    const handle = renderer.instances.add({
+        prefab: assets.prefabs.get('player'),
         color: [c.r / 255, c.g / 255, c.b / 255],
         position: [p.x, 0.45, p.z],
     });

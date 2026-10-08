@@ -1,19 +1,17 @@
 import { defineConfig } from 'vite';
 import path from 'path';
-import typegpu from 'unplugin-typegpu/vite';
 
 /**
- * Vite is used for the client bundle because the WebGPU renderer relies on
- * `unplugin-typegpu` to embed shader-function metadata at build time. Bun's
- * bundler doesn't run TypeGPU's transform, so attempting to use it produces
- * a `Missing metadata for tgpu.fn` ResolutionError at runtime.
+ * Vite is used for the client bundle. Shader metadata is recovered at runtime
+ * (the renderer transpiles declarative shader functions), so no
+ * `unplugin-typegpu` build step is required.
  *
  * The Bun server (`server/index.ts`) is unaffected — it never touches the
  * WebGPU renderer and is run directly via `bun run server`.
  */
 export default defineConfig({
     root: path.resolve(__dirname, 'client'),
-    plugins: [typegpu({})],
+    plugins: [],
     resolve: {
         alias: {
             // Specific subpaths first — Vite matches in order, so these

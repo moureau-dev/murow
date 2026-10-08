@@ -41,7 +41,7 @@ export const gpuParticles: Program = {
 
         // --- Compute: update particles on GPU ---
         const compute = renderer
-            .createCompute('particle-physics', { workgroupSize: 256 })
+            .compute.create('particle-physics', { workgroupSize: 256 })
             .buffers({
                 particles: { storage: d.arrayOf(Particle, maxParticles), readwrite: true },
                 config: { uniform: Config },

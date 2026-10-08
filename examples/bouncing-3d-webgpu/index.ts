@@ -6,7 +6,7 @@ import {
     lerp,
     type InputSnapshot,
 } from 'murow';
-import { WebGPU3DRenderer, type InstanceHandle, type MeshInstanceHandle } from 'murow/webgpu';
+import { WebGPU3DRenderer, type InstanceHandle } from 'murow/webgpu';
 
 // --- Components ---
 
@@ -78,7 +78,7 @@ class WebGPU3DWrapper {
         this.gpu.camera.far = 3000;
 
         // Load Suzanne from Khronos glTF samples
-        const suzanneModel = await this.gpu.loadGltf(
+        const suzanneModel = await this.gpu.models.loadGltf(
           'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Suzanne/glTF/Suzanne.gltf',
         );
 
@@ -106,7 +106,7 @@ class WebGPU3DWrapper {
                     [0.2, 0.2, 1.0], // blue suzanne
                 ];
 
-                handle = this.gpu.addInstance({
+                handle = this.gpu.instances.add({
                     model,
                     position: [pos.x, pos.y, pos.z],
                     rotation: [rot.x, rot.y, rot.z],
@@ -136,9 +136,7 @@ class WebGPU3DWrapper {
             const eid = despawned[i];
             const handle = this.handles[eid];
             if (handle !== null) {
-                // addInstance returns the public InstanceHandle but for single-part models
-                // it is actually a MeshInstanceHandle internally (which removeInstance needs).
-                this.gpu.removeInstance(handle as MeshInstanceHandle);
+                handle.destroy();
                 this.handles[eid] = null;
             }
         }
