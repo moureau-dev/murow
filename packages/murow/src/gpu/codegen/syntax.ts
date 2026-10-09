@@ -10,7 +10,7 @@
  * bound resource and describe how it is accessed, independently of the target.
  */
 import type { GpuScalar, GpuType, StructType } from '../types';
-import type { IrBinding, IrEntry, IrStage } from '../ir/nodes';
+import type { IrBinding, IrEntry, IrOutput, IrStage } from '../ir/nodes';
 
 /** How a bound resource is addressed in the emitted source. */
 export type BindingKind = 'uniform' | 'storage' | 'texture' | 'sampler';
@@ -52,9 +52,24 @@ export interface TargetSyntax {
     /**
      * Attributes plus the function head for an entry, for example
      * `@fragment\nfn fs_main(...)`. The return type is appended separately via
-     * {@link TargetSyntax.returnType}.
+     * {@link TargetSyntax.returnType}, unless `outputStruct` is given, in which
+     * case the head ends with `-> <outputStruct>`.
      */
-    entrySignature(entry: IrEntry, params: readonly string[], name: string): string;
+    entrySignature(
+        entry: IrEntry,
+        params: readonly string[],
+        name: string,
+        outputStruct?: string,
+    ): string;
+
+    /** Name of the vertex output struct. */
+    outputStructName(entry: IrEntry): string;
+
+    /** Declaration of a vertex output struct. */
+    outputStructDecl(entry: IrEntry): string;
+
+    /** One field of a vertex output struct, without a trailing separator. */
+    outputField(output: IrOutput): string;
 
     /** Declaration of a bound resource, given its resolved role. */
     declareBinding(

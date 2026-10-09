@@ -169,12 +169,25 @@ export interface IrParam {
     readonly location: number;
 }
 
-/** A compiled entry point: a stage, its inputs, and its body. */
+/**
+ * One field of a vertex output struct. Exactly one of `builtin` or `location`
+ * is set: `builtin` names a stage builtin (for example `position`), `location`
+ * is the varying slot.
+ */
+export interface IrOutput {
+    readonly name: string;
+    readonly type: GpuType;
+    readonly builtin?: string;
+    readonly location?: number;
+}
+
+/** A compiled entry point: a stage, its inputs, outputs, and its body. */
 export interface IrEntry {
     readonly stage: IrStage;
     readonly params: readonly IrParam[];
     readonly body: readonly IrStmt[];
     readonly workgroupSize?: readonly [number, number, number];
+    readonly outputs?: readonly IrOutput[];
 }
 
 export function isExpr(node: IrExpr | IrStmt): node is IrExpr {

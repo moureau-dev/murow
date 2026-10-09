@@ -5,7 +5,8 @@ pluggable target syntax, with public extension points so a backend customises
 behavior without forking.
 
 - `syntax.ts` - `TargetSyntax`: every target-specific string the walker needs,
-  plus the semantic `BindingKind` and `StorageAccess` types.
+  plus the semantic `BindingKind` and `StorageAccess` types. Includes the vertex
+  output struct hooks (`outputStructName`, `outputStructDecl`, `outputField`).
 - `backend.ts` - `Backend` interface: capabilities, passes, emit hooks; and
   `BaseBackend`, which implements the walker once and routes all target text
   through `this.syntax`.

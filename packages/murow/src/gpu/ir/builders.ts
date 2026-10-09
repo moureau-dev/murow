@@ -24,6 +24,7 @@ import type {
     IrLiteral,
     IrLocal,
     IrLoop,
+    IrOutput,
     IrParam,
     IrReturn,
     IrSample,
@@ -40,6 +41,7 @@ export interface EntryOptions {
     readonly params: readonly IrParam[];
     readonly body: readonly IrStmt[];
     readonly workgroupSize?: readonly [number, number, number];
+    readonly outputs?: readonly IrOutput[];
 }
 
 /** Constant literal. */
@@ -161,6 +163,20 @@ export function param(name: string, type: GpuType, location: number): IrParam {
     return { name, type, location };
 }
 
+/** Vertex output field, bound to a builtin or a location. */
+export function output(
+    name: string,
+    type: GpuType,
+    opts: { builtin?: string; location?: number },
+): IrOutput {
+    return {
+        name,
+        type,
+        ...(opts.builtin !== undefined ? { builtin: opts.builtin } : {}),
+        ...(opts.location !== undefined ? { location: opts.location } : {}),
+    };
+}
+
 /** Entry point. */
 export function entry(options: EntryOptions): IrEntry {
     return {
@@ -168,5 +184,6 @@ export function entry(options: EntryOptions): IrEntry {
         params: [...options.params],
         body: [...options.body],
         ...(options.workgroupSize ? { workgroupSize: options.workgroupSize } : {}),
+        ...(options.outputs ? { outputs: [...options.outputs] } : {}),
     };
 }

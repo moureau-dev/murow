@@ -6,7 +6,7 @@
  * backend lives in `murow/webgpu`.
  */
 import type { GpuScalar, GpuType, StructType } from '../types';
-import type { IrBinding, IrEntry, IrStage } from '../ir/nodes';
+import type { IrBinding, IrEntry, IrOutput, IrStage } from '../ir/nodes';
 import {
     ALL_CAPABILITIES,
     BaseBackend,
@@ -85,12 +85,40 @@ export class TestWgslSyntax implements TargetSyntax {
     }
 
     /** WGSL entry attribute plus function head. */
-    entrySignature(entry: IrEntry, params: readonly string[], name: string): string {
+    entrySignature(
+        entry: IrEntry,
+        params: readonly string[],
+        name: string,
+        outputStruct?: string,
+    ): string {
         const attribute =
             entry.stage === 'compute'
                 ? `@compute @workgroup_size(${(entry.workgroupSize ?? [1, 1, 1]).join(', ')})`
                 : `@${entry.stage}`;
-        return `${attribute}\nfn ${name}(${params.join(', ')})`;
+        const returns = outputStruct ? ` -> ${outputStruct}` : '';
+        return `${attribute}\nfn ${name}(${params.join(', ')})${returns}`;
+    }
+
+    /** WGSL vertex output struct name. */
+    outputStructName(_entry: IrEntry): string {
+        return 'vs_out';
+    }
+
+    /** WGSL vertex output struct declaration. */
+    outputStructDecl(entry: IrEntry): string {
+        const fields = (entry.outputs ?? [])
+            .map((field) => `    ${this.outputField(field)},`)
+            .join('\n');
+        return `struct ${this.outputStructName(entry)} {\n${fields}\n}`;
+    }
+
+    /** WGSL field of a vertex output struct. */
+    outputField(output: IrOutput): string {
+        const attribute =
+            output.builtin !== undefined
+                ? this.builtin(output.builtin)
+                : `@location(${output.location ?? 0})`;
+        return `${attribute} ${output.name}: ${wgslType(output.type)}`;
     }
 
     /** WGSL resource declaration. */

@@ -54,6 +54,14 @@ export interface ParseShaderOptions {
     readonly params?: Record<string, GpuType>;
     readonly material?: Record<string, GpuType>;
     readonly workgroupSize?: readonly [number, number, number];
+    /**
+     * Extra named symbols the body may reference, resolved as bare identifiers.
+     * A backend registers its environment here (layouts, scene uniforms, engine
+     * helpers) so the parser stays target- and engine-agnostic. Members are
+     * resolved by property access on the value, so a layout object can expose
+     * `.$.name` accessors that yield IR.
+     */
+    readonly externals?: Record<string, unknown>;
 }
 
 interface Token {
@@ -455,6 +463,8 @@ class Parser {
             }
             const known = this.locals[token.value];
             if (known) return known;
+            const external = this.options.externals?.[token.value];
+            if (external !== undefined) return external;
             throw this.error(`unknown identifier '${token.value}'`, token);
         }
         throw this.error('unexpected token', token);
@@ -477,6 +487,11 @@ class Parser {
             // std namespace: a callable intrinsic.
             return { __intrinsic: name };
         }
+        // External object member access (for example a layout's `.$.uniforms`).
+        if (isObject(base) && !isExprLike(base)) {
+            const value = (base as Record<string, unknown>)[name];
+            if (value !== undefined) return value;
+        }
         const expr = this.exprOf(base);
         if (SWIZZLE.test(name)) return swizzle(expr, name);
         return access(fieldType(expr.type, name), expr, name);
@@ -498,7 +513,8 @@ class Parser {
             return cast(type, args[0]!);
         }
         if (isIntrinsic(callee)) return intrinsic(callee.__intrinsic, args);
-        throw this.error('only std/d namespace calls are supported');
+        if (typeof callee === 'function') return (callee as (...a: IrExpr[]) => unknown)(...args);
+        throw this.error('only std/d namespace calls and external functions are supported');
     }
 
     // --- helpers -----------------------------------------------------------
@@ -551,6 +567,10 @@ function intrinsic(name: string, args: IrExpr[]): IrExpr {
 function exprResult(value: unknown): IrExpr {
     if (value instanceof ShaderValue) return value.node;
     return value as IrExpr;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
 }
 
 function isExprLike(value: unknown): boolean {

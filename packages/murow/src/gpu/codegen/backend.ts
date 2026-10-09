@@ -285,13 +285,16 @@ export class BaseBackend implements Backend {
         return this.syntax.declareBinding(binding, kind, access, this.nameOfBinding(binding));
     }
 
-    /** Prefix, struct declarations, then injected helper text. */
+    /** Prefix, struct declarations, vertex output struct, then injected text. */
     preamble(entry: IrEntry, _ctx: EmitContext): string {
         const parts: string[] = [];
         const prefix = this.syntax.preamblePrefix();
         if (prefix.length > 0) parts.push(prefix);
         for (const type of mergeStructs(this.structs, collectBindingStructs(entry))) {
             parts.push(this.syntax.structDecl(type));
+        }
+        if (hasVertexOutputs(entry)) {
+            parts.push(this.syntax.outputStructDecl(entry));
         }
         for (const text of this.injected) {
             if (text.length > 0) parts.push(text);
@@ -309,6 +312,15 @@ export class BaseBackend implements Backend {
             if (entry.stage === 'vertex' && builtin.name === 'position') continue;
             params.push(
                 `${this.mapBuiltin(builtin, ctx)} ${builtin.name}: ${this.syntax.typeName(builtin.type)}`,
+            );
+        }
+
+        if (hasVertexOutputs(entry)) {
+            return this.syntax.entrySignature(
+                entry,
+                params,
+                defaultEntryName(entry),
+                this.syntax.outputStructName(entry),
             );
         }
 
@@ -453,6 +465,13 @@ export class BaseBackend implements Backend {
 
 /** Fallback entry return type when no return value is present. */
 const DEFAULT_RETURN_TYPE: GpuType = { kind: 'vec', scalar: 'f32', width: 4 };
+
+/** Whether a vertex entry returns a struct of varyings. */
+function hasVertexOutputs(entry: IrEntry): boolean {
+    return entry.stage === 'vertex'
+        && entry.outputs !== undefined
+        && entry.outputs.length > 0;
+}
 
 /** Infer the binding role from its type when no hint is supplied. */
 function inferBindingKind(type: GpuType): BindingKind {
