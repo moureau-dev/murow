@@ -4,7 +4,7 @@
  * Turns the built-in environment (struct schemas and standard bindings) into
  * IR-producing objects. Reading a uniform field builds an `access` node over
  * its `binding`; calling an environment function builds a `call` node whose
- * WGSL the backend injects.
+ * source the backend injects.
  *
  * Pure. No backend, no device.
  */
@@ -136,17 +136,17 @@ export class Textures {
     }
 }
 
-/** 3D value noise. The backend injects `NOISE_WGSL`. */
+/** 3D value noise. */
 export function noise(x: ShaderInput): ShaderValue {
     return new ShaderValue({ node: call(f32Type(), 'noise', [toExpr(x)]) });
 }
 
-/** Signed value noise. The backend injects `SNOISE_WGSL`. */
+/** Signed value noise. */
 export function snoise(uv: ShaderInput, res: ShaderInput): ShaderValue {
     return new ShaderValue({ node: call(f32Type(), 'snoise', [toExpr(uv), toExpr(res)]) });
 }
 
-/** Diffuse light contribution. The backend injects `LIGHT_CONTRIBUTION_WGSL`. */
+/** Diffuse light contribution. */
 export function lightContribution(
     pos: ShaderInput,
     axis: ShaderInput,
@@ -167,7 +167,7 @@ export function lightContribution(
     });
 }
 
-/** Reinhard tone map. The backend injects `TONEMAP_WGSL`. */
+/** Reinhard tone map. */
 export function tonemap(c: ShaderInput): ShaderValue {
     return new ShaderValue({ node: call(vecType('f32', 3), 'tonemap', [toExpr(c)]) });
 }

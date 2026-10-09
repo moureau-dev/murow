@@ -1,16 +1,17 @@
 import { describe, expect, test } from 'bun:test';
-import { WgslBackend, emitEntry } from '../codegen/emit';
+import { emitEntry } from '../codegen/emit';
+import { TestWgslBackend } from '../codegen/test-syntax';
 import { createEmitContext } from '../codegen/backend';
 import { breakStmt, loopStmt, type IrStmt } from '../ir';
 import { parseShaderBody, parseShaderFunction } from './parse';
 import { ShaderCompiler, transformSource } from './transform';
 
 function wgsl(source: string, options: Parameters<typeof parseShaderBody>[1] = { stage: 'fragment' }): string {
-    return emitEntry(parseShaderBody(source, options), new WgslBackend()).code;
+    return emitEntry(parseShaderBody(source, options), new TestWgslBackend()).code;
 }
 
 function loopEmitSupported(): boolean {
-    const backend = new WgslBackend();
+    const backend = new TestWgslBackend();
     return backend.emitNode(loopStmt([breakStmt()]), createEmitContext(backend)).includes('break;');
 }
 
@@ -124,7 +125,7 @@ describe('parseShaderBody', () => {
 
 describe('transformSource', () => {
     test('parses source and compiles it', () => {
-        const compiler = new ShaderCompiler({ backend: new WgslBackend() });
+        const compiler = new ShaderCompiler({ backend: new TestWgslBackend() });
         const artifact = transformSource('(_v, _m, s) => s.vec4f(0, 1, 0, 1)', {
             stage: 'fragment',
             name: 'green',

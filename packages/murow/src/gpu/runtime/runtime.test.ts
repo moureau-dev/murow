@@ -1,7 +1,7 @@
 import { test, expect, describe } from 'bun:test';
 import { shader, d, std } from './index';
 import { compileShader, RuntimeCompiler } from './index';
-import { WgslBackend } from '../codegen';
+import { TestWgslBackend } from '../codegen/test-syntax';
 import { mat, vec } from '../ir';
 
 describe('compileShader', () => {
@@ -11,7 +11,7 @@ describe('compileShader', () => {
             return color;
         });
 
-        const code = compileShader(entry);
+        const code = compileShader(entry, new TestWgslBackend());
         expect(code).toContain('@fragment');
         expect(code).toContain('fn fs_main');
         expect(code).toContain('return vec4<f32>(1.0, 0.0, 0.0, 1.0);');
@@ -29,7 +29,7 @@ describe('compileShader', () => {
             },
         );
 
-        const code = compileShader(entry);
+        const code = compileShader(entry, new TestWgslBackend());
         expect(code).toContain('@vertex');
         expect(code).toContain('@location(0) pos: vec3<f32>');
         expect(code).toContain('@group(0) @binding(0) var<uniform> binding_0_0: mat4x4<f32>;');
@@ -38,7 +38,7 @@ describe('compileShader', () => {
 
     test('accepts an explicit backend', () => {
         const entry = shader.fragment((_v, _m, s) => s.vec4f(s.f32(0), s.f32(0), s.f32(0), s.f32(1)));
-        const code = compileShader(entry, new WgslBackend());
+        const code = compileShader(entry, new TestWgslBackend());
         expect(code).toContain('@fragment');
     });
 });
@@ -48,7 +48,7 @@ describe('RuntimeCompiler', () => {
         const entry = shader.fragment((_v, _m, s) =>
             s.vec4f(s.f32(0), s.f32(0), s.f32(0), s.f32(1)),
         );
-        const compiler = new RuntimeCompiler();
+        const compiler = new RuntimeCompiler({ backend: new TestWgslBackend() });
         const result = compiler.compile(entry);
         expect(result.stage).toBe('fragment');
         expect(result.entryName).toBe('fs_main');
@@ -56,7 +56,7 @@ describe('RuntimeCompiler', () => {
     });
 
     test('reuses one backend across compiles', () => {
-        const backend = new WgslBackend();
+        const backend = new TestWgslBackend();
         const compiler = new RuntimeCompiler({ backend });
         const entry = shader.fragment((_v, _m, s) =>
             s.vec4f(s.f32(0), s.f32(0), s.f32(0), s.f32(1)),

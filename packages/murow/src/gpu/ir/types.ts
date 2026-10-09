@@ -36,7 +36,7 @@ export type {
     VecType,
 } from '../types';
 
-export { glslType, isHostShareable, wgslType } from '../types';
+export { isHostShareable } from '../types';
 
 /** Scalar type. */
 export function scalar(base: GpuScalar): ScalarType {

@@ -17,7 +17,6 @@ import {
     f32 as f32Type,
     i32 as i32Type,
     u32 as u32Type,
-    wgslType,
 } from '../ir/types';
 import {
     access,
@@ -624,7 +623,27 @@ function fieldType(type: GpuType, name: string): GpuType {
         const field = type.fields.find((f) => f.name === name);
         if (field) return field.type;
     }
-    throw new Error(`parseShader: '${name}' is not a field of ${wgslType(type)}`);
+    throw new Error(`parseShader: '${name}' is not a field of ${describeType(type)}`);
+}
+
+/** Target-neutral label for a type, used in diagnostics. */
+function describeType(type: GpuType): string {
+    switch (type.kind) {
+        case 'scalar':
+            return type.scalar;
+        case 'vec':
+            return `vec of ${type.width} by ${type.scalar}`;
+        case 'mat':
+            return `mat of ${type.cols} by ${type.rows} ${type.scalar}`;
+        case 'array':
+            return `array of ${describeType(type.element)}`;
+        case 'struct':
+            return `struct ${type.name}`;
+        case 'texture':
+            return `${type.dim} texture`;
+        case 'sampler':
+            return 'sampler';
+    }
 }
 
 export { toExpr };

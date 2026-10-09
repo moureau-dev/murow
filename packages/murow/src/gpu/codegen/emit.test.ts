@@ -25,13 +25,14 @@ import {
 } from '../ir/builders';
 import { array, bool, f32, field, i32, mat, sampler, struct, texture, u32, vec } from '../ir/types';
 import { createEmitContext } from './backend';
-import { WgslBackend, emitEntry } from './emit';
+import { emitEntry } from './emit';
+import { TestWgslBackend } from './test-syntax';
 
-function wgsl(): WgslBackend {
-    return new WgslBackend();
+function wgsl(): TestWgslBackend {
+    return new TestWgslBackend();
 }
 
-describe('WgslBackend', () => {
+describe('TestWgslBackend', () => {
     test('advertises all capabilities', () => {
         const backend = wgsl();
         expect(backend.name).toBe('wgsl');
@@ -47,7 +48,7 @@ describe('WgslBackend', () => {
 describe('emitEntry', () => {
     test('emits a vertex entry with a struct preamble and binding', () => {
         const uniforms = struct('Uniforms', [field('mvp', mat('f32', 4, 4))]);
-        const backend = new WgslBackend({ structs: [uniforms] });
+        const backend = new TestWgslBackend({ structs: [uniforms] });
         const vertex = entry({
             stage: 'vertex',
             params: [param('pos', vec('f32', 3), 0)],
@@ -302,7 +303,7 @@ describe('cast emission', () => {
 
 describe('binding kinds', () => {
     test('declares textures and samplers under their hint names', () => {
-        const backend = new WgslBackend({
+        const backend = new TestWgslBackend({
             bindings: [
                 { group: 0, binding: 0, kind: 'texture', name: 'albedo' },
                 { group: 0, binding: 1, kind: 'sampler', name: 'albedoSampler' },
@@ -318,7 +319,7 @@ describe('binding kinds', () => {
     });
 
     test('renders hint names in access chains and samples', () => {
-        const backend = new WgslBackend({
+        const backend = new TestWgslBackend({
             bindings: [
                 { group: 0, binding: 0, kind: 'texture', name: 'albedo' },
                 { group: 0, binding: 1, kind: 'sampler', name: 'albedoSampler' },
@@ -353,7 +354,7 @@ describe('binding kinds', () => {
 
     test('emits explicit storage access modes', () => {
         const light = struct('Light', [field('intensity', f32())]);
-        const backend = new WgslBackend({
+        const backend = new TestWgslBackend({
             bindings: [
                 { group: 0, binding: 0, kind: 'storage', name: 'lights', access: 'read_write' },
                 { group: 0, binding: 1, kind: 'storage', name: 'readonly', access: 'read' },
@@ -370,7 +371,7 @@ describe('binding kinds', () => {
 
     test('emits struct declarations discovered from bindings', () => {
         const light = struct('Light', [field('pos', vec('f32', 3)), field('intensity', f32())]);
-        const backend = new WgslBackend({
+        const backend = new TestWgslBackend({
             bindings: [{ group: 0, binding: 0, kind: 'storage', name: 'lights', access: 'read_write' }],
         });
         const compute = entry({
@@ -419,7 +420,7 @@ describe('binding kinds', () => {
 
 describe('preamble injection', () => {
     test('includes injected helpers ahead of the entry point', () => {
-        const backend = new WgslBackend({ helpers: 'fn noise(p: vec2<f32>) -> f32 { return 0.0; }' });
+        const backend = new TestWgslBackend({ helpers: 'fn noise(p: vec2<f32>) -> f32 { return 0.0; }' });
         backend.addPreamble('fn tonemap(c: vec3<f32>) -> vec3<f32> { return c; }');
         const compute = entry({
             stage: 'compute',
@@ -436,7 +437,7 @@ describe('preamble injection', () => {
 
     test('emits struct declarations before injected helpers', () => {
         const light = struct('Light', [field('intensity', f32())]);
-        const backend = new WgslBackend({ structs: [light], helpers: 'fn lightContribution() {}' });
+        const backend = new TestWgslBackend({ structs: [light], helpers: 'fn lightContribution() {}' });
         const compute = entry({
             stage: 'compute',
             params: [],

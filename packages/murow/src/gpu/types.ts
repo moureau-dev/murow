@@ -43,12 +43,12 @@ export interface StructFieldType {
 
 export interface StructType {
     readonly kind: 'struct';
-    /** Struct name, used when emitting WGSL/GLSL. */
+    /** Struct name, used when emitting target source. */
     readonly name: string;
     readonly fields: readonly StructFieldType[];
 }
 
-export type TextureDim = '1d' | '2d' | '3d' | 'cube' | '2d-array';
+export type TextureDim = '1d' | '2d' | '3d' | 'cube' | '2d-array' | 'cube-array';
 export type TextureAccess = 'sample' | 'read' | 'write' | 'read-write';
 
 export interface TextureType {
@@ -56,6 +56,8 @@ export interface TextureType {
     readonly scalar: GpuScalar;
     readonly dim: TextureDim;
     readonly access: TextureAccess;
+    /** Depth texture, used by shadow maps. */
+    readonly depth?: boolean;
 }
 
 export interface SamplerType {
@@ -75,77 +77,4 @@ export type GpuType =
 /** Whether a type can be used as a vertex/fragment varying or uniform member. */
 export function isHostShareable(type: GpuType): boolean {
     return type.kind !== 'texture' && type.kind !== 'sampler';
-}
-
-/** WGSL spelling of a type. Structs emit by name. */
-export function wgslType(type: GpuType): string {
-    switch (type.kind) {
-        case 'scalar':
-            return wgslScalar(type.scalar);
-        case 'vec':
-            return `vec${type.width}<${wgslScalar(type.scalar)}>`;
-        case 'mat':
-            return `mat${type.cols}x${type.rows}<${wgslScalar(type.scalar)}>`;
-        case 'array': {
-            const element = wgslType(type.element);
-            return type.count === null ? `array<${element}>` : `array<${element}, ${type.count}>`;
-        }
-        case 'struct':
-            return type.name;
-        case 'texture':
-            return `texture_${type.dim.replace('-', '_')}<${wgslScalar(type.scalar)}>`;
-        case 'sampler':
-            return type.comparison ? 'sampler_comparison' : 'sampler';
-    }
-}
-
-/** GLSL spelling of a type. Structs emit by name. */
-export function glslType(type: GpuType): string {
-    switch (type.kind) {
-        case 'scalar':
-            return glslScalar(type.scalar);
-        case 'vec':
-            return glslVec(scalarBase(type.scalar), type.width);
-        case 'mat':
-            return glslMat(scalarBase(type.scalar), type.cols, type.cols);
-        case 'array':
-            return type.count === null ? `${glslType(type.element)}[]` : `${glslType(type.element)}[${type.count}]`;
-        case 'struct':
-            return type.name;
-        case 'texture':
-            return glslSampler(type);
-        case 'sampler':
-            return type.comparison ? 'sampler2DShadow' : 'sampler2D';
-    }
-}
-
-function scalarBase(scalar: GpuScalar): string {
-    return scalar === 'f32' || scalar === 'i32' || scalar === 'u32' ? scalar : 'f32';
-}
-
-function wgslScalar(scalar: GpuScalar): string {
-    return scalar;
-}
-
-function glslScalar(scalar: GpuScalar): string {
-    if (scalar === 'f32') return 'float';
-    if (scalar === 'i32') return 'int';
-    if (scalar === 'u32') return 'uint';
-    return 'bool';
-}
-
-function glslVec(base: string, width: number): string {
-    const prefix = base === 'f32' ? 'vec' : base === 'i32' ? 'ivec' : 'uvec';
-    return `${prefix}${width}`;
-}
-
-function glslMat(base: string, cols: number, rows: number): string {
-    if (base === 'f32') return `mat${cols}`;
-    return `mat${cols}x${rows}`;
-}
-
-function glslSampler(type: TextureType): string {
-    const prefix = type.scalar === 'i32' ? 'isampler' : type.scalar === 'u32' ? 'usampler' : 'sampler';
-    const suffix = type.dim === 'cube' ? 'Cube' : type.dim === '3d' ? '3D' : type.dim === '2d-array' ? '2DArray' : '2D';
-    return `${prefix}${suffix}`;
 }

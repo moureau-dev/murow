@@ -8,7 +8,8 @@
  */
 import type { Field } from './field';
 import { Std140, structLayout, type FieldLayout, type Packing } from './align';
-import { glslType, wgslType, type GpuType, type StructType } from '../types';
+import type { StructType } from '../types';
+import type { TargetSyntax } from '../codegen/syntax';
 
 /** A field paired with its member name. */
 export interface StructField {
@@ -18,7 +19,7 @@ export interface StructField {
 
 /** Options for `new GpuStruct(...)`. */
 export interface GpuStructOptions {
-    /** Struct name used in emitted WGSL and GLSL. */
+    /** Struct name used in emitted source. */
     readonly name: string;
     /** Fields in layout order. A record is laid out in key insertion order. */
     readonly fields: readonly StructField[] | Record<string, Field<any, any>>;
@@ -31,14 +32,6 @@ function normalizeFields(
 ): StructField[] {
     if (Array.isArray(fields)) return fields.slice();
     return Object.keys(fields).map((name) => ({ name, field: fields[name] }));
-}
-
-function glslMember(type: GpuType, name: string): string {
-    if (type.kind === 'array') {
-        const suffix = type.count === null ? '' : `[${type.count}]`;
-        return `${glslType(type.element)} ${name}${suffix}`;
-    }
-    return `${glslType(type)} ${name}`;
 }
 
 export class GpuStruct {
@@ -112,24 +105,9 @@ export class GpuStruct {
         return undefined;
     }
 
-    /** WGSL struct declaration, optionally followed by a uniform instance. */
-    wgsl(instanceName?: string): string {
-        const body = this.fields
-            .map((member) => `    ${member.name}: ${wgslType(member.field.type)},`)
-            .join('\n');
-        let out = `struct ${this.name} {\n${body}\n}`;
-        if (instanceName) out += `\nvar<uniform> ${instanceName}: ${this.name};`;
-        return out;
-    }
-
-    /** GLSL struct declaration, optionally followed by a uniform instance. */
-    glsl(instanceName?: string): string {
-        const body = this.fields
-            .map((member) => `    ${glslMember(member.field.type, member.name)};`)
-            .join('\n');
-        let out = `struct ${this.name} {\n${body}\n};`;
-        if (instanceName) out += `\nuniform ${this.name} ${instanceName};`;
-        return out;
+    /** Struct declaration in the given target syntax. */
+    text(syntax: TargetSyntax): string {
+        return syntax.structDecl(this.type);
     }
 
     private createMirror(): Record<string, any> {

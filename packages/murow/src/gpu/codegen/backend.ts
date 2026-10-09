@@ -1,13 +1,13 @@
 /**
- * The code-generation backend contract and its default (WGSL-compatible)
+ * The code-generation backend contract and its target-agnostic base
  * implementation.
  *
- * A backend advertises capabilities, orders lowering passes, and supplies the
- * emit hooks. `BaseBackend` implements every hook with WGSL output so a backend
- * overrides only what differs.
+ * A backend advertises capabilities, orders lowering passes, supplies the emit
+ * hooks, and delegates every target-specific string to a {@link TargetSyntax}.
+ * `BaseBackend` implements the walker once, so a target supplies only its
+ * syntax and capability flags.
  */
 import type { StructType, GpuType } from '../types';
-import { wgslType } from '../types';
 import type {
     IrBinding,
     IrBuiltin,
@@ -19,6 +19,7 @@ import type {
 import { isExpr, walkEntry } from '../ir/nodes';
 import { IntrinsicRegistry, NodeRegistry } from './registry';
 import type { LoweringPass } from './passes';
+import type { BindingHint, BindingKind, StorageAccess, TargetSyntax } from './syntax';
 
 /** Features a target may or may not support. */
 export interface Capabilities {
@@ -118,8 +119,8 @@ export function createEmitContext(backend: Backend): EmitContext {
 }
 
 /**
- * A code generator for one target language. Hooks have WGSL-compatible defaults
- * in `BaseBackend`; a backend overrides only the ones that differ.
+ * A code generator for one target language. The hooks are target-neutral; the
+ * backend resolves the actual text through its {@link TargetSyntax}.
  */
 export interface Backend {
     readonly name: string;
@@ -135,12 +136,18 @@ export interface Backend {
 
 /** Options accepted by {@link BaseBackend}. */
 export interface BaseBackendOptions {
+    /** Target syntax. Required: the base owns no target strings of its own. */
+    readonly syntax: TargetSyntax;
     readonly name?: string;
     readonly capabilities?: Partial<Capabilities>;
     readonly passes?: readonly LoweringPass[];
     readonly nodes?: NodeRegistry;
     readonly intrinsics?: IntrinsicRegistry;
     readonly structs?: readonly StructType[];
+    /** Role hints for bindings, matched by group and binding slot. */
+    readonly bindings?: readonly BindingHint[];
+    /** Opaque helper source injected ahead of the entry point. */
+    readonly helpers?: string;
 }
 
 /** Name of a binding's generated variable. */
@@ -217,9 +224,16 @@ export function createDefaultIntrinsics(): IntrinsicRegistry {
     return registry;
 }
 
+/** Optional role fields an IR binding may already carry. */
+interface BindingWithHint extends IrBinding {
+    readonly bindingKind?: BindingKind;
+    readonly name?: string;
+    readonly access?: StorageAccess;
+}
+
 /**
- * Default backend. Every hook emits WGSL, so a target that is WGSL-compatible
- * overrides only capability flags, passes, or individual hooks.
+ * Target-agnostic backend. It walks the IR once and resolves every target
+ * string through the supplied syntax.
  */
 export class BaseBackend implements Backend {
     readonly name: string;
@@ -228,14 +242,26 @@ export class BaseBackend implements Backend {
     readonly nodes: NodeRegistry;
     readonly intrinsics: IntrinsicRegistry;
     readonly structs: readonly StructType[];
+    readonly syntax: TargetSyntax;
 
-    constructor(options: BaseBackendOptions = {}) {
-        this.name = options.name ?? 'base';
+    private readonly bindingHints: readonly BindingHint[];
+    private readonly injected: string[] = [];
+
+    constructor(options: BaseBackendOptions) {
+        this.syntax = options.syntax;
+        this.name = options.name ?? options.syntax.name;
         this.capabilities = { ...NO_CAPABILITIES, ...(options.capabilities ?? {}) };
         this.passes = options.passes ?? [];
         this.nodes = options.nodes ?? new NodeRegistry();
         this.intrinsics = options.intrinsics ?? createDefaultIntrinsics();
         this.structs = options.structs ?? [];
+        this.bindingHints = options.bindings ?? [];
+        if (options.helpers) this.injected.push(options.helpers);
+    }
+
+    /** Append opaque preamble text, for example helper functions. */
+    addPreamble(text: string): void {
+        if (text.length > 0) this.injected.push(text);
     }
 
     /** Emit any node. A registered node emitter takes precedence. */
@@ -247,57 +273,60 @@ export class BaseBackend implements Backend {
 
     /** Attribute for a stage builtin. */
     mapBuiltin(builtin: IrBuiltin, _ctx: EmitContext): string {
-        switch (builtin.name) {
-            case 'position':
-            case 'frag_coord':
-                return '@builtin(position)';
-            case 'front_facing':
-                return '@builtin(front_facing)';
-            case 'invocation_id':
-                return '@builtin(global_invocation_id)';
-            default:
-                return `@builtin(${builtin.name})`;
-        }
+        return this.syntax.builtin(builtin.name);
     }
 
-    /** Declaration of a bound resource. */
+    /** Declaration of a bound resource, honouring kind, name, and access hints. */
     declareBinding(binding: IrBinding, _ctx: EmitContext): string {
-        const address = addressSpaceOf(binding.type);
-        return `@group(${binding.group}) @binding(${binding.binding}) ${address} ${bindingName(binding)}: ${wgslType(binding.type)};`;
+        const hint = this.hintOf(binding);
+        const ir = binding as BindingWithHint;
+        const kind = ir.bindingKind ?? hint?.kind ?? inferBindingKind(binding.type);
+        const access = ir.access ?? hint?.access;
+        return this.syntax.declareBinding(binding, kind, access, this.nameOfBinding(binding));
     }
 
-    /** Struct declarations supplied to the backend. */
-    preamble(_entry: IrEntry, _ctx: EmitContext): string {
-        return this.structs.map((type) => emitStruct(type)).join('\n');
+    /** Prefix, struct declarations, then injected helper text. */
+    preamble(entry: IrEntry, _ctx: EmitContext): string {
+        const parts: string[] = [];
+        const prefix = this.syntax.preamblePrefix();
+        if (prefix.length > 0) parts.push(prefix);
+        for (const type of mergeStructs(this.structs, collectBindingStructs(entry))) {
+            parts.push(this.syntax.structDecl(type));
+        }
+        for (const text of this.injected) {
+            if (text.length > 0) parts.push(text);
+        }
+        return parts.join('\n');
     }
 
-    /** Entry attribute plus function signature. */
+    /** Entry attribute plus function signature and return type. */
     entryPointSignature(entry: IrEntry, ctx: EmitContext): string {
-        const attribute =
-            entry.stage === 'compute'
-                ? `@compute @workgroup_size(${(entry.workgroupSize ?? [1, 1, 1]).join(', ')})`
-                : `@${entry.stage}`;
-
         const params: string[] = [];
         for (const p of entry.params) {
-            params.push(`@location(${p.location}) ${p.name}: ${wgslType(p.type)}`);
+            params.push(this.syntax.paramDecl(p.location, p.name, p.type));
         }
         for (const builtin of collectBuiltins(entry)) {
             if (entry.stage === 'vertex' && builtin.name === 'position') continue;
-            params.push(`${this.mapBuiltin(builtin, ctx)} ${builtin.name}: ${wgslType(builtin.type)}`);
+            params.push(
+                `${this.mapBuiltin(builtin, ctx)} ${builtin.name}: ${this.syntax.typeName(builtin.type)}`,
+            );
         }
 
-        const signature = `${attribute}\nfn ${defaultEntryName(entry)}(${params.join(', ')})`;
-        return signature + this.returnType(entry);
+        const head = this.syntax.entrySignature(entry, params, defaultEntryName(entry));
+        const value = firstReturnValue(entry);
+        const type = value ? value.type : DEFAULT_RETURN_TYPE;
+        return head + this.syntax.returnType(entry.stage, type);
     }
 
-    private returnType(entry: IrEntry): string {
-        if (entry.stage === 'compute') return '';
-        const value = firstReturnValue(entry);
-        const type = value ? wgslType(value.type) : 'vec4<f32>';
-        return entry.stage === 'vertex'
-            ? ` -> @builtin(position) ${type}`
-            : ` -> @location(0) ${type}`;
+    private hintOf(binding: IrBinding): BindingHint | undefined {
+        return this.bindingHints.find(
+            (hint) => hint.group === binding.group && hint.binding === binding.binding,
+        );
+    }
+
+    private nameOfBinding(binding: IrBinding): string {
+        const ir = binding as BindingWithHint;
+        return ir.name ?? this.hintOf(binding)?.name ?? bindingName(binding);
     }
 
     private emitExpr(node: IrExpr, ctx: EmitContext): string {
@@ -307,7 +336,7 @@ export class BaseBackend implements Backend {
             case 'local':
                 return ctx.scopes.nameOf(node.id) ?? `v${node.id}`;
             case 'binding':
-                return bindingName(node);
+                return this.nameOfBinding(node);
             case 'builtin':
                 return node.name;
             case 'unary':
@@ -315,7 +344,10 @@ export class BaseBackend implements Backend {
             case 'binary':
                 return `(${this.emitNode(node.left, ctx)} ${node.op} ${this.emitNode(node.right, ctx)})`;
             case 'construct':
-                return `${wgslType(node.type)}(${node.args.map((arg) => this.emitNode(arg, ctx)).join(', ')})`;
+                return this.syntax.construct(
+                    node.type,
+                    node.args.map((arg) => this.emitNode(arg, ctx)),
+                );
             case 'swizzle':
                 return `${this.emitNode(node.value, ctx)}.${node.mask}`;
             case 'access':
@@ -328,7 +360,13 @@ export class BaseBackend implements Backend {
                 return `${node.name}(${node.args.map((arg) => this.emitNode(arg, ctx)).join(', ')})`;
             }
             case 'sample':
-                return `textureSample(${this.emitNode(node.texture, ctx)}, ${this.emitNode(node.sampler, ctx)}, ${this.emitNode(node.coords, ctx)})`;
+                return this.syntax.sample(
+                    this.emitNode(node.texture, ctx),
+                    this.emitNode(node.sampler, ctx),
+                    this.emitNode(node.coords, ctx),
+                );
+            case 'cast':
+                return this.syntax.cast(node.type, this.emitNode(node.value, ctx));
         }
     }
 
@@ -337,7 +375,7 @@ export class BaseBackend implements Backend {
             case 'let': {
                 const name = `v${node.id}`;
                 ctx.scopes.define(node.id, name);
-                return `let ${name}: ${wgslType(node.type)} = ${this.emitNode(node.value, ctx)};`;
+                return this.syntax.declareLet(name, node.type, this.emitNode(node.value, ctx));
             }
             case 'assign':
                 return `${this.emitNode(node.target, ctx)} = ${this.emitNode(node.value, ctx)};`;
@@ -348,7 +386,11 @@ export class BaseBackend implements Backend {
             case 'return':
                 return node.value ? `return ${this.emitNode(node.value, ctx)};` : 'return;';
             case 'discard':
-                return 'discard;';
+                return this.syntax.discard();
+            case 'break':
+                return this.syntax.break();
+            case 'continue':
+                return this.syntax.continue();
         }
     }
 
@@ -381,7 +423,7 @@ export class BaseBackend implements Backend {
         const body = this.emitBlock(node.body, ctx);
         ctx.scopes.pop();
         ctx.indent--;
-        return `loop {\n${body}\n${pad}}`;
+        return this.syntax.loop(`${body}\n${pad}`);
     }
 
     private emitBlock(stmts: readonly IrStmt[], ctx: EmitContext): string {
@@ -392,38 +434,62 @@ export class BaseBackend implements Backend {
     private emitLiteral(node: IrLiteral): string {
         const type = node.type;
         if (type.kind === 'scalar') {
-            if (typeof node.value === 'boolean') return node.value ? 'true' : 'false';
-            if (typeof node.value === 'number') return formatNumber(type.scalar, node.value);
-            return `${node.value}`;
+            if (typeof node.value === 'boolean') {
+                return this.syntax.literal(type, node.value ? 'true' : 'false');
+            }
+            if (typeof node.value === 'number') {
+                return this.syntax.literal(type, this.syntax.formatScalar(type.scalar, node.value));
+            }
+            return this.syntax.literal(type, `${node.value}`);
         }
         const scalar = type.kind === 'vec' || type.kind === 'mat' ? type.scalar : 'f32';
         const values = Array.isArray(node.value) ? node.value : [node.value as number];
-        return `${wgslType(type)}(${values.map((value) => formatNumber(scalar, value as number)).join(', ')})`;
+        return this.syntax.construct(
+            type,
+            values.map((value) => this.syntax.formatScalar(scalar, value as number)),
+        );
     }
 }
 
-/** Address space qualifier for a binding's type. */
-export function addressSpaceOf(type: GpuType): string {
-    if (type.kind === 'texture' || type.kind === 'sampler') return 'var';
-    if (type.kind === 'array' && type.count === null) return 'var<storage>';
-    return 'var<uniform>';
+/** Fallback entry return type when no return value is present. */
+const DEFAULT_RETURN_TYPE: GpuType = { kind: 'vec', scalar: 'f32', width: 4 };
+
+/** Infer the binding role from its type when no hint is supplied. */
+function inferBindingKind(type: GpuType): BindingKind {
+    if (type.kind === 'texture') return 'texture';
+    if (type.kind === 'sampler') return 'sampler';
+    if (type.kind === 'array') return 'storage';
+    return 'uniform';
 }
 
-function formatNumber(scalar: string, value: number): string {
-    if (scalar === 'u32') return `${Math.trunc(value)}u`;
-    if (scalar === 'i32') return String(Math.trunc(value));
-    return formatF32(value);
+/** Declared structs first, then any struct referenced by a binding. */
+function mergeStructs(
+    declared: readonly StructType[],
+    discovered: readonly StructType[],
+): StructType[] {
+    const out: StructType[] = [];
+    for (const type of declared) if (!out.some((s) => s.name === type.name)) out.push(type);
+    for (const type of discovered) if (!out.some((s) => s.name === type.name)) out.push(type);
+    return out;
 }
 
-function formatF32(value: number): string {
-    return Number.isInteger(value) ? `${value}.0` : `${value}`;
+function collectBindingStructs(entry: IrEntry): StructType[] {
+    const found: StructType[] = [];
+    walkEntry(entry, (node) => {
+        if (node.kind === 'binding') collectStructsFromType(node.type, found);
+    });
+    return found;
 }
 
-function emitStruct(type: StructType): string {
-    const fields = type.fields
-        .map((field) => `    ${field.name}: ${wgslType(field.type)},`)
-        .join('\n');
-    return `struct ${type.name} {\n${fields}\n}`;
+function collectStructsFromType(type: GpuType, out: StructType[]): void {
+    if (type.kind === 'array') {
+        collectStructsFromType(type.element, out);
+        return;
+    }
+    if (type.kind !== 'struct') return;
+    if (out.some((s) => s.name === type.name)) return;
+    out.push(type);
+    for (const field of type.fields) collectStructsFromType(field.type, out);
 }
 
 function collectBuiltins(entry: IrEntry): IrBuiltin[] {

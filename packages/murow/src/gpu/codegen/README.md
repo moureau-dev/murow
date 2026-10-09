@@ -1,14 +1,20 @@
 # codegen
 
-Turns the IR into backend source. A shared pipeline with public extension points
-so a backend customises behavior without forking.
+Turns the IR into backend source. A shared, target-agnostic walker plus a
+pluggable target syntax, with public extension points so a backend customises
+behavior without forking.
 
-- `backend.ts` - `Backend` interface: capabilities, passes, emit hooks.
+- `syntax.ts` - `TargetSyntax`: every target-specific string the walker needs,
+  plus the semantic `BindingKind` and `StorageAccess` types.
+- `backend.ts` - `Backend` interface: capabilities, passes, emit hooks; and
+  `BaseBackend`, which implements the walker once and routes all target text
+  through `this.syntax`.
 - `registry.ts` - node/intrinsic/builtin registries (name-as-id).
 - `passes.ts` - ordered lowering pipeline (shared passes, then backend passes).
-- `emit.ts` - pass driver and default emitter.
-- `glsl.ts` - `GlslBackend`, GLSL ES 3.0 output (vertex/fragment only).
+- `emit.ts` - `emitEntry`, the pass driver and binding collector.
+- `test-syntax.ts` - test-only WGSL `TargetSyntax` and backend. Not shipped API;
+  the production WGSL backend lives in `murow/webgpu`.
 
-Extension points: node registry, intrinsic registry, ordered passes, and emit
-hooks (`mapBuiltin`, `entryPoint`, `declareBinding`, `preamble`), gated by
-capability flags (`compute`, `storageBuffers`, `f16`, `subgroups`).
+Extension points: node registry, intrinsic registry, ordered passes, and the
+target syntax, gated by capability flags (`compute`, `storageBuffers`, `f16`,
+`subgroups`).

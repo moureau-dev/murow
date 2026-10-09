@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { WgslBackend, emitEntry } from './codegen/emit';
-import { GlslBackend } from './codegen/glsl';
+import { emitEntry } from './codegen/emit';
+import { TestWgslBackend } from './codegen/test-syntax';
 import { transformSource } from './compiler/transform';
 import { noise, scene, textures } from './dsl/externals';
 import { shader } from './dsl/entry';
 import { d } from './dsl/d';
 import { f32 as f32Type, vec } from './ir/types';
 
-const backend = new WgslBackend();
+const backend = new TestWgslBackend();
 const V2 = vec('f32', 2);
 const V3 = vec('f32', 3);
 
@@ -95,16 +95,5 @@ describe('murow/gpu can express engine shaders (parser front-end)', () => {
         );
         expect(artifact.code).toContain('loop {');
         expect(artifact.code).toContain('break;');
-    });
-});
-
-describe('GLSL backend', () => {
-    test('emits GLSL ES 3.0 for a simple fragment', () => {
-        const frag = shader.fragment((_v, m, s) => s.vec4f(m.tint.x, m.tint.y, m.tint.z, d.f32(1)), {
-            material: { tint: V3 },
-        });
-        const code = emitEntry(frag, new GlslBackend()).code;
-        expect(code).toContain('#version 300 es');
-        expect(code).toContain('void main()');
     });
 });

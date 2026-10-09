@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { GpuStruct } from './struct';
 import { Std430 } from './align';
 import { f32, vec3f } from './primitives';
+import { TestWgslSyntax } from '../codegen/test-syntax';
 
 describe('GpuStruct', () => {
     test('computes std140 offsets and size from an array of fields', () => {
@@ -77,7 +78,7 @@ describe('GpuStruct', () => {
         expect(s.size).toBe(8);
     });
 
-    test('emits WGSL', () => {
+    test('emits a declaration in a target syntax', () => {
         const s = new GpuStruct({
             name: 'Foo',
             fields: [
@@ -85,19 +86,6 @@ describe('GpuStruct', () => {
                 { name: 'b', field: vec3f },
             ],
         });
-        expect(s.wgsl()).toBe('struct Foo {\n    a: f32,\n    b: vec3<f32>,\n}');
-        expect(s.wgsl('u')).toContain('var<uniform> u: Foo;');
-    });
-
-    test('emits GLSL', () => {
-        const s = new GpuStruct({
-            name: 'Foo',
-            fields: [
-                { name: 'a', field: f32 },
-                { name: 'b', field: vec3f },
-            ],
-        });
-        expect(s.glsl()).toBe('struct Foo {\n    float a;\n    vec3 b;\n};');
-        expect(s.glsl('u')).toContain('uniform Foo u;');
+        expect(s.text(new TestWgslSyntax())).toBe('struct Foo {\n    a: f32,\n    b: vec3<f32>,\n}');
     });
 });

@@ -1,7 +1,7 @@
 import { test, expect, describe } from 'bun:test';
 import { construct, entry, literal, param, returnStmt } from '../ir/builders';
 import { f32, vec } from '../ir/types';
-import { WgslBackend } from '../codegen/emit';
+import { TestWgslBackend } from '../codegen/test-syntax';
 import { ShaderCompiler, transform } from './transform';
 
 function computeEntry() {
@@ -32,7 +32,7 @@ function vertexEntry() {
 
 describe('ShaderCompiler', () => {
     test('compiles an entry and caches the artifact by name', () => {
-        const compiler = new ShaderCompiler({ backend: new WgslBackend() });
+        const compiler = new ShaderCompiler({ backend: new TestWgslBackend() });
         const artifact = compiler.compile(computeEntry(), 'reduce');
 
         expect(artifact.name).toBe('reduce');
@@ -48,14 +48,14 @@ describe('ShaderCompiler', () => {
     });
 
     test('emits expected WGSL for a vertex entry', () => {
-        const compiler = new ShaderCompiler({ backend: new WgslBackend() });
+        const compiler = new ShaderCompiler({ backend: new TestWgslBackend() });
         const artifact = compiler.compile(vertexEntry(), 'basic');
         expect(artifact.code).toContain('fn vs_main(@location(0) pos: vec3<f32>)');
         expect(artifact.code).toContain('return vec4<f32>(1.0, 1.0, 1.0, 1.0);');
     });
 
     test('compileAll compiles every named entry', () => {
-        const compiler = new ShaderCompiler({ backend: new WgslBackend() });
+        const compiler = new ShaderCompiler({ backend: new TestWgslBackend() });
         const artifacts = compiler.compileAll([
             { name: 'a', entry: computeEntry() },
             { name: 'b', entry: vertexEntry() },
@@ -67,7 +67,7 @@ describe('ShaderCompiler', () => {
     });
 
     test('rejects a duplicate name', () => {
-        const compiler = new ShaderCompiler({ backend: new WgslBackend() });
+        const compiler = new ShaderCompiler({ backend: new TestWgslBackend() });
         compiler.compile(computeEntry(), 'dup');
         expect(() => compiler.compile(computeEntry(), 'dup')).toThrow();
     });
@@ -75,7 +75,7 @@ describe('ShaderCompiler', () => {
 
 describe('transform', () => {
     test('compiles a DSL builder to backend source', () => {
-        const backend = new WgslBackend();
+        const backend = new TestWgslBackend();
         const artifact = transform(
             'fragment',
             (_v, _m, s) => s.vec4f(s.f32(1), s.f32(0), s.f32(0), s.f32(1)),
@@ -90,7 +90,7 @@ describe('transform', () => {
     });
 
     test('reuses an existing compiler registry', () => {
-        const backend = new WgslBackend();
+        const backend = new TestWgslBackend();
         const compiler = new ShaderCompiler({ backend });
         transform('fragment', (_v, _m, s) => s.vec4f(s.f32(1), s.f32(1), s.f32(1), s.f32(1)), {
             name: 'a', backend, compiler,

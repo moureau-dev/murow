@@ -5,11 +5,12 @@ GPU-common layer shared by GPU renderer backends (`murow/webgpu`, and later
 shader/compute DSL and its IR, the code generator and its per-backend extension
 points, resource descriptors, and the abstract device interface.
 
-> Status: **first version implemented**. Schemas, IR, DSL, codegen (default
-> WGSL emitter), descriptors, the abstract device and a recording device, the
-> compile driver (`transform`), the parser front-end (`transformSource`), and
-> the runtime front-end are in place with co-located tests. No backend has
-> adopted this layer yet. Exported as `murow/gpu` and `murow/gpu/*`.
+> Status: **first version implemented**. Schemas, IR, DSL, a target-agnostic
+> codegen walker with a pluggable target syntax, descriptors, the abstract
+> device and a recording device, the compile driver (`transform`), the parser
+> front-end (`transformSource`), and the runtime front-end are in place with
+> co-located tests. No backend has adopted this layer yet. Exported as
+> `murow/gpu` and `murow/gpu/*`.
 
 ## Where this sits
 
@@ -78,10 +79,12 @@ gpu/
     entry.ts        the `shader` namespace: vertex, fragment (compute added by backend)
     control.ts      structured control flow (branch, loop, select)
   codegen/        IR to source
-    backend.ts      Backend interface: capabilities, passes, emit hooks
+    syntax.ts       TargetSyntax: every target-specific string, pluggable
+    backend.ts      Backend interface + target-agnostic BaseBackend walker
     registry.ts     node/intrinsic/builtin registries (name-as-id)
     passes.ts       ordered lowering pipeline (shared, then backend)
-    emit.ts         pass driver and default emitter
+    emit.ts         pass driver
+    test-syntax.ts  test-only WGSL syntax and backend
   descriptors/    resource and pipeline descriptions (plain data)
     vertex-layout.ts  attributes, strides, step mode
     bind-group.ts     bindings: uniform/storage/texture/sampler + visibility
@@ -98,8 +101,8 @@ gpu/
 
 ## The DSL and code generation
 
-A shader is authored once against the typed DSL and compiles to an IR. Backends
-emit WGSL or GLSL from that same IR.
+A shader is authored once against the typed DSL and compiles to an IR. Each
+backend emits target source from that same IR through a `TargetSyntax`.
 
 The three body parameters are **positional** (`entry.ts` calls
 `fn(input, material, std)`), so the names are yours; the engine style is the
@@ -165,20 +168,25 @@ Extension points (the "hackable" part):
   per-backend implementations; a backend can add missing ones or polyfill.
 - **Pass pipeline.** Ordered `LoweringPass[]`. Shared passes run first, then
   backend passes rewrite, merge, or lower features the target lacks.
-- **Emit hooks with defaults.** `mapBuiltin`, `entryPoint`, `declareBinding`,
-  `preamble`. The default behavior is WGSL-compatible; GLSL overrides.
+- **Target syntax.** `TargetSyntax` owns every target-specific string: type
+  names, builtin decorations, parameter and binding declarations, entry
+  signatures, casts, sampling, literals, struct declarations, loop keyword,
+  and preamble prefix. The shared walker never embeds one.
+- **Emit hooks.** `mapBuiltin`, `entryPointSignature`, `declareBinding`,
+  `preamble`, routed through the syntax. `BaseBackend` implements them once.
 - **Capability flags.** `{ compute, storageBuffers, f16, subgroups }`. The
   shared layer either emits, lowers via a backend pass, or fails with a clear
   error when a feature is unavailable.
 
 Examples of backend hacking:
 
-- **WGSL:** bind group and binding assignment, `@vertex`/`@fragment` entry
-  points, `@builtin` mapping, raw-WGSL nodes, all capabilities on.
-- **GLSL:** merge the shared separate texture and sampler into `sampler2D`,
-  assign texture units, inject `precision highp float`, remap builtins
-  (`gl_Position`, `gl_FragCoord`, `gl_FrontFacing`), override sampling
-  intrinsics; `compute` and `storageBuffers` off, lowered or rejected.
+- **WGSL:** a `TargetSyntax` for `@vertex`/`@fragment`/`@compute` entry points,
+  `@group`/`@binding` declarations, `@builtin` mapping, raw-WGSL nodes, all
+  capabilities on.
+- **GLSL:** a `TargetSyntax` that merges separate textures and samplers into
+  `sampler2D`, injects `precision highp float` as the preamble prefix, remaps
+  builtins (`gl_Position`, `gl_FragCoord`, `gl_FrontFacing`), overrides
+  sampling intrinsics; `compute` and `storageBuffers` off, lowered or rejected.
 
 ## Portability
 

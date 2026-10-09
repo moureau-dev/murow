@@ -10,21 +10,22 @@
  */
 import { shader, d, std, branch, loop, select, ShaderValue } from '../dsl';
 import type { IrEntry } from '../ir';
-import { emitEntry, WgslBackend, type Backend, type CodegenResult } from '../codegen';
+import { emitEntry, type Backend, type CodegenResult } from '../codegen';
 
 export { shader, d, std, branch, loop, select, ShaderValue };
 
 /** Options accepted by {@link RuntimeCompiler}. */
 export interface RuntimeCompilerOptions {
-    readonly backend?: Backend;
+    /** Target backend. Required: the runtime is target-agnostic. */
+    readonly backend: Backend;
 }
 
 /**
- * Compile one IR entry to source using `backend`, defaulting to WGSL.
+ * Compile one IR entry to source using `backend`.
  *
  * For a reusable compiler instance, prefer {@link RuntimeCompiler}.
  */
-export function compileShader(entry: IrEntry, backend: Backend = new WgslBackend()): string {
+export function compileShader(entry: IrEntry, backend: Backend): string {
     return emitEntry(entry, backend).code;
 }
 
@@ -36,8 +37,8 @@ export function compileShader(entry: IrEntry, backend: Backend = new WgslBackend
 export class RuntimeCompiler {
     private readonly backend: Backend;
 
-    constructor(options: RuntimeCompilerOptions = {}) {
-        this.backend = options.backend ?? new WgslBackend();
+    constructor(options: RuntimeCompilerOptions) {
+        this.backend = options.backend;
     }
 
     /** Lower and emit an entry, returning the source and its metadata. */
