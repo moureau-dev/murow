@@ -1,0 +1,255 @@
+/**
+ * Builtins.
+ *
+ * `std` is the shader math namespace used inside entry bodies. Each builtin
+ * builds an IR `call` (or `sample`) node with a sensible result type.
+ *
+ * Pure. No backend, no device.
+ */
+import type { GpuType } from '../types';
+import type { IrExpr } from '../ir/nodes';
+import { call, discardStmt, sample } from '../ir/builders';
+import { bool as boolType } from '../ir/types';
+import { combineType, scalarOf, ShaderValue, toExpr, vecOf, type ShaderInput } from './value';
+import { d } from './d';
+
+function value(node: IrExpr): ShaderValue {
+    return new ShaderValue({ node });
+}
+
+function unaryCall(name: string, a: ShaderInput): ShaderValue {
+    const ea = toExpr(a);
+    return value(call(ea.type, name, [ea]));
+}
+
+function binaryCall(name: string, a: ShaderInput, b: ShaderInput): ShaderValue {
+    const ea = toExpr(a);
+    const eb = toExpr(b);
+    return value(call(combineType(ea.type, eb.type), name, [ea, eb]));
+}
+
+function ternaryCall(name: string, a: ShaderInput, b: ShaderInput, c: ShaderInput, type: GpuType): ShaderValue {
+    return value(call(type, name, [toExpr(a), toExpr(b), toExpr(c)]));
+}
+
+/** Shader builtins and value constructors. */
+export const std = {
+    ...d,
+
+    add(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return binaryCall('add', a, b);
+    },
+
+    sub(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return binaryCall('sub', a, b);
+    },
+
+    mul(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return binaryCall('mul', a, b);
+    },
+
+    div(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return binaryCall('div', a, b);
+    },
+
+    mod(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return binaryCall('mod', a, b);
+    },
+
+    neg(a: ShaderInput): ShaderValue {
+        return unaryCall('neg', a);
+    },
+
+    dot(a: ShaderInput, b: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        const eb = toExpr(b);
+        return value(call(scalarOf(combineType(ea.type, eb.type)), 'dot', [ea, eb]));
+    },
+
+    cross(a: ShaderInput, b: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        const eb = toExpr(b);
+        return value(call(vecOf(combineType(ea.type, eb.type), 3), 'cross', [ea, eb]));
+    },
+
+    distance(a: ShaderInput, b: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        const eb = toExpr(b);
+        return value(call(scalarOf(combineType(ea.type, eb.type)), 'distance', [ea, eb]));
+    },
+
+    reflect(a: ShaderInput, b: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        return value(call(ea.type, 'reflect', [ea, toExpr(b)]));
+    },
+
+    refract(a: ShaderInput, b: ShaderInput, eta: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        return value(call(ea.type, 'refract', [ea, toExpr(b), toExpr(eta)]));
+    },
+
+    faceForward(a: ShaderInput, b: ShaderInput, c: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        return value(call(ea.type, 'faceForward', [ea, toExpr(b), toExpr(c)]));
+    },
+
+    normalize(a: ShaderInput): ShaderValue {
+        return unaryCall('normalize', a);
+    },
+
+    length(a: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        return value(call(scalarOf(ea.type), 'length', [ea]));
+    },
+
+    mix(a: ShaderInput, b: ShaderInput, t: ShaderInput): ShaderValue {
+        return ternaryCall('mix', a, b, t, combineType(toExpr(a).type, toExpr(b).type));
+    },
+
+    clamp(a: ShaderInput, low: ShaderInput, high: ShaderInput): ShaderValue {
+        return ternaryCall('clamp', a, low, high, toExpr(a).type);
+    },
+
+    saturate(a: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        return value(call(ea.type, 'saturate', [ea]));
+    },
+
+    step(edge: ShaderInput, x: ShaderInput): ShaderValue {
+        return binaryCall('step', edge, x);
+    },
+
+    smoothstep(e0: ShaderInput, e1: ShaderInput, x: ShaderInput): ShaderValue {
+        return ternaryCall('smoothstep', e0, e1, x, toExpr(x).type);
+    },
+
+    min(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return binaryCall('min', a, b);
+    },
+
+    max(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return binaryCall('max', a, b);
+    },
+
+    pow(a: ShaderInput, b: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        const eb = toExpr(b);
+        return value(call(combineType(ea.type, eb.type), 'pow', [ea, eb]));
+    },
+
+    atan2(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return binaryCall('atan2', a, b);
+    },
+
+    sin(a: ShaderInput): ShaderValue {
+        return unaryCall('sin', a);
+    },
+
+    cos(a: ShaderInput): ShaderValue {
+        return unaryCall('cos', a);
+    },
+
+    tan(a: ShaderInput): ShaderValue {
+        return unaryCall('tan', a);
+    },
+
+    asin(a: ShaderInput): ShaderValue {
+        return unaryCall('asin', a);
+    },
+
+    acos(a: ShaderInput): ShaderValue {
+        return unaryCall('acos', a);
+    },
+
+    atan(a: ShaderInput): ShaderValue {
+        return unaryCall('atan', a);
+    },
+
+    exp(a: ShaderInput): ShaderValue {
+        return unaryCall('exp', a);
+    },
+
+    exp2(a: ShaderInput): ShaderValue {
+        return unaryCall('exp2', a);
+    },
+
+    log(a: ShaderInput): ShaderValue {
+        return unaryCall('log', a);
+    },
+
+    log2(a: ShaderInput): ShaderValue {
+        return unaryCall('log2', a);
+    },
+
+    sqrt(a: ShaderInput): ShaderValue {
+        return unaryCall('sqrt', a);
+    },
+
+    inverseSqrt(a: ShaderInput): ShaderValue {
+        return unaryCall('inverseSqrt', a);
+    },
+
+    sign(a: ShaderInput): ShaderValue {
+        return unaryCall('sign', a);
+    },
+
+    degrees(a: ShaderInput): ShaderValue {
+        return unaryCall('degrees', a);
+    },
+
+    radians(a: ShaderInput): ShaderValue {
+        return unaryCall('radians', a);
+    },
+
+    ceil(a: ShaderInput): ShaderValue {
+        return unaryCall('ceil', a);
+    },
+
+    round(a: ShaderInput): ShaderValue {
+        return unaryCall('round', a);
+    },
+
+    trunc(a: ShaderInput): ShaderValue {
+        return unaryCall('trunc', a);
+    },
+
+    abs(a: ShaderInput): ShaderValue {
+        return unaryCall('abs', a);
+    },
+
+    floor(a: ShaderInput): ShaderValue {
+        return unaryCall('floor', a);
+    },
+
+    fract(a: ShaderInput): ShaderValue {
+        return unaryCall('fract', a);
+    },
+
+    not(a: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        return value(call(ea.type, 'not', [ea]));
+    },
+
+    any(a: ShaderInput): ShaderValue {
+        return value(call(boolType(), 'any', [toExpr(a)]));
+    },
+
+    all(a: ShaderInput): ShaderValue {
+        return value(call(boolType(), 'all', [toExpr(a)]));
+    },
+
+    select(cond: ShaderInput, a: ShaderInput, b: ShaderInput): ShaderValue {
+        const ea = toExpr(a);
+        const eb = toExpr(b);
+        return value(call(combineType(ea.type, eb.type), 'select', [ea, eb, toExpr(cond)]));
+    },
+
+    textureSample(texture: ShaderInput, sampler: ShaderInput, coords: ShaderInput): ShaderValue {
+        const texture_ = toExpr(texture);
+        return value(sample(vecOf(texture_.type, 4), texture_, toExpr(sampler), toExpr(coords)));
+    },
+
+    discard(): ReturnType<typeof discardStmt> {
+        return discardStmt();
+    },
+};
