@@ -199,3 +199,7 @@ export declare namespace Handles {
         setRotation(x: number, y: number, z: number): void;
     }
 }
+
+// Top-level aliases so every handle sub-type is reachable without the namespace.
+export type MaterialRef = Handles.MaterialRef;
+export type InstanceMaterials = Handles.InstanceMaterials;

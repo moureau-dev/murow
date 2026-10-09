@@ -18,4 +18,6 @@ export type {
     LightHandle,
     MeshInstanceOptions,
     WebGPU3DRendererOptions,
+    RaycastHit,
+    RaycastOptions,
 } from './types';

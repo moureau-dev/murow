@@ -49,6 +49,12 @@ export type {
     CullMode,
     EngineMaterialSpec,
     ShaderMaterialSpec,
+    InstanceMaterials,
+    MaterialRef,
+    DecalLayerOptions,
+    SpawnDecalOptions,
+    RaycastHit,
+    RaycastOptions,
 } from './3d/renderer';
 export type { LightSpec } from './3d/renderer/managers/lights';
 export type { Handles } from './3d/renderer';
