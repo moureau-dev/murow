@@ -213,6 +213,15 @@ export const DIRECT_INTRINSICS: readonly string[] = [
     'determinant',
 ];
 
+/** Binary operator spellings shared by all targets. */
+export const OPERATOR_INTRINSICS: Readonly<Record<string, string>> = Object.freeze({
+    add: '+',
+    sub: '-',
+    mul: '*',
+    div: '/',
+    mod: '%',
+});
+
 /** Build the default intrinsic registry. */
 export function createDefaultIntrinsics(): IntrinsicRegistry {
     const registry = new IntrinsicRegistry();
@@ -221,6 +230,15 @@ export function createDefaultIntrinsics(): IntrinsicRegistry {
             `${name}(${args.map((arg) => ctx.backend.emitNode(arg, ctx)).join(', ')})`,
         );
     }
+    for (const name of Object.keys(OPERATOR_INTRINSICS)) {
+        const op = OPERATOR_INTRINSICS[name]!;
+        registry.register(name, (args, ctx) => {
+            const left = ctx.backend.emitNode(args[0]!, ctx);
+            const right = ctx.backend.emitNode(args[1]!, ctx);
+            return `(${left} ${op} ${right})`;
+        });
+    }
+    registry.register('neg', (args, ctx) => `(-${ctx.backend.emitNode(args[0]!, ctx)})`);
     return registry;
 }
 
@@ -516,6 +534,9 @@ function collectBuiltins(entry: IrEntry): IrBuiltin[] {
     walkEntry(entry, (node) => {
         if (node.kind !== 'builtin') return;
         const builtin = node as IrBuiltin;
+        // A builtin whose name is also an entry parameter is the parameter's
+        // reference in the body, not a separate stage builtin to declare.
+        if (entry.params.some((p) => p.name === builtin.name)) return;
         if (!found.some((b) => b.name === builtin.name)) found.push(builtin);
     });
     return found;

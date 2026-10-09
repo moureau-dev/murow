@@ -26,9 +26,11 @@ import {
     builtin,
     call,
     cast,
+    construct,
     continueStmt,
     discardStmt,
     entry,
+    field,
     ifStmt,
     letStmt,
     literal,
@@ -36,10 +38,12 @@ import {
     loopStmt,
     param,
     returnStmt,
+    struct as structType,
     swizzle,
     unary,
     type IrEntry,
     type IrExpr,
+    type IrOutput,
     type IrParam,
     type IrStmt,
     type IrStage,
@@ -52,8 +56,18 @@ import { binding } from '../ir/builders';
 export interface ParseShaderOptions {
     readonly stage: IrStage;
     readonly params?: Record<string, GpuType>;
+    /** Stage builtin inputs, by source name, for entry parameters. */
+    readonly builtins?: Record<string, GpuType>;
+    /** WGSL/protocol builtin spelling for a source name (for example `instance_index`). */
+    readonly builtinNames?: Record<string, string>;
     readonly material?: Record<string, GpuType>;
     readonly workgroupSize?: readonly [number, number, number];
+    /**
+     * Vertex outputs in declaration order. When present, a body that returns an
+     * object literal is lowered to a construction of the output struct, so the
+     * emitter can declare the struct and return it.
+     */
+    readonly outputs?: readonly IrOutput[];
     /**
      * Extra named symbols the body may reference, resolved as bare identifiers.
      * A backend registers its environment here (layouts, scene uniforms, engine
@@ -71,9 +85,9 @@ interface Token {
 }
 
 const PUNCTUATORS = [
-    '=>', '==', '!=', '<=', '>=', '&&', '||', '++', '--',
+    '===', '!==', '=>', '==', '!=', '<=', '>=', '&&', '||', '++', '--', '<<', '>>',
     '{', '}', '(', ')', '[', ']', ';', ',', '.', ':', '?',
-    '+', '-', '*', '/', '%', '<', '>', '=', '!',
+    '+', '-', '*', '/', '%', '<', '>', '=', '!', '&', '|', '^',
 ];
 
 function isIdentStart(ch: string): boolean {
@@ -153,6 +167,8 @@ class Parser {
     private namespaceParams = '';
     private namespaceMaterial = '';
     private namespaceStd = '';
+    /** Names bound by destructured parameters, mapped to their namespace kind. */
+    private readonly destructured: Record<string, 'params' | 'material' | 'std'> = Object.create(null);
 
     constructor(
         private readonly tokens: Token[],
@@ -173,30 +189,61 @@ class Parser {
             params,
             body,
             ...(this.options.workgroupSize ? { workgroupSize: this.options.workgroupSize } : {}),
+            ...(this.options.outputs && this.options.outputs.length > 0 ? { outputs: this.options.outputs } : {}),
         });
     }
 
     private parseArrowHeader(): void {
-        // Accept `(a, b, c) =>`, `a =>`, or a plain `{ ... }` body.
+        // Accept `(a, b, c) =>`, `a =>`, `({ a, b }) =>`, or a plain `{ ... }` body.
         if (this.startsBlock()) return;
-        const names: string[] = [];
+        const names: Array<string | string[]> = [];
+        const readPattern = (): string | string[] => {
+            if (this.peekPunc('{')) {
+                this.next();
+                const bound: string[] = [];
+                while (!this.peekPunc('}')) {
+                    const key = this.next();
+                    if (key.kind !== 'ident') throw this.error('expected a bind name', key);
+                    let binding = key.value;
+                    if (this.peekPunc(':')) {
+                        this.next();
+                        binding = this.next().value;
+                    }
+                    bound.push(binding);
+                    if (this.peekPunc(',')) this.next();
+                }
+                this.expectPunc('}');
+                return bound;
+            }
+            const t = this.next();
+            if (t.kind !== 'ident') throw this.error('expected a parameter name', t);
+            return t.value;
+        };
         if (this.peekPunc('(')) {
             this.next();
             while (!this.peekPunc(')')) {
-                const t = this.next();
-                if (t.kind !== 'ident') throw this.error('expected a parameter name', t);
-                names.push(t.value);
+                names.push(readPattern());
                 if (this.peekPunc(',')) this.next();
             }
             this.expectPunc(')');
-        } else if (this.peekKind('ident')) {
-            names.push(this.next().value);
+        } else if (this.peekKind('ident') || this.peekPunc('{')) {
+            names.push(readPattern());
         }
         if (this.peekPunc('=>')) this.next();
-        // Positional namespaces: params, material, std.
-        this.namespaceParams = names[0] ?? 'v';
-        this.namespaceMaterial = names[1] ?? 'm';
-        this.namespaceStd = names[2] ?? 's';
+        // Positional namespaces: params, material, std. A destructured list binds
+        // each name straight to its positional namespace.
+        const kinds: Array<'params' | 'material' | 'std'> = ['params', 'material', 'std'];
+        for (let i = 0; i < names.length; i++) {
+            const entry = names[i]!;
+            const kind = kinds[i] ?? 'params';
+            if (Array.isArray(entry)) for (const name of entry) this.destructured[name] = kind;
+        }
+        const first = names[0];
+        const second = names[1];
+        const third = names[2];
+        this.namespaceParams = typeof first === 'string' ? first : 'v';
+        this.namespaceMaterial = typeof second === 'string' ? second : 'm';
+        this.namespaceStd = typeof third === 'string' ? third : 's';
     }
 
     private parseBlock(): IrStmt[] {
@@ -212,7 +259,7 @@ class Parser {
     private parseStatement(): IrStmt[] {
         const token = this.peek();
         if (token.kind === 'ident') {
-            if (token.value === 'const' || token.value === 'let' || token.value === 'var') return [this.parseVarDecl()];
+            if (token.value === 'const' || token.value === 'let' || token.value === 'var') return this.parseVarDecl();
             if (token.value === 'return') return [this.parseReturn()];
             if (token.value === 'if') return [this.parseIf()];
             if (token.value === 'for') return this.parseFor();
@@ -256,7 +303,7 @@ class Parser {
         } else {
             const head = this.peek();
             if (head.kind === 'ident' && (head.value === 'const' || head.value === 'let' || head.value === 'var')) {
-                init.push(this.parseVarDecl());
+                init.push(...this.parseVarDecl());
             } else {
                 const expr = this.parseExpression();
                 this.consumeSemicolon();
@@ -304,16 +351,61 @@ class Parser {
         return this.startsBlock() ? this.parseBlock() : this.parseStatement();
     }
 
-    private parseVarDecl(): IrStmt {
+    private parseVarDecl(): IrStmt[] {
         this.next();
-        const name = this.next();
-        if (name.kind !== 'ident') throw this.error('expected a variable name', name);
-        this.expectPunc('=');
-        const value = this.parseExpression();
+        const out: IrStmt[] = [];
+        for (;;) {
+            if (this.peekPunc('{')) {
+                out.push(...this.parseObjectPatternDeclarator());
+            } else {
+                const name = this.next();
+                if (name.kind !== 'ident') throw this.error('expected a variable name', name);
+                this.expectPunc('=');
+                const value = this.parseExpression();
+                out.push(this.bind(name.value, value));
+            }
+            if (this.peekPunc(',')) {
+                this.next();
+                continue;
+            }
+            break;
+        }
         this.consumeSemicolon();
+        return out;
+    }
+
+    /**
+     * `{ a, b: c } = expr` inside a declaration list. Each binding lowers to a
+     * member access on the initializer, stored as its own local. The trailing
+     * comma, if any, is left for the caller.
+     */
+    private parseObjectPatternDeclarator(): IrStmt[] {
+        this.next();
+        const bindings: Array<{ key: string; name: string }> = [];
+        while (!this.peekPunc('}')) {
+            const key = this.next();
+            if (key.kind !== 'ident') throw this.error('expected an object key', key);
+            let name = key.value;
+            if (this.peekPunc(':')) {
+                this.next();
+                const alias = this.next();
+                if (alias.kind !== 'ident') throw this.error('expected a binding name', alias);
+                name = alias.value;
+            }
+            bindings.push({ key: key.value, name });
+            if (this.peekPunc(',')) this.next();
+        }
+        this.expectPunc('}');
+        this.expectPunc('=');
+        const source = this.parseExpression();
+        return bindings.map((binding) => this.bind(binding.name, this.member(source, binding.key)));
+    }
+
+    /** Bind a value to a new local and emit its `let`. */
+    private bind(name: string, value: unknown): IrStmt {
         const id = this.nextLocal++;
-        this.locals[name.value] = local(exprType(this.exprOf(value)), id);
-        return letStmt(id, this.locals[name.value]!.type, this.exprOf(value));
+        this.locals[name] = local(exprType(this.exprOf(value)), id);
+        return letStmt(id, this.locals[name]!.type, this.exprOf(value));
     }
 
     private parseReturn(): IrStmt {
@@ -324,7 +416,29 @@ class Parser {
         }
         const value = this.parseExpression();
         this.consumeSemicolon();
+        if (isObjectLiteral(value)) return returnStmt(this.buildOutputValue(value));
         return returnStmt(this.exprOf(value));
+    }
+
+    /**
+     * Lower `return { field: expr, ... }` into a construction of the entry's
+     * output struct. Fields follow `options.outputs` order, so the positional
+     * constructor matches the emitted struct declaration.
+     */
+    private buildOutputValue(value: { __object: Array<{ key: string; value: IrExpr }> }): IrExpr {
+        const outputs = this.options.outputs;
+        if (!outputs || outputs.length === 0) {
+            throw this.error('an object return requires `outputs` in the parse options');
+        }
+        const byName: Record<string, IrExpr> = Object.create(null);
+        for (const entry of value.__object) byName[entry.key] = entry.value;
+        const fields = outputs.map((output) => field(output.name, output.type));
+        const args = outputs.map((output) => {
+            const expr = byName[output.name];
+            if (!expr) throw this.error(`missing output field '${output.name}'`);
+            return expr;
+        });
+        return construct(structType('vs_out', fields), args);
     }
 
     private parseIf(): IrStmt {
@@ -372,8 +486,12 @@ class Parser {
     private readonly precedence: readonly (readonly string[])[] = [
         ['||'],
         ['&&'],
-        ['==', '!='],
+        ['|'],
+        ['^'],
+        ['&'],
+        ['==', '!=', '===', '!=='],
         ['<', '<=', '>', '>='],
+        ['<<', '>>'],
         ['+', '-'],
         ['*', '/', '%'],
     ];
@@ -396,7 +514,9 @@ class Parser {
             case '*': return intrinsic('mul', [left, right]);
             case '/': return intrinsic('div', [left, right]);
             case '%': return binary(left.type, '%', left, right);
+            case '===':
             case '==':
+            case '!==':
             case '!=':
             case '<':
             case '<=':
@@ -404,7 +524,13 @@ class Parser {
             case '>=':
             case '&&':
             case '||':
-                return binary(boolType(), op, left, right);
+                return binary(boolType(), op === '===' ? '==' : op === '!==' ? '!=' : op, left, right);
+            case '&':
+            case '|':
+            case '^':
+            case '<<':
+            case '>>':
+                return binary(left.type, op, left, right);
             default:
                 throw this.error(`unsupported operator '${op}'`);
         }
@@ -420,6 +546,10 @@ class Parser {
             return unary(boolType(), '!', this.exprOf(this.parseUnary()));
         }
         if (this.peekPunc('+')) { this.next(); return this.parseUnary(); }
+        if (this.peekPunc('++') || this.peekPunc('--')) {
+            const op = this.next().value;
+            return this.increment(this.exprOf(this.parseUnary()), op === '++');
+        }
         return this.parsePostfix();
     }
 
@@ -439,11 +569,20 @@ class Parser {
                 value = access(elementType(base.type), base, this.exprOf(index));
             } else if (this.peekPunc('(')) {
                 value = this.callValue(value);
+            } else if (this.peekPunc('++') || this.peekPunc('--')) {
+                const op = this.next().value;
+                value = this.increment(this.exprOf(value), op === '++');
             } else {
                 break;
             }
         }
         return value;
+    }
+
+    /** `x++`/`x--` as an assignment statement targeting `x`. */
+    private increment(target: IrExpr, up: boolean): IrStmt {
+        const one = literal(target.type, 1);
+        return assignStmt(target, up ? intrinsic('add', [target, one]) : intrinsic('sub', [target, one]));
     }
 
     private parsePrimary(): unknown {
@@ -454,20 +593,55 @@ class Parser {
             this.expectPunc(')');
             return inner;
         }
+        if (token.kind === 'punc' && token.value === '{') {
+            return this.parseObjectLiteral();
+        }
         if (token.kind === 'ident') {
             if (token.value === 'true') return literal(boolType(), true);
             if (token.value === 'false') return literal(boolType(), false);
+            const known = this.locals[token.value];
+            if (known) return known;
             if (token.value === 'd') return { __namespace: 'd' };
             if (token.value === this.namespaceParams || token.value === this.namespaceMaterial || token.value === this.namespaceStd) {
                 return { __namespace: token.value };
             }
-            const known = this.locals[token.value];
-            if (known) return known;
+            const destructured = this.destructured[token.value];
+            if (destructured) {
+                if (destructured === 'params') {
+                    const value = this.params[token.value];
+                    if (!value) throw this.error(`unknown input '${token.value}'`, token);
+                    return value;
+                }
+                if (destructured === 'material') {
+                    const value = this.material[token.value];
+                    if (!value) throw this.error(`unknown material field '${token.value}'`, token);
+                    return value;
+                }
+                return this.member({ __namespace: 'std' }, token.value);
+            }
             const external = this.options.externals?.[token.value];
             if (external !== undefined) return external;
             throw this.error(`unknown identifier '${token.value}'`, token);
         }
         throw this.error('unexpected token', token);
+    }
+
+    /**
+     * Parse an object literal in expression position. The leading `{` has
+     * already been consumed by {@link parsePrimary}. Engine vertex bodies return
+     * one of these to produce their varying outputs.
+     */
+    private parseObjectLiteral(): { __object: Array<{ key: string; value: IrExpr }> } {
+        const entries: Array<{ key: string; value: IrExpr }> = [];
+        while (!this.peekPunc('}')) {
+            const key = this.next();
+            if (key.kind !== 'ident') throw this.error('expected an object key', key);
+            this.expectPunc(':');
+            entries.push({ key: key.value, value: this.exprOf(this.parseExpression()) });
+            if (this.peekPunc(',')) this.next();
+        }
+        this.expectPunc('}');
+        return { __object: entries };
     }
 
     private member(base: unknown, name: string): unknown {
@@ -482,9 +656,20 @@ class Parser {
                 if (!value) throw this.error(`unknown material field '${name}'`);
                 return value;
             }
-            // d namespace: a scalar cast such as d.u32(x).
-            if (base.__namespace === 'd') return { __cast: name };
-            // std namespace: a callable intrinsic.
+            // d namespace: a scalar cast such as d.u32(x), or a constructor
+            // such as d.vec3f(...) when a `d` object is registered as an external.
+            if (base.__namespace === 'd') {
+                const dns = this.options.externals?.d as Record<string, unknown> | undefined;
+                const constructor = dns?.[name];
+                if (typeof constructor === 'function') return constructor;
+                return { __cast: name };
+            }
+            // std namespace: prefer the environment's own namespace so its
+            // overrides (argument order, extra builtins) apply. Fall back to a
+            // name-only intrinsic the backend resolves.
+            const stdNs = this.options.externals?.std as Record<string, unknown> | undefined;
+            const member = stdNs?.[name];
+            if (typeof member === 'function') return member;
             return { __intrinsic: name };
         }
         // External object member access (for example a layout's `.$.uniforms`).
@@ -552,6 +737,10 @@ function buildSchemas(
     for (const name of Object.keys(options.params ?? {})) {
         params[name] = new ShaderValue({ node: builtin((options.params as Record<string, GpuType>)[name]!, name) });
     }
+    for (const name of Object.keys(options.builtins ?? {})) {
+        const spelling = options.builtinNames?.[name] ?? name;
+        params[name] = new ShaderValue({ node: builtin((options.builtins as Record<string, GpuType>)[name]!, spelling) });
+    }
     let index = 0;
     for (const name of Object.keys(options.material ?? {})) {
         material[name] = new ShaderValue({ node: binding((options.material as Record<string, GpuType>)[name]!, 0, index++) });
@@ -571,6 +760,10 @@ function exprResult(value: unknown): IrExpr {
 
 function isObject(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
+}
+
+function isObjectLiteral(value: unknown): value is { __object: Array<{ key: string; value: IrExpr }> } {
+    return isObject(value) && Array.isArray((value as { __object?: unknown }).__object);
 }
 
 function isExprLike(value: unknown): boolean {
