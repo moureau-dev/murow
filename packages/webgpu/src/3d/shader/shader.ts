@@ -328,6 +328,116 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
     })(fn as any);
 }
 
+/**
+ * Like `createTexturedMeshVertex` but offsets each vertex along its normal by
+ * the material's `extrude` value (inverted-hull outlines). Requires the
+ * material bind group, so only engine materials use it.
+ */
+export function createExtrudedMeshVertex(meshLayout: MeshDataLayout, matLayout: any) {
+    const fn = function(input: { position: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
+        const instanceIndex = input.instanceIndex;
+        const slot = meshLayout.$.slotIndices[instanceIndex];
+        const dyn = meshLayout.$.dynamicInstances[slot];
+        const stat = meshLayout.$.staticInstances[slot];
+        const alpha = meshLayout.$.uniforms.alpha;
+        const ext = matLayout.$.material.extrude;
+
+        const px = std.mix(dyn.prevPosX, dyn.currPosX, alpha);
+        const py = std.mix(dyn.prevPosY, dyn.currPosY, alpha);
+        const pz = std.mix(dyn.prevPosZ, dyn.currPosZ, alpha);
+
+        const rx = std.mix(dyn.prevRotX, dyn.currRotX, alpha);
+        const ry = std.mix(dyn.prevRotY, dyn.currRotY, alpha);
+        const rz = std.mix(dyn.prevRotZ, dyn.currRotZ, alpha);
+
+        const sx = stat.scaleX;
+        const sy = stat.scaleY;
+        const sz = stat.scaleZ;
+
+        const scaled = d.vec3f(
+            std.mul(std.add(input.position.x, std.mul(input.normal.x, ext)), sx),
+            std.mul(std.add(input.position.y, std.mul(input.normal.y, ext)), sy),
+            std.mul(std.add(input.position.z, std.mul(input.normal.z, ext)), sz),
+        );
+
+        const czr = std.cos(rz);
+        const szr = std.sin(rz);
+        const rz1 = d.vec3f(
+            std.sub(std.mul(scaled.x, czr), std.mul(scaled.y, szr)),
+            std.add(std.mul(scaled.x, szr), std.mul(scaled.y, czr)),
+            scaled.z,
+        );
+
+        const cyr = std.cos(ry);
+        const syr = std.sin(ry);
+        const ry1 = d.vec3f(
+            std.add(std.mul(rz1.x, cyr), std.mul(rz1.z, syr)),
+            rz1.y,
+            std.sub(std.mul(rz1.z, cyr), std.mul(rz1.x, syr)),
+        );
+
+        const cxr = std.cos(rx);
+        const sxr = std.sin(rx);
+        const rx1 = d.vec3f(
+            ry1.x,
+            std.sub(std.mul(ry1.y, cxr), std.mul(ry1.z, sxr)),
+            std.add(std.mul(ry1.y, sxr), std.mul(ry1.z, cxr)),
+        );
+
+        const worldPos = d.vec4f(
+            std.add(rx1.x, px),
+            std.add(rx1.y, py),
+            std.add(rx1.z, pz),
+            1.0,
+        );
+
+        const nScaled = input.normal;
+        const nRz = d.vec3f(
+            std.sub(std.mul(nScaled.x, czr), std.mul(nScaled.y, szr)),
+            std.add(std.mul(nScaled.x, szr), std.mul(nScaled.y, czr)),
+            nScaled.z,
+        );
+        const nRy = d.vec3f(
+            std.add(std.mul(nRz.x, cyr), std.mul(nRz.z, syr)),
+            nRz.y,
+            std.sub(std.mul(nRz.z, cyr), std.mul(nRz.x, syr)),
+        );
+        const nRx = d.vec3f(
+            nRy.x,
+            std.sub(std.mul(nRy.y, cxr), std.mul(nRy.z, sxr)),
+            std.add(std.mul(nRy.y, sxr), std.mul(nRy.z, cxr)),
+        );
+
+        const clipPos = std.mul(meshLayout.$.uniforms.viewProjection, worldPos);
+
+        return {
+            pos: clipPos,
+            vNormal: nRx,
+            vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
+            vUV: input.uv,
+            vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
+            vCustom: d.vec2f(stat.custom0, stat.custom1),
+        };
+    };
+    attachShaderMetadata(fn, () => ({ d, std, meshLayout, matLayout }), false, { d, std, meshLayout, matLayout } as any, _WS);
+    return tgpu.vertexFn({
+        in: {
+            position: d.location(0, d.vec3f),
+            normal: d.location(1, d.vec3f),
+            uv: d.location(2, d.vec2f),
+            instanceIndex: d.builtin.instanceIndex,
+        },
+        out: {
+            pos: d.builtin.position,
+            vNormal: d.vec3f,
+            vColor: d.vec3f,
+            vUV: d.vec2f,
+            vWorldPos: d.vec3f,
+            vCustom: d.vec2f,
+        },
+    })(fn as any);
+}
+
 export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
     const fn = function(input: { position: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
         const instanceIndex = input.instanceIndex;
@@ -636,6 +746,159 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
         };
     };
     attachShaderMetadata(fn, () => ({ d, std, layout }), false, { d, std, layout }, _WSSK);
+    return tgpu.vertexFn({
+        in: {
+            position: d.location(0, d.vec3f),
+            normal: d.location(1, d.vec3f),
+            uv: d.location(2, d.vec2f),
+            joints: d.location(3, d.vec4u),
+            weights: d.location(4, d.vec4f),
+            instanceIndex: d.builtin.instanceIndex,
+        },
+        out: {
+            pos: d.builtin.position,
+            vNormal: d.vec3f,
+            vColor: d.vec3f,
+            vUV: d.vec2f,
+            vWorldPos: d.vec3f,
+            vCustom: d.vec2f,
+        },
+    })(fn as any);
+}
+
+/**
+ * Skinned counterpart of `createExtrudedMeshVertex`: offsets along the skinned
+ * normal for inverted-hull outlines on animated models.
+ */
+export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, matLayout: any) {
+    const fn = function(input: { position: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; uv: { x: number; y: number }; joints: { x: number; y: number; z: number; w: number }; weights: { x: number; y: number; z: number; w: number }; instanceIndex: number }) {
+        const slot = layout.$.slotIndices[input.instanceIndex];
+        const dyn = layout.$.dynamicInstances[slot];
+        const stat = layout.$.staticInstances[slot];
+        const alpha = layout.$.uniforms.alpha;
+        const boneOffset = stat.boneOffset;
+        const ext = matLayout.$.material.extrude;
+
+        const j0 = input.joints.x;
+        const j1 = input.joints.y;
+        const j2 = input.joints.z;
+        const j3 = input.joints.w;
+        const w0 = input.weights.x;
+        const w1 = input.weights.y;
+        const w2 = input.weights.z;
+        const w3 = input.weights.w;
+
+        const bm = layout.$.boneMatrices;
+        const m0 = bm[(d.i32(boneOffset) + d.i32(j0))];
+        const m1 = bm[(d.i32(boneOffset) + d.i32(j1))];
+        const m2 = bm[(d.i32(boneOffset) + d.i32(j2))];
+        const m3 = bm[(d.i32(boneOffset) + d.i32(j3))];
+
+        const p = d.vec4f(input.position.x, input.position.y, input.position.z, 1.0);
+        // @ts-ignore
+        const sp0 = m0 * p as unknown as d.v4f;
+        // @ts-ignore
+        const sp1 = m1 * p as unknown as d.v4f;
+        // @ts-ignore
+        const sp2 = m2 * p as unknown as d.v4f;
+        // @ts-ignore
+        const sp3 = m3 * p as unknown as d.v4f;
+
+        const skinnedPos = d.vec3f(
+            sp0.x * w0 + sp1.x * w1 + sp2.x * w2 + sp3.x * w3,
+            sp0.y * w0 + sp1.y * w1 + sp2.y * w2 + sp3.y * w3,
+            sp0.z * w0 + sp1.z * w1 + sp2.z * w2 + sp3.z * w3,
+        );
+
+        const n = d.vec4f(input.normal.x, input.normal.y, input.normal.z, 0.0);
+        // @ts-ignore
+        const sn0 = m0 * n as unknown as d.v4f;
+        // @ts-ignore
+        const sn1 = m1 * n as unknown as d.v4f;
+        // @ts-ignore
+        const sn2 = m2 * n as unknown as d.v4f;
+        // @ts-ignore
+        const sn3 = m3 * n as unknown as d.v4f;
+
+        const skinnedNormal = d.vec3f(
+            sn0.x * w0 + sn1.x * w1 + sn2.x * w2 + sn3.x * w3,
+            sn0.y * w0 + sn1.y * w1 + sn2.y * w2 + sn3.y * w3,
+            sn0.z * w0 + sn1.z * w1 + sn2.z * w2 + sn3.z * w3,
+        );
+
+        const px = std.mix(dyn.prevPosX, dyn.currPosX, alpha);
+        const py = std.mix(dyn.prevPosY, dyn.currPosY, alpha);
+        const pz = std.mix(dyn.prevPosZ, dyn.currPosZ, alpha);
+
+        const rx = std.mix(dyn.prevRotX, dyn.currRotX, alpha);
+        const ry = std.mix(dyn.prevRotY, dyn.currRotY, alpha);
+        const rz = std.mix(dyn.prevRotZ, dyn.currRotZ, alpha);
+
+        const sx = stat.scaleX;
+        const sy = stat.scaleY;
+        const sz = stat.scaleZ;
+
+        const scaled = d.vec3f(
+            (skinnedPos.x + skinnedNormal.x * ext) * sx,
+            (skinnedPos.y + skinnedNormal.y * ext) * sy,
+            (skinnedPos.z + skinnedNormal.z * ext) * sz,
+        );
+
+        const czr = std.cos(rz);
+        const szr = std.sin(rz);
+        const rz1 = d.vec3f(
+            scaled.x * czr - scaled.y * szr,
+            scaled.x * szr + scaled.y * czr,
+            scaled.z,
+        );
+
+        const cyr = std.cos(ry);
+        const syr = std.sin(ry);
+        const ry1 = d.vec3f(
+            rz1.x * cyr + rz1.z * syr,
+            rz1.y,
+            rz1.z * cyr - rz1.x * syr,
+        );
+
+        const cxr = std.cos(rx);
+        const sxr = std.sin(rx);
+        const rx1 = d.vec3f(
+            ry1.x,
+            ry1.y * cxr - ry1.z * sxr,
+            ry1.y * sxr + ry1.z * cxr,
+        );
+
+        const worldPos = d.vec4f(rx1.x + px, rx1.y + py, rx1.z + pz, 1.0);
+
+        const nRz = d.vec3f(
+            skinnedNormal.x * czr - skinnedNormal.y * szr,
+            skinnedNormal.x * szr + skinnedNormal.y * czr,
+            skinnedNormal.z,
+        );
+        const nRy = d.vec3f(
+            nRz.x * cyr + nRz.z * syr,
+            nRz.y,
+            nRz.z * cyr - nRz.x * syr,
+        );
+        const nRx = d.vec3f(
+            nRy.x,
+            nRy.y * cxr - nRy.z * sxr,
+            nRy.y * sxr + nRy.z * cxr,
+        );
+
+        // @ts-ignore
+        const clipPos = layout.$.uniforms.viewProjection * worldPos as unknown as d.v4f;
+
+        return {
+            pos: clipPos,
+            vNormal: nRx,
+            vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
+            vUV: input.uv,
+            vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
+            vCustom: d.vec2f(0.0, 0.0),
+        };
+    };
+    attachShaderMetadata(fn, () => ({ d, std, layout, matLayout }), false, { d, std, layout, matLayout } as any, _WSSK);
     return tgpu.vertexFn({
         in: {
             position: d.location(0, d.vec3f),

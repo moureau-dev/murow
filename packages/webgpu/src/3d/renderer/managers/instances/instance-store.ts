@@ -10,8 +10,10 @@ import {
     DYN_CURR_RX, DYN_CURR_RY, DYN_CURR_RZ,
     STAT_SX, STAT_SY, STAT_SZ, STAT_CR, STAT_CG, STAT_CB,
     STAT_MATERIAL_ID, STAT_CUSTOM0, STAT_CUSTOM1,
+    MAX_MATERIALS_PER_INSTANCE,
 } from './offsets';
 import { resolveTransform } from './transform';
+import { EMPTY_MATERIALS } from './empty-materials';
 
 export interface InstanceStoreDeps {
     maxInstances: number;
@@ -42,8 +44,10 @@ export class InstanceStore {
 
     /** Dense live-slot set; iterate `activeSlots` over `[0, size)`. */
     readonly slots: SlotMap;
-    /** Per-slot material id (0 = default). */
+    /** Per-slot material ids, `MAX_MATERIALS_PER_INSTANCE` per slot (0 = default). */
     readonly materialIds: Uint16Array;
+    /** Number of materials in each slot's list (always at least 1). */
+    readonly materialCount: Uint8Array;
     /** Per-slot texture override bind group, or null for the model default. */
     private readonly textureBGs: (GPUBindGroup | null)[];
 
@@ -54,7 +58,8 @@ export class InstanceStore {
         this.slotIndexData = new Uint32Array(n);
         this.instanceModelIds = new Uint8Array(n);
         this.instanceHandles = new Array(n).fill(null);
-        this.materialIds = new Uint16Array(n);
+        this.materialIds = new Uint16Array(n * MAX_MATERIALS_PER_INSTANCE);
+        this.materialCount = new Uint8Array(n);
         this.textureBGs = new Array(n).fill(null);
         this.slots = new SlotMap(n);
         this.batcher = new SparseBatcher(n);
@@ -72,8 +77,75 @@ export class InstanceStore {
         this.textureBGs[slot] = null;
     }
 
+    /** Number of materials in a slot's list (0 if the slot is empty). */
+    materialCountOf(slot: number): number {
+        return this.materialCount[slot] ?? 0;
+    }
+
+    /** Material id at index `i` in a slot's list. */
+    materialAt(slot: number, i: number): number {
+        return this.materialIds[slot * MAX_MATERIALS_PER_INSTANCE + i] ?? 0;
+    }
+
+    /** Whether a slot's list contains `materialId`. */
+    hasMaterial(slot: number, materialId: number): boolean {
+        const k = slot * MAX_MATERIALS_PER_INSTANCE;
+        const count = this.materialCount[slot] ?? 0;
+        for (let i = 0; i < count; i++) if (this.materialIds[k + i] === materialId) return true;
+        return false;
+    }
+
+    /** Append a material to a slot's list (no-op if present or full). */
+    addMaterial(slot: number, modelId: number, materialId: number): void {
+        if (this.hasMaterial(slot, materialId)) return;
+        const count = this.materialCount[slot] ?? 0;
+        if (count >= MAX_MATERIALS_PER_INSTANCE) return;
+        this.materialIds[slot * MAX_MATERIALS_PER_INSTANCE + count] = materialId;
+        this.materialCount[slot] = count + 1;
+        this.batcher.add(materialId, modelId, slot);
+        if (materialId > 0) this.deps.retainMaterial?.(materialId);
+        this.dynamicVersion++;
+    }
+
+    /** Remove a material from a slot's list (falls back to the default when empty). */
+    removeMaterial(slot: number, modelId: number, materialId: number): void {
+        const k = slot * MAX_MATERIALS_PER_INSTANCE;
+        const count = this.materialCount[slot] ?? 0;
+        let idx = -1;
+        for (let i = 0; i < count; i++) if (this.materialIds[k + i] === materialId) { idx = i; break; }
+        if (idx < 0) return;
+        this.batcher.remove(materialId, modelId, slot);
+        if (materialId > 0) this.deps.releaseMaterial?.(materialId);
+        for (let i = idx; i < count - 1; i++) this.materialIds[k + i] = this.materialIds[k + i + 1]!;
+        let next = count - 1;
+        if (next === 0) { this.materialIds[k] = 0; next = 1; this.batcher.add(0, modelId, slot); }
+        this.materialCount[slot] = next;
+        this.staticData[slot * STATIC_MESH_FLOATS + STAT_MATERIAL_ID] = this.materialIds[k]!;
+        this.staticDirty = true;
+        this.dynamicVersion++;
+    }
+
+    private setMaterialList(slot: number, modelId: number, materialIds: readonly number[]): void {
+        const k = slot * MAX_MATERIALS_PER_INSTANCE;
+        let count = 0;
+        for (const m of materialIds) {
+            if (count >= MAX_MATERIALS_PER_INSTANCE) break;
+            let seen = false;
+            for (let i = 0; i < count; i++) if (this.materialIds[k + i] === m) { seen = true; break; }
+            if (seen) continue;
+            this.materialIds[k + count++] = m;
+        }
+        if (count === 0) { this.materialIds[k] = 0; count = 1; }
+        this.materialCount[slot] = count;
+        for (let i = 0; i < count; i++) {
+            const m = this.materialIds[k + i]!;
+            this.batcher.add(m, modelId, slot);
+            if (m > 0) this.deps.retainMaterial?.(m);
+        }
+    }
+
     /** Allocate a slot, write the initial transform, and return a live handle. */
-    spawn(opts: MeshInstanceOptions<any>, modelHandle: ModelHandle, userPrefabId: string | null, id: number, materialId: number = 0): MeshInstanceHandle {
+    spawn(opts: MeshInstanceOptions<any>, modelHandle: ModelHandle, userPrefabId: string | null, id: number, materialIds: readonly number[] = [0]): MeshInstanceHandle {
         const slot = this.slots.add();
         if (slot === -1) throw new Error(`Max instances (${this.deps.maxInstances}) reached`);
 
@@ -104,16 +176,14 @@ export class InstanceStore {
         stat[statBase + STAT_CR] = t.cr;
         stat[statBase + STAT_CG] = t.cg;
         stat[statBase + STAT_CB] = t.cb;
-        stat[statBase + STAT_MATERIAL_ID] = materialId;
+        stat[statBase + STAT_MATERIAL_ID] = materialIds[0] ?? 0;
         stat[statBase + STAT_CUSTOM0] = 0;
         stat[statBase + STAT_CUSTOM1] = 0;
 
         this.staticDirty = true;
         this.dynamicVersion++;
         this.instanceModelIds[slot] = modelHandle.id;
-        this.materialIds[slot] = materialId;
-        this.batcher.add(materialId, modelHandle.id, slot);
-        if (materialId > 0) this.deps.retainMaterial?.(materialId);
+        this.setMaterialList(slot, modelHandle.id, materialIds);
 
         const self = this;
         let destroyed = false;
@@ -137,6 +207,7 @@ export class InstanceStore {
             modelId: modelHandle.id,
             skinned: false,
             prefabId: userPrefabId,
+            materials: EMPTY_MATERIALS,
             get textureId() { return currentTexId; },
             setPosition(nx: number, ny: number, nz: number) {
                 dyn[dynBase + DYN_CURR_PX] = nx;
@@ -198,15 +269,21 @@ export class InstanceStore {
                 }
             },
             setMaterial(next: number) {
-                const current = self.materialIds[slot];
-                if (current === next || destroyed) return;
-                self.batcher.remove(current, modelHandle.id, slot);
+                if (destroyed) return;
+                const k = slot * MAX_MATERIALS_PER_INSTANCE;
+                const count = self.materialCount[slot]!;
+                if (count === 1 && self.materialIds[k] === next) return;
+                for (let i = 0; i < count; i++) {
+                    const m = self.materialIds[k + i]!;
+                    self.batcher.remove(m, modelHandle.id, slot);
+                    if (m > 0) self.deps.releaseMaterial?.(m);
+                }
+                self.materialIds[k] = next;
+                self.materialCount[slot] = 1;
                 self.batcher.add(next, modelHandle.id, slot);
-                self.materialIds[slot] = next;
+                if (next > 0) self.deps.retainMaterial?.(next);
                 stat[statBase + STAT_MATERIAL_ID] = next;
                 self.staticDirty = true;
-                if (current > 0) self.deps.releaseMaterial?.(current);
-                if (next > 0) self.deps.retainMaterial?.(next);
             },
             setMaterialParams(a: number, b: number) {
                 stat[statBase + STAT_CUSTOM0] = a;
@@ -218,10 +295,14 @@ export class InstanceStore {
                 destroyed = true;
                 self.dynamicVersion++;
                 self.textureBGs[slot] = null;
-                const currentMaterial = self.materialIds[slot];
-                if (currentMaterial > 0) self.deps.releaseMaterial?.(currentMaterial);
-                self.batcher.remove(self.materialIds[slot], modelHandle.id, slot);
-                self.materialIds[slot] = 0;
+                const k = slot * MAX_MATERIALS_PER_INSTANCE;
+                const count = self.materialCount[slot]!;
+                for (let i = 0; i < count; i++) {
+                    const m = self.materialIds[k + i]!;
+                    self.batcher.remove(m, modelHandle.id, slot);
+                    if (m > 0) self.deps.releaseMaterial?.(m);
+                }
+                self.materialCount[slot] = 0;
                 self.slots.remove(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 stat.fill(0, statBase, statBase + STATIC_MESH_FLOATS);
@@ -239,14 +320,14 @@ export class InstanceStore {
         return handle;
     }
 
-    /** Reset every instance using `materialId` to the default material (0). */
+    /** Remove `materialId` from every instance using it (falls back to default). */
     reassignMaterial(materialId: number): void {
         if (materialId <= 0) return;
         const active = this.slots.activeSlots;
         const size = this.slots.size;
         for (let i = 0; i < size; i++) {
             const slot = active[i]!;
-            if (this.materialIds[slot] === materialId) this.instanceHandles[slot]?.setMaterial?.(0);
+            if (this.hasMaterial(slot, materialId)) this.removeMaterial(slot, this.instanceModelIds[slot]!, materialId);
         }
     }
 

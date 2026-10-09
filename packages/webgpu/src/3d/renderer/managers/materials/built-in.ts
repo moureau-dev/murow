@@ -23,7 +23,8 @@ export const EngineMaterialUniforms = d.struct({
     uvOffsetV: d.f32,
     /** 0 = ignore the shadow map, 1 = sample it. */
     receiveShadow: d.f32,
-    _pad1: d.f32,
+    /** Object-space offset along the vertex normal (inverted-hull outline). */
+    extrude: d.f32,
 });
 
 export function createEngineMaterialLayout() {

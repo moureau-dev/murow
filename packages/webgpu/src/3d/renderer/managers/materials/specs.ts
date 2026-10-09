@@ -65,6 +65,12 @@ export interface EngineMaterialSpec extends MaterialSpecBase {
     readonly color?: readonly [number, number, number];
     readonly opacity?: number;
     readonly emissive?: number;
+    /**
+     * Offset each vertex along its normal by this many object-space units.
+     * Combined with `cull: 'front'` this draws an inverted-hull toon outline.
+     * Default 0.
+     */
+    readonly extrude?: number;
     /** Discard fragments whose final alpha falls below this threshold. Default 0 (off). */
     readonly alphaTest?: number;
     /** UV tiling applied to the texture sample. Default `[1, 1]`. */

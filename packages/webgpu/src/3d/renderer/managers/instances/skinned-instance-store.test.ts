@@ -29,7 +29,7 @@ function store() {
 
 let idc = 0;
 function spawn(s: SkinnedInstanceStore) {
-    return s.spawn({ prefab: model }, model, 0, skinModel(), undefined, null, ++idc);
+    return s.spawn({ prefab: model }, model, 0, skinModel(), undefined, null, [0], ++idc);
 }
 
 describe('SkinnedInstanceStore', () => {

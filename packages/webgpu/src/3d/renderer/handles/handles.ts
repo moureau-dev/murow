@@ -10,6 +10,30 @@ import type { HandleBase } from '../../../handle-base';
 import type { DecalId, EmitterId, InstanceId, LayerId, LightId } from '../ids';
 
 export declare namespace Handles {
+    /** A live reference to one material attached to an instance. */
+    export interface MaterialRef {
+        /** 1-based material id (0 = engine default). */
+        readonly materialId: number;
+        /** Registered name of the material ('' when unknown). */
+        readonly name: string;
+        /** Detach this material from the instance. */
+        remove(): void;
+    }
+
+    /**
+     * Addressable view over an instance's materials. Look up by name, 1-based
+     * material id, or (for `add`) a material handle. Names resolve against the
+     * renderer's material library.
+     */
+    export interface InstanceMaterials {
+        get(idOrName: number | string): MaterialRef | undefined;
+        has(idOrName: number | string): boolean;
+        /** Attach a material handle (no-op if already present or at capacity). */
+        add(material: { readonly slot: number }): void;
+        remove(idOrName: number | string): void;
+        readonly all: readonly MaterialRef[];
+    }
+
     /** A GPU mesh resource. */
     export interface ModelHandle {
         readonly id: number;
@@ -64,6 +88,8 @@ export declare namespace Handles {
         setMaterial?(materialId: number): void;
         /** Per-instance floats available to materials as `statics[slot].custom0/1`. */
         setMaterialParams?(a: number, b: number): void;
+        /** The instance's materials, addressable by name/id. */
+        materials: InstanceMaterials;
         /** Free this instance's renderer slot. Safe to call once per handle. */
         destroy(): void;
     }
@@ -103,6 +129,8 @@ export declare namespace Handles {
          * reverting to the model's default texture.
          */
         setTexture?(texture: string | TexturePrefab | null): void;
+        /** The instance's materials, addressable by name/id. */
+        materials: InstanceMaterials;
         /** Free this instance's renderer slot(s). Safe to call once per handle. */
         destroy(): void;
     }

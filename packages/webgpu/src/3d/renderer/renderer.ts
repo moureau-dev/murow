@@ -377,6 +377,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             models: this.core.models,
             prefabs: this._prefabs,
             getSkinModel: (index) => this.core.models.skinnedModel(index),
+            materialName: (id) => materialLibrary.nameOf(id),
         });
         this.raycast = new WebGPURaycast3D(new RaycastController({
             camera: this.camera,

@@ -13,7 +13,7 @@ import type { SpotShadowSystem } from '../shadows/spot-shadow-system';
 import { SpotShadowUniforms } from '../shadows/spot-shadow-system';
 import type { PointShadowSystem } from '../shadows/point-shadow-system';
 import { PointShadowUniforms } from '../shadows/point-shadow-system';
-import { createUnlitMeshVertex, createSkinnedMeshVertex, type MeshDataLayout, type SkinnedMeshDataLayout } from '../../../shader';
+import { createUnlitMeshVertex, createTexturedMeshVertex, createSkinnedMeshVertex, createExtrudedMeshVertex, createExtrudedSkinnedMeshVertex, type MeshDataLayout, type SkinnedMeshDataLayout } from '../../../shader';
 import type { MaterialSpec, ResolvedRenderState } from './specs';
 import { resolveRenderState, isTransparent } from './specs';
 import {
@@ -22,7 +22,6 @@ import {
     createStandardMaterialFragment,
     createUnlitMaterialFragment,
     createEmissiveMaterialFragment,
-    createTexturedMeshVertex,
     createNoiseFn,
     createSnoiseFn,
     type EngineMaterialLayout,
@@ -102,9 +101,9 @@ export class MaterialLibrary {
     private readonly slots: SlotMap;
     private readonly entries: (MaterialEntry | null)[];
     private readonly deps: MaterialLibraryDeps;
-    private engineVertex: ReturnType<typeof createTexturedMeshVertex> | null = null;
-    private engineSkinnedVertex: ReturnType<typeof createSkinnedMeshVertex> | null = null;
-    private engineUnlitVertex: ReturnType<typeof createUnlitMeshVertex> | null = null;
+    private shaderVertex: ReturnType<typeof createTexturedMeshVertex> | null = null;
+    private shaderSkinnedVertex: ReturnType<typeof createSkinnedMeshVertex> | null = null;
+    private shaderUnlitVertex: ReturnType<typeof createUnlitMeshVertex> | null = null;
     private readonly samplers: { key: string; sampler: GPUSampler }[] = [];
     /** Live instance users per 1-based material id; index 0 is the default. */
     private readonly useCounts: Uint32Array;
@@ -124,6 +123,12 @@ export class MaterialLibrary {
     /** Whether a material name is currently registered. */
     hasName(name: string): boolean {
         return this.names.has(name);
+    }
+
+    /** Registered name of a 1-based material id, or undefined. */
+    nameOf(materialId: number): string | undefined {
+        if (materialId <= 0) return undefined;
+        return this.entries[materialId - 1]?.name;
     }
 
     /** Live instance users of a 1-based material id (0 = default). */
@@ -235,11 +240,14 @@ export class MaterialLibrary {
             alphaTest: spec.alphaTest ?? 0,
             uvScaleU: uvScale[0], uvScaleV: uvScale[1],
             uvOffsetU: uvOffset[0], uvOffsetV: uvOffset[1],
-            receiveShadow: (spec.shadow?.receive ?? true) ? 1 : 0, _pad1: 0,
+            receiveShadow: (spec.shadow?.receive ?? true) ? 1 : 0,
+            extrude: spec.extrude ?? 0,
         };
         buffer.write(mirror);
 
-        if (!this.engineVertex) this.engineVertex = createTexturedMeshVertex(this.deps.meshLayout);
+        // Built per material: the vertex reads this material's `extrude`, so it
+        // must reference this material's bind-group layout object (not a cached one).
+        const vertex = createExtrudedMeshVertex(this.deps.meshLayout, layout);
         const fragment = spec.type === 'unlit'
             ? createUnlitMaterialFragment(this.deps.meshLayout, layout)
             : spec.type === 'emissive'
@@ -250,7 +258,7 @@ export class MaterialLibrary {
         const textureIds: Record<string, string | null> = { map: spec.texture ?? null };
         const samplerOverrides = { map: this.getSampler(spec.wrap, spec.filter) };
         const pipeline = this.deps.pipelines.buildMaterialPipeline({
-            vertex: this.engineVertex,
+            vertex,
             fragment,
             materialLayout: layout,
             blendState: state.blendState, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
@@ -378,16 +386,16 @@ export class MaterialLibrary {
                 out: vertexOut,
             } as any)(decl.vertex.fn as any);
         } else if (skinned) {
-            if (!this.engineSkinnedVertex) this.engineSkinnedVertex = createSkinnedMeshVertex(meshLayout as SkinnedMeshDataLayout);
-            vertex = this.engineSkinnedVertex;
+            if (!this.shaderSkinnedVertex) this.shaderSkinnedVertex = createSkinnedMeshVertex(meshLayout as SkinnedMeshDataLayout);
+            vertex = this.shaderSkinnedVertex;
             fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position, vCustom: d.vec2f };
         } else if (spec.lit === false) {
-            if (!this.engineUnlitVertex) this.engineUnlitVertex = createUnlitMeshVertex(meshLayout as MeshDataLayout);
-            vertex = this.engineUnlitVertex;
+            if (!this.shaderUnlitVertex) this.shaderUnlitVertex = createUnlitMeshVertex(meshLayout as MeshDataLayout);
+            vertex = this.shaderUnlitVertex;
             fragmentIn = { vColor: d.vec3f, vUV: d.vec2f, vCustom: d.vec2f };
         } else {
-            if (!this.engineVertex) this.engineVertex = createTexturedMeshVertex(meshLayout as MeshDataLayout);
-            vertex = this.engineVertex;
+            if (!this.shaderVertex) this.shaderVertex = createTexturedMeshVertex(meshLayout as MeshDataLayout);
+            vertex = this.shaderVertex;
             fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position, vCustom: d.vec2f };
         }
 
@@ -412,14 +420,14 @@ export class MaterialLibrary {
     private buildEngineSkinnedPipeline(spec: Extract<MaterialSpec, { type: 'standard' | 'unlit' | 'emissive' }>, layout: any, state: ResolvedRenderState): GPURenderPipeline | null {
         const skinnedLayout = this.deps.skinnedLayout;
         if (!skinnedLayout) return null;
-        if (!this.engineSkinnedVertex) this.engineSkinnedVertex = createSkinnedMeshVertex(skinnedLayout);
+        const vertex = createExtrudedSkinnedMeshVertex(skinnedLayout, layout);
         const fragment = spec.type === 'unlit'
             ? createUnlitMaterialFragment(skinnedLayout as any, layout)
             : spec.type === 'emissive'
                 ? createEmissiveMaterialFragment(skinnedLayout as any, layout)
                 : createStandardMaterialFragment(skinnedLayout as any, layout);
         return this.deps.pipelines.buildMaterialPipeline({
-            vertex: this.engineSkinnedVertex,
+            vertex,
             fragment,
             materialLayout: layout,
             blendState: state.blendState, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,

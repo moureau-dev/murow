@@ -9,8 +9,10 @@ import {
     DYN_PREV_RX, DYN_PREV_RY, DYN_PREV_RZ,
     DYN_CURR_RX, DYN_CURR_RY, DYN_CURR_RZ,
     SSTAT_SX, SSTAT_SY, SSTAT_SZ, SSTAT_CR, SSTAT_CG, SSTAT_CB, SSTAT_BONE_OFFSET, SSTAT_MATERIAL_ID,
+    MAX_MATERIALS_PER_INSTANCE,
 } from './offsets';
 import { resolveTransform } from './transform';
+import { EMPTY_MATERIALS } from './empty-materials';
 
 /** The subset of a loaded skin model the store needs. */
 export interface SkinModelLike {
@@ -73,6 +75,10 @@ export class SkinnedInstanceStore {
     readonly slots: SlotMap;
     /** Per-slot texture override bind group, or null for the model default. */
     private readonly textureBGs: (GPUBindGroup | null)[];
+    /** Per-slot material ids, `MAX_MATERIALS_PER_INSTANCE` per slot (0 = default). */
+    readonly materialIds: Uint16Array;
+    /** Number of materials in each slot's list (always at least 1). */
+    readonly materialCount: Uint8Array;
 
     constructor(private readonly deps: SkinnedInstanceStoreDeps) {
         const n = deps.maxSkinnedInstances;
@@ -85,6 +91,8 @@ export class SkinnedInstanceStore {
         this.animStates = new Array(n).fill(null);
         this.instanceHandles = new Array(n).fill(null);
         this.textureBGs = new Array(n).fill(null);
+        this.materialIds = new Uint16Array(n * MAX_MATERIALS_PER_INSTANCE);
+        this.materialCount = new Uint8Array(n);
         this.slots = new SlotMap(n);
         this.batcher = new SparseBatcher(n);
 
@@ -99,6 +107,71 @@ export class SkinnedInstanceStore {
         return this.textureBGs[slot] ?? undefined;
     }
 
+    /** Number of materials in a slot's list (0 if the slot is empty). */
+    materialCountOf(slot: number): number {
+        return this.materialCount[slot] ?? 0;
+    }
+
+    /** Material id at index `i` in a slot's list. */
+    materialAt(slot: number, i: number): number {
+        return this.materialIds[slot * MAX_MATERIALS_PER_INSTANCE + i] ?? 0;
+    }
+
+    /** Whether a slot's list contains `materialId`. */
+    hasMaterial(slot: number, materialId: number): boolean {
+        const k = slot * MAX_MATERIALS_PER_INSTANCE;
+        const count = this.materialCount[slot] ?? 0;
+        for (let i = 0; i < count; i++) if (this.materialIds[k + i] === materialId) return true;
+        return false;
+    }
+
+    /** Append a material to a slot's list (no-op if present or full). */
+    addMaterial(slot: number, materialId: number): void {
+        if (this.hasMaterial(slot, materialId)) return;
+        const count = this.materialCount[slot] ?? 0;
+        if (count >= MAX_MATERIALS_PER_INSTANCE) return;
+        this.materialIds[slot * MAX_MATERIALS_PER_INSTANCE + count] = materialId;
+        this.materialCount[slot] = count + 1;
+        if (materialId > 0) this.deps.retainMaterial?.(materialId);
+        this.staticDirty = true;
+        this.dynamicVersion++;
+    }
+
+    /** Remove a material from a slot's list (falls back to the default when empty). */
+    removeMaterial(slot: number, materialId: number): void {
+        const k = slot * MAX_MATERIALS_PER_INSTANCE;
+        const count = this.materialCount[slot] ?? 0;
+        let idx = -1;
+        for (let i = 0; i < count; i++) if (this.materialIds[k + i] === materialId) { idx = i; break; }
+        if (idx < 0) return;
+        if (materialId > 0) this.deps.releaseMaterial?.(materialId);
+        for (let i = idx; i < count - 1; i++) this.materialIds[k + i] = this.materialIds[k + i + 1]!;
+        let next = count - 1;
+        if (next === 0) { this.materialIds[k] = 0; next = 1; }
+        this.materialCount[slot] = next;
+        this.staticData[slot * SKINNED_STATIC_MESH_FLOATS + SSTAT_MATERIAL_ID] = this.materialIds[k]!;
+        this.staticDirty = true;
+        this.dynamicVersion++;
+    }
+
+    private setMaterialList(slot: number, materialIds: readonly number[]): void {
+        const k = slot * MAX_MATERIALS_PER_INSTANCE;
+        let count = 0;
+        for (const m of materialIds) {
+            if (count >= MAX_MATERIALS_PER_INSTANCE) break;
+            let seen = false;
+            for (let i = 0; i < count; i++) if (this.materialIds[k + i] === m) { seen = true; break; }
+            if (seen) continue;
+            this.materialIds[k + count++] = m;
+        }
+        if (count === 0) { this.materialIds[k] = 0; count = 1; }
+        this.materialCount[slot] = count;
+        for (let i = 0; i < count; i++) {
+            const m = this.materialIds[k + i]!;
+            if (m > 0) this.deps.retainMaterial?.(m);
+        }
+    }
+
     spawn(
         opts: MeshInstanceOptions<any>,
         modelHandle: ModelHandle,
@@ -106,6 +179,7 @@ export class SkinnedInstanceStore {
         skinModel: SkinModelLike,
         linkedSlot: number | undefined,
         prefabId: string | null,
+        materialIds: readonly number[],
         id: number,
     ): MeshInstanceHandle {
         const slot = this.slots.add();
@@ -170,14 +244,13 @@ export class SkinnedInstanceStore {
 
         // boneOffset is u32 stored inside the Float32 buffer — reusable DataView.
         this.staticDV.setUint32((statBase + SSTAT_BONE_OFFSET) * 4, boneOffset, true);
-        const materialId = opts.material ? opts.material.slot + 1 : 0;
-        stat[statBase + SSTAT_MATERIAL_ID] = materialId;
-        if (materialId > 0) this.deps.retainMaterial?.(materialId);
+        stat[statBase + SSTAT_MATERIAL_ID] = materialIds[0] ?? 0;
 
         this.staticDirty = true;
         this.dynamicVersion++;
         this.instanceModelIds[slot] = modelHandle.id;
         this.batcher.add(0, modelHandle.id, slot);
+        this.setMaterialList(slot, materialIds);
 
         const animStates = this.animStates;
         const animation = skinModel.animation;
@@ -198,6 +271,7 @@ export class SkinnedInstanceStore {
             modelId: modelHandle.id,
             skinned: true,
             prefabId,
+            materials: EMPTY_MATERIALS,
             get textureId() { return currentTexId; },
             setPosition(nx: number, ny: number, nz: number) {
                 dyn[dynBase + DYN_CURR_PX] = nx;
@@ -269,8 +343,13 @@ export class SkinnedInstanceStore {
                 if (destroyed) return;
                 destroyed = true;
                 self.dynamicVersion++;
-                const materialId = stat[statBase + SSTAT_MATERIAL_ID]!;
-                if (materialId > 0) self.deps.releaseMaterial?.(materialId);
+                const k = slot * MAX_MATERIALS_PER_INSTANCE;
+                const mcount = self.materialCount[slot]!;
+                for (let mi = 0; mi < mcount; mi++) {
+                    const m = self.materialIds[k + mi]!;
+                    if (m > 0) self.deps.releaseMaterial?.(m);
+                }
+                self.materialCount[slot] = 0;
                 self.batcher.remove(0, modelHandle.id, slot);
                 self.slots.remove(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
@@ -290,19 +369,14 @@ export class SkinnedInstanceStore {
         return handle;
     }
 
-    /** Reset every skinned instance using `materialId` to the default material (0). */
+    /** Remove `materialId` from every skinned instance using it (falls back to default). */
     reassignMaterial(materialId: number): void {
         if (materialId <= 0) return;
         const active = this.slots.activeSlots;
         const size = this.slots.size;
-        const stat = this.staticData;
         for (let i = 0; i < size; i++) {
-            const statBase = active[i]! * SKINNED_STATIC_MESH_FLOATS;
-            if (stat[statBase + SSTAT_MATERIAL_ID] === materialId) {
-                stat[statBase + SSTAT_MATERIAL_ID] = 0;
-                this.deps.releaseMaterial?.(materialId);
-                this.staticDirty = true;
-            }
+            const slot = active[i]!;
+            if (this.hasMaterial(slot, materialId)) this.removeMaterial(slot, materialId);
         }
     }
 

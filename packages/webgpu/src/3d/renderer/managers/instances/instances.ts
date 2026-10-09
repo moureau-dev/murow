@@ -7,6 +7,8 @@ import type { Hitbox } from 'murow/core/hitbox';
 import type { PlayOptions, Prefab3D, TexturePrefab, PrefabBucket3D, CompositePrefab } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../../../../core/types';
 import type { GltfModel, MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../../types';
+import type { Handles } from '../../handles';
+import type { MaterialHandle } from '../materials';
 import type { ModelLibrary } from '../../internals/model-library';
 import type { Frustum } from '../../internals/frustum';
 import { InstanceStore } from './instance-store';
@@ -36,6 +38,36 @@ export interface InstanceManagerDeps {
     prefabs: PrefabBucket3D | null;
     /** Upper bound on distinct skin indices; sizes the free-offset table. */
     getSkinModel(index: number): SkinModelLike | undefined;
+    /** Registered name of a 1-based material id, for the `materials` view. */
+    materialName?(id: number): string | undefined;
+}
+
+/** One draw target a material view can add/remove materials on. */
+interface MaterialTarget {
+    count(): number;
+    at(i: number): number;
+    has(id: number): boolean;
+    add(id: number): void;
+    remove(id: number): void;
+}
+
+/** Normalize `material`/`materials` options into a list of 1-based material ids. */
+function materialIdsFromOptions(opts: MeshInstanceOptions<any>): number[] {
+    const out: number[] = [];
+    const push = (m: MaterialHandle<any, any> | undefined | null) => {
+        if (!m) return;
+        const id = m.slot + 1;
+        if (!out.includes(id)) out.push(id);
+    };
+    const materials = opts.materials;
+    if (Array.isArray(materials)) {
+        for (const m of materials) push(m as MaterialHandle<any, any>);
+    } else if (materials && typeof materials === 'object') {
+        for (const m of Object.values(materials)) push(m as MaterialHandle<any, any>);
+    }
+    push(opts.material);
+    if (out.length === 0) out.push(0);
+    return out;
 }
 
 /** A visible non-skinned batch the main pass draws (one model + material). */
@@ -63,8 +95,8 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
     private readonly rawHandles: (MeshInstanceHandle | null)[];
     private readonly origDestroy: (((...args: never[]) => void) | null)[];
     private pending:
-        | { kind: 'static'; opts: MeshInstanceOptions<any>; modelHandle: ModelHandle; prefabId: string | null; materialId: number }
-        | { kind: 'skinned'; opts: MeshInstanceOptions<any>; modelHandle: ModelHandle; skinIndex: number; skinModel: SkinModelLike; linkedSlot: number | undefined; prefabId: string | null }
+        | { kind: 'static'; opts: MeshInstanceOptions<any>; modelHandle: ModelHandle; prefabId: string | null; materialIds: number[] }
+        | { kind: 'skinned'; opts: MeshInstanceOptions<any>; modelHandle: ModelHandle; skinIndex: number; skinModel: SkinModelLike; linkedSlot: number | undefined; prefabId: string | null; materialIds: number[] }
         | null = null;
 
     /** @internal Visible non-skinned batches for the main pass; first `batchCount` entries. */
@@ -117,6 +149,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         }
 
         const userPrefabId = prefab ? prefab.id : null;
+        const materialIds = materialIdsFromOptions(resolvedOpts);
 
         if (prefab?.type === 'composite') {
             return this.addComposite(resolvedOpts, prefab);
@@ -125,18 +158,17 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         const resolved = prefab ? resolvePrefabHandle(prefab) : resolvedOpts.prefab;
 
         if ('parts' in (resolved as ModelHandle | GltfModel)) {
-            return this.addGltf(resolvedOpts, resolved as GltfModel, userPrefabId);
+            return this.addGltf(resolvedOpts, resolved as GltfModel, userPrefabId, materialIds);
         }
 
         const modelHandle = resolved as ModelHandle;
         const model = this.deps.models.get(modelHandle.id);
 
         if (model?.skinned) {
-            return this.spawnSkinned(resolvedOpts, modelHandle, model.skinIndex, undefined, userPrefabId);
+            return this.spawnSkinned(resolvedOpts, modelHandle, model.skinIndex, undefined, userPrefabId, materialIds);
         }
 
-        const materialId = resolvedOpts.material ? resolvedOpts.material.slot + 1 : 0;
-        return this.spawnStatic(resolvedOpts, modelHandle, userPrefabId, materialId);
+        return this.spawnStatic(resolvedOpts, modelHandle, userPrefabId, materialIds);
     }
 
     /**
@@ -340,8 +372,8 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
     protected createItem(id: InstanceId, slot: number): MeshInstanceHandle {
         const p = this.pending!;
         const raw = p.kind === 'skinned'
-            ? this.deps.skinned.spawn(p.opts, p.modelHandle, p.skinIndex, p.skinModel, p.linkedSlot, p.prefabId, id)
-            : this.deps.store.spawn(p.opts, p.modelHandle, p.prefabId, id, p.materialId);
+            ? this.deps.skinned.spawn(p.opts, p.modelHandle, p.skinIndex, p.skinModel, p.linkedSlot, p.prefabId, p.materialIds, id)
+            : this.deps.store.spawn(p.opts, p.modelHandle, p.prefabId, id, p.materialIds);
         return this.installHandle(id, slot, raw);
     }
 
@@ -351,16 +383,70 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         this.origDestroy[slot] = orig;
         Object.defineProperty(raw, 'alive', { configurable: true, get: () => this.has(id) });
         raw.destroy = () => this.remove(id);
+        raw.materials = this.makeMaterialsView([this.materialTarget(raw)]);
         return raw;
+    }
+
+    /** Build a `MaterialTarget` adapter over a store handle. */
+    private materialTarget(handle: { slot: number; modelId: number; skinned: boolean }): MaterialTarget {
+        const { slot, modelId, skinned } = handle;
+        if (skinned) {
+            const s = this.deps.skinned;
+            return {
+                count: () => s.materialCountOf(slot),
+                at: (i) => s.materialAt(slot, i),
+                has: (id) => s.hasMaterial(slot, id),
+                add: (id) => s.addMaterial(slot, id),
+                remove: (id) => s.removeMaterial(slot, id),
+            };
+        }
+        const s = this.deps.store;
+        return {
+            count: () => s.materialCountOf(slot),
+            at: (i) => s.materialAt(slot, i),
+            has: (id) => s.hasMaterial(slot, id),
+            add: (id) => s.addMaterial(slot, modelId, id),
+            remove: (id) => s.removeMaterial(slot, modelId, id),
+        };
+    }
+
+    /** Build an addressable material view over one or more draw targets. */
+    private makeMaterialsView(targets: MaterialTarget[]): Handles.InstanceMaterials {
+        const primary = targets[0]!;
+        const nameOf = (id: number) => this.deps.materialName?.(id) ?? '';
+        const resolve = (x: number | string): number | undefined => {
+            if (typeof x === 'number') return primary.has(x) ? x : undefined;
+            for (let i = 0; i < primary.count(); i++) {
+                const id = primary.at(i);
+                if (nameOf(id) === x) return id;
+            }
+            return undefined;
+        };
+        const refOf = (id: number): Handles.MaterialRef => ({
+            materialId: id,
+            name: nameOf(id),
+            remove: () => { for (const t of targets) t.remove(id); },
+        });
+        return {
+            get: (x) => { const id = resolve(x); return id === undefined ? undefined : refOf(id); },
+            has: (x) => resolve(x) !== undefined,
+            add: (m) => { const id = m.slot + 1; for (const t of targets) t.add(id); },
+            remove: (x) => { const id = resolve(x); if (id !== undefined) for (const t of targets) t.remove(id); },
+            get all() {
+                const out: Handles.MaterialRef[] = [];
+                for (let i = 0; i < primary.count(); i++) out.push(refOf(primary.at(i)));
+                return out;
+            },
+        };
     }
 
     private spawnStatic(
         opts: MeshInstanceOptions<any>,
         modelHandle: ModelHandle,
         prefabId: string | null,
-        materialId: number,
+        materialIds: number[],
     ): MeshInstanceHandle | null {
-        this.pending = { kind: 'static', opts, modelHandle, prefabId, materialId };
+        this.pending = { kind: 'static', opts, modelHandle, prefabId, materialIds };
         const allocated = this.allocateItem();
         this.pending = null;
         return allocated ? allocated.item : null;
@@ -372,19 +458,20 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         skinIndex: number,
         linkedSlot: number | undefined,
         prefabId: string | null,
+        materialIds: number[],
     ): MeshInstanceHandle | null {
         const skinModel = this.deps.models.skinnedModel(skinIndex);
         if (!skinModel) return null;
         this.pending = {
             kind: 'skinned', opts, modelHandle, skinIndex,
-            skinModel: skinModel as unknown as SkinModelLike, linkedSlot, prefabId,
+            skinModel: skinModel as unknown as SkinModelLike, linkedSlot, prefabId, materialIds,
         };
         const allocated = this.allocateItem();
         this.pending = null;
         return allocated ? allocated.item : null;
     }
 
-    private addGltf(opts: MeshInstanceOptions<any>, gltf: GltfModel, prefabId: string | null): MeshInstanceHandle {
+    private addGltf(opts: MeshInstanceOptions<any>, gltf: GltfModel, prefabId: string | null, materialIds: number[]): MeshInstanceHandle {
         const childHandles: MeshInstanceHandle[] = [];
         let firstSkinnedSlot: number | undefined;
 
@@ -392,13 +479,13 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             const partOpts = { ...opts, prefab: part };
             const model = this.deps.models.get(part.id);
             if (model?.skinned) {
-                const handle = this.spawnSkinned(partOpts, part, model.skinIndex, firstSkinnedSlot, prefabId);
+                const handle = this.spawnSkinned(partOpts, part, model.skinIndex, firstSkinnedSlot, prefabId, materialIds);
                 if (handle) {
                     if (firstSkinnedSlot === undefined) firstSkinnedSlot = handle.slot;
                     childHandles.push(handle);
                 }
             } else {
-                const handle = this.spawnStatic(partOpts, part, prefabId, 0);
+                const handle = this.spawnStatic(partOpts, part, prefabId, materialIds);
                 if (handle) childHandles.push(handle);
             }
         }
@@ -463,6 +550,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             get alive() { return childHandles.some((h) => h.alive); },
             skinned: childHandles.some((h) => h.skinned),
             prefabId: composite.id,
+            materials: this.makeMaterialsView(childHandles.map((h) => this.materialTarget(h))),
             get textureId() { return childHandles[0]!.textureId; },
             setPosition(x, y, z) {
                 posOut[0] = x; posOut[1] = y; posOut[2] = z;
@@ -515,6 +603,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             get alive() { return childHandles.some((h) => h.alive); },
             skinned,
             prefabId,
+            materials: this.makeMaterialsView(childHandles.map((h) => this.materialTarget(h))),
             get textureId() { return lead.textureId; },
             setPosition(x, y, z) { for (const h of childHandles) h.setPosition(x, y, z); },
             setRotation(x, y, z) { for (const h of childHandles) h.setRotation(x, y, z); },

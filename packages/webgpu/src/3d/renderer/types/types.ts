@@ -59,6 +59,12 @@ interface MeshInstance<A extends AssetBucket<'3d', any, any>> {
 
     /** Material to render this instance with. Defaults to the engine material. */
     material?: MaterialHandle<any>;
+    /**
+     * Materials to render this instance with (drawn once per material). An
+     * array, or a record of role name -> material. `material` is shorthand for
+     * a single-element list; both may be combined.
+     */
+    materials?: readonly MaterialHandle<any, any>[] | Record<string, MaterialHandle<any, any>>;
 }
 
 export interface MeshInstanceOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends MeshInstance<A> {
