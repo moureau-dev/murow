@@ -154,7 +154,18 @@ holo.setTexture('map', 'smoke');
 holo.destroy();
 ```
 
-Types: `MaterialSpec` (`EngineMaterialSpec | ShaderMaterialSpec`), `MaterialHandle<U>`, `BlendMode` (`'opaque' | 'alpha' | 'additive'`), `CullMode` (`'back' | 'front' | 'none'`), `EngineMaterialSpec`, `ShaderMaterialSpec` — all exported from `murow/webgpu`.
+**Multiple materials per instance** — `instances.add({ prefab, materials: [...] })` (array or `{ name: material }` record; `material` is sugar) draws the instance once per material. Address them on the handle:
+
+```ts
+const hero = renderer.instances.add({ prefab: 'hero', materials: [bodyMat] });
+hero.materials.add(outlineMat);
+hero.materials.has('outline');      // name or 1-based id
+hero.materials.remove('outline');
+```
+
+Up to 4 materials; works for skinned and non-skinned; glTF/composite handles fan out to every part. An `extrude` (object-space normal offset) engine material with `cull: 'front'` is an inverted-hull toon outline.
+
+Types: `MaterialSpec` (`EngineMaterialSpec | ShaderMaterialSpec`), `MaterialHandle<U>`, `InstanceMaterials`, `MaterialRef`, `BlendMode`, `CullMode` — all exported from `murow/webgpu`.
 </details>
 
 <details>

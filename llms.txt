@@ -2964,15 +2964,30 @@ Spec fields:
 | `uvScale`, `uvOffset`, `wrap`, `filter` | engine types | sampling controls. Defaults `[1,1]`, `[0,0]`, `'clamp'`, `'linear'` |
 | `uniforms`, `defaultUniforms`, `textures`, `shaders`, `lit` | `shader` | `uniforms` is a TGSL schema; `textures: { map: 'id', mask: 'id' }` (named); `shaders.fragment` required, `shaders.vertex` optional; `lit:false` selects the unlit vertex |
 | `blend`, `blendState`, `depthWrite`, `depthTest`, `cull`, `colorWrite`, `depthBias` | all | render state. `blend` (see above) or `blendState` (raw `GPUBlendComponent`s); `colorWrite` boolean or `{r,g,b,a}`; `depthBias` `{constant, slopeScale, clamp}`. Defaults: `'opaque'`, depthWrite true, depthTest true, `cull:'none'`; `emissive` defaults to additive + no depth write |
+| `extrude` | engine types | object-space offset along the vertex normal; with `cull:'front'` this is an inverted-hull toon outline. Default 0 |
 | `id` | all | debug label on the GPU pipeline |
+| `name` | all | optional unique name (auto `mat_<id>` when omitted); a duplicate throws |
 | `shadow` | all | `{ cast?, receive? }`; participate in the directional shadow map (both default `true`; transparent never casts) |
 
 Free variables inside a `shader` fragment (and custom vertex): `scene` (engine uniforms: `viewProjection`, `alpha`, sun direction/ambient, `lightCount`, `cameraX/Y/Z`, `time`, `resolutionX/Y`), `material` (this material's uniforms), `textures` (one key per declared texture name, plus a `<name>Sampler` and a convenience `sampler`), `lights`, `dynamic`, `statics`, `slotIndices`; plus `d`, `std`, and the helpers `lightContribution`, `tonemap`. The fragment also receives `input.position` (fragment coords) for screen-space UV: `input.position.xy / vec2(scene.resolutionX, scene.resolutionY)`, and `input.vCustom` (`vec2` = the instance's `custom0`/`custom1`, set via `handle.setMaterialParams(a, b)`). Engine fragments flip the normal on back faces, so `cull:'none'` lights both sides.
 
 Batching is by `(materialId, modelId)`; `render()` draws opaque batches first, then transparent (`alpha`/`additive`) batches.
 
+**Multiple materials per instance.** `instances.add({ prefab, materials: [...] })` draws the instance once per material (array, or a `{ name: material }` record; `material` is sugar for a one-element list). Up to 4 materials. The handle exposes them by name or 1-based id:
+
+```ts
+const hero = renderer.instances.add({ prefab: 'hero', materials: [bodyMat] });
+hero.materials.add(outlineMat);        // attach (takes a MaterialHandle)
+hero.materials.has('outline');         // by name or id
+hero.materials.get('outline');         // MaterialRef { materialId, name, remove() } | undefined
+hero.materials.remove('outline');
+hero.materials.all;                    // readonly MaterialRef[]
+```
+
+Works for skinned and non-skinned; a glTF/composite group handle fans add/remove out to every part. Names resolve through the material library. Toggling an `extrude` + `cull:'front'` `emissive` material via `add`/`remove` is the toon outline.
+
 Caveats:
-- Skinned meshes still use the engine default material; `instances.add({ material })` applies to non-skinned models only.
+- Skinned instances honor `material`/`materials` (and `setMaterial`); materials for skinned models are supported.
 - Textures get a mip chain on upload (good minification); atlas sprites must sample LOD 0 to avoid cross-cell bleed (the 3D particle path does).
 - `standard` is Lambert + two-sided; no PBR/specular/normal maps yet.
 
