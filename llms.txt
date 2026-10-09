@@ -2906,7 +2906,7 @@ The 3D renderer is **not a PBR engine** — no skybox, no metalness/roughness/IB
 
 ### Materials (3D)
 
-`renderer.materials.create(spec)` compiles a `MaterialSpec` into a `MaterialHandle`, or returns `null` at capacity. Materials are GPU resources created **after `init()`**; there is no string registry, no `AssetBucket` entry, and no `.get(id)`.
+`renderer.materials.create(spec)` compiles a `MaterialSpec` into a `MaterialHandle`, or returns `null` at capacity. Materials are GPU resources created **after `init()`**. `name` is optional and unique per renderer (auto-assigned `mat_<id>` when omitted); a duplicate **throws** (`Material "x" is already registered`). The name is registered in the material library and released on `destroy()`. The handle is typed `MaterialHandle<N, U>` (literal `name` when given, typed `uniforms`) and also carries a runtime `id: MaterialId`.
 
 ```ts
 import { d, std } from 'murow/webgpu';
@@ -2915,6 +2915,7 @@ import { d, std } from 'murow/webgpu';
 // vertex, so the fragment receives vNormal, vColor, vUV, vWorldPos.
 const holo = renderer.materials.create({
   type: 'shader',
+  name: 'holo',                 // optional, unique; auto `mat_<id>` if omitted
   id: 'holo',                   // optional debug label on the GPU pipeline
   blend: 'additive',            // 'opaque' | 'alpha' | 'additive' | 'premultiplied' | 'multiply' | 'screen'
   depthWrite: false,
@@ -2932,7 +2933,7 @@ const holo = renderer.materials.create({
   },
 });
 
-const glow = renderer.materials.create({ type: 'emissive', color: [1, 0.45, 0.1], emissive: 2 });
+const glow = renderer.materials.create({ name: 'glow', type: 'emissive', color: [1, 0.45, 0.1], emissive: 2 });
 
 const orb = renderer.instances.add({ prefab: 'orb', material: holo });
 orb.setMaterial(glow.slot + 1);      // runtime swap (O(1)); 0 = engine default
@@ -2988,7 +2989,7 @@ renderer.shadows.directional.distance = 45;    // ortho half-extent around the c
 renderer.shadows.resolution = 2048; // rebuild + rebind (not per-frame)
 
 // Per material:
-const ground = renderer.materials.create({ type: 'standard', shadow: { receive: true, cast: false } });
+const ground = renderer.materials.create({ name: 'ground', type: 'standard', shadow: { receive: true, cast: false } });
 ```
 
 | Control | Default | Notes |

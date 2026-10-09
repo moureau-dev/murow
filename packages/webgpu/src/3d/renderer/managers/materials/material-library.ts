@@ -31,9 +31,14 @@ import {
 type UniformSchema = Record<string, AnyWgslData>;
 type UniformValues<U extends UniformSchema> = { [K in keyof U]: Infer<U[K]> };
 
-export interface MaterialHandle<U extends UniformSchema = UniformSchema> {
+export interface MaterialHandle<
+    U extends UniformSchema = UniformSchema,
+    N extends string = string,
+> {
     /** Stable, versioned identity, when created through `renderer.materials`. */
     readonly id: MaterialId;
+    /** Unique name within the renderer's material library. */
+    readonly name: N;
     /** False after destroy. */
     readonly alive: boolean;
     /** Material slot; the instance's `materialId` is `slot + 1` (0 = default). */
@@ -78,6 +83,8 @@ export interface MaterialLibraryDeps {
 }
 
 interface MaterialEntry {
+    /** Registered name, when one was supplied (released on destroy). */
+    name?: string;
     compiled: CompiledMaterial;
     buffer: TgpuBuffer<any>;
     layout: any;
@@ -101,6 +108,8 @@ export class MaterialLibrary {
     private readonly samplers: { key: string; sampler: GPUSampler }[] = [];
     /** Live instance users per 1-based material id; index 0 is the default. */
     private readonly useCounts: Uint32Array;
+    /** Registered material names -> slot. Names are unique per renderer. */
+    private readonly names = new Map<string, number>();
 
     /** The material id used by instances with no explicit material (the engine default). */
     readonly defaultMaterialId = 0;
@@ -110,6 +119,11 @@ export class MaterialLibrary {
         this.slots = new SlotMap(deps.maxMaterials);
         this.entries = new Array(deps.maxMaterials).fill(null);
         this.useCounts = new Uint32Array(deps.maxMaterials + 1);
+    }
+
+    /** Whether a material name is currently registered. */
+    hasName(name: string): boolean {
+        return this.names.has(name);
     }
 
     /** Live instance users of a 1-based material id (0 = default). */
@@ -155,7 +169,7 @@ export class MaterialLibrary {
         }
     }
 
-    createMaterial<U extends UniformSchema = {}>(spec: MaterialSpec, id?: MaterialId): MaterialHandle<U> {
+    createMaterial<U extends UniformSchema = {}, N extends string = string>(spec: MaterialSpec, id?: MaterialId): MaterialHandle<U, N> {
         const slot = this.slots.add();
         if (slot === -1) throw new Error(`Max materials (${this.deps.maxMaterials}) reached`);
 
@@ -163,6 +177,12 @@ export class MaterialLibrary {
         const entry = spec.type === 'shader'
             ? this.createShaderMaterial(slot, spec, state)
             : this.createEngineMaterial(slot, spec, state);
+
+        if (spec.name !== undefined) {
+            if (this.names.has(spec.name)) throw new Error(`Material "${spec.name}" is already registered`);
+            this.names.set(spec.name, slot);
+            entry.name = spec.name;
+        }
 
         this.entries[slot] = entry;
 
@@ -178,8 +198,9 @@ export class MaterialLibrary {
 
         const self = this;
         let destroyed = false;
-        const handle: MaterialHandle<U> = {
+        const handle: MaterialHandle<U, N> = {
             id: (id ?? slot) as MaterialId,
+            name: (spec.name ?? '') as N,
             get alive() { return !destroyed; },
             slot,
             uniforms,
@@ -514,6 +535,7 @@ export class MaterialLibrary {
     private destroy(slot: number): void {
         const entry = this.entries[slot];
         if (!entry) return;
+        if (entry.name !== undefined) this.names.delete(entry.name);
         entry.buffer.destroy();
         this.entries[slot] = null;
         this.slots.remove(slot);

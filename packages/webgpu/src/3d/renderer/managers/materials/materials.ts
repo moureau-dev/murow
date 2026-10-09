@@ -1,7 +1,7 @@
 import type { AnyWgslData } from 'typegpu/data';
 import { PooledCollection } from 'murow/core/collection';
 import type { MaterialId } from '../../ids';
-import type { Logger } from 'murow/core';
+import { generateId, type Logger } from 'murow/core';
 import type { MaterialLibrary, MaterialHandle } from './material-library';
 import type { MaterialSpec } from './specs';
 
@@ -35,13 +35,23 @@ export class MaterialManager extends PooledCollection<MaterialId, MaterialHandle
 
     /**
      * Compile a material from a declarative spec.
+     *
+     * `name` is unique per renderer; a duplicate throws rather than returning a
+     * handle. Omit it to auto-assign a `mat_<id>` name.
+     *
      * @returns the material handle, or `null` when the pool is full.
      */
-    create<U extends Record<string, AnyWgslData> = {}>(spec: MaterialSpec & { uniforms?: U }): MaterialHandle<U> | null {
-        this.pendingSpec = spec;
+    create<const N extends string = string, U extends Record<string, AnyWgslData> = {}>(
+        spec: MaterialSpec & { name?: N; uniforms?: U },
+    ): MaterialHandle<U, N> | null {
+        const name = spec.name ?? (generateId({ prefix: 'mat_' }) as N);
+        if (this.library.hasName(name)) {
+            throw new Error(`Material "${name}" is already registered`);
+        }
+        this.pendingSpec = spec.name === undefined ? { ...spec, name } : spec;
         const allocated = this.allocateItem();
         this.pendingSpec = null;
-        return (allocated ? allocated.item : null) as unknown as MaterialHandle<U> | null;
+        return (allocated ? allocated.item : null) as unknown as MaterialHandle<U, N> | null;
     }
 
     protected destroySlot(slot: number): void {

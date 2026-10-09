@@ -118,6 +118,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     readonly camera: CameraManager;
     raycast!: WebGPURaycast3D;
+    /** Names auto-assigned to internal (decal) materials that have none. */
+    private decalMaterialSeq = 0;
     private lastRenderTime = 0;
     /** Accumulated render time (seconds), exposed to shaders as `scene.time`. */
     private elapsed = 0;
@@ -395,7 +397,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.decals = new DecalManager({
             capacity: rendererOptions.maxDecals ?? 16,
             logger: this.logger,
-            createMaterial: (spec) => this.materials.create(spec) as never,
+            createMaterial: (spec) => this.materials.create({
+                ...spec,
+                name: spec.name ?? `__decal_${this.decalMaterialSeq++}`,
+            }) as never,
             addDecalInstance: (prefab, material) => this.instances!.add({
                 prefab,
                 position: [0, -10000, 0],

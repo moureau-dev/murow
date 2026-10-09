@@ -127,6 +127,7 @@ import { d, std } from 'murow/webgpu';
 
 const holo = renderer.materials.create({
   type: 'shader',
+  name: 'holo',                         // optional, unique; auto `mat_<id>` if omitted
   blend: 'additive',
   depthWrite: false,
   textures: { map: 'flame' },           // texture id from the AssetBucket
@@ -142,7 +143,7 @@ const holo = renderer.materials.create({
   },
 });
 
-const glow = renderer.materials.create({ type: 'emissive', color: [1, 0.45, 0.1], emissive: 2 });
+const glow = renderer.materials.create({ name: 'glow', type: 'emissive', color: [1, 0.45, 0.1], emissive: 2 });
 
 const orb = renderer.instances.add({ prefab: 'orb', material: holo });
 orb.setMaterial(glow.slot + 1);   // slot + 1; 0 is the engine default
@@ -244,7 +245,7 @@ from `'murow'`.
 - [`ComputeBuilder`](./src/compute/compute-builder.ts) — GPU compute kernels with buffer management
 
 ### Materials (3D)
-- `renderer.materials.create(spec)` — `standard` (lit), `unlit`, `emissive`, and custom `shader` materials; returns a typed `MaterialHandle<U>` (`slot`, `uniforms`, `setTexture`, `destroy`) or `null` at capacity
+- `renderer.materials.create(spec)` — `standard` (lit), `unlit`, `emissive`, and custom `shader` materials. `name` is optional and unique per renderer (auto `mat_<id>` when omitted; a duplicate throws); returns a typed `MaterialHandle<N, U>` (`name`, `slot`, `uniforms`, `setTexture`, `destroy`) or `null` at capacity
 - `MaterialSpec` / `EngineMaterialSpec` / `ShaderMaterialSpec` / `BlendMode` / `CullMode` — material spec types, exported from `murow/webgpu`
 
 ### Shadows
