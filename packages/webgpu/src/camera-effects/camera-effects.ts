@@ -1,6 +1,6 @@
 import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d as dRaw, std as stdRaw, sizeOf } from '../gpu';
 
-type AnyWgslData = any;
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 const d: any = dRaw;
 const std: any = stdRaw;
 
@@ -26,7 +26,7 @@ interface CompiledCustomEffect {
     pipeline: GPURenderPipeline;
     layout: any;
     buffer: GPUBuffer;
-    schema: Record<string, AnyWgslData>;
+    schema: Record<string, AnyField>;
     bindA: GPUBindGroup | null;
     bindB: GPUBindGroup | null;
     write(): void;
@@ -362,7 +362,7 @@ export class CameraEffectStack {
     // --- Custom effects ---
 
     private compileCustom(effect: CameraEffect): CompiledCustomEffect {
-        const schema: Record<string, AnyWgslData> = effect.uniforms && Object.keys(effect.uniforms).length > 0
+        const schema: Record<string, AnyField> = effect.uniforms && Object.keys(effect.uniforms).length > 0
             ? effect.uniforms
             : { _unused: d.f32 };
         const Struct = d.struct(schema);
@@ -526,11 +526,11 @@ export class CameraEffectStack {
     }
 }
 
-function coerceUniform(_type: AnyWgslData, value: unknown): unknown {
+function coerceUniform(_type: AnyField, value: unknown): unknown {
     return value;
 }
 
-function zeroValue(type: AnyWgslData): unknown {
+function zeroValue(type: AnyField): unknown {
     if (type === (d.vec2f as unknown)) return [0, 0];
     if (type === (d.vec3f as unknown)) return [0, 0, 0];
     if (type === (d.vec4f as unknown)) return [0, 0, 0, 0];

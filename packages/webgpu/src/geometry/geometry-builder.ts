@@ -28,8 +28,7 @@ import { resolveBuiltInGeometry } from './built-in';
 import { SlotMap } from 'murow/core/slot-map';
 import type { ComputeKernel } from '../compute/compute-builder';
 
-type AnyWgslData = any;
-type AnyData = any;
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 const d: any = dRaw;
 const std: any = stdRaw;
 
@@ -56,12 +55,12 @@ type DataToValue<T> =
     number | number[];
 
 /** Partial record mapping field names to their JS values. */
-type FieldValues<T extends Record<string, AnyWgslData>> = {
+type FieldValues<T extends Record<string, AnyField>> = {
     [K in keyof T]?: DataToValue<T[K]>;
 };
 
 /** All instance field names (dynamic + static). */
-type AllFields<D extends Record<string, AnyWgslData>, S extends Record<string, AnyWgslData>> =
+type AllFields<D extends Record<string, AnyField>, S extends Record<string, AnyField>> =
     keyof D | keyof S;
 
 // =============================================================================
@@ -81,17 +80,17 @@ export interface GeometryOptions {
 
 /** Typed instance layout config with inferred field types. */
 export interface InstanceLayoutConfig<
-    D extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    S extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    D extends Record<string, AnyField> = Record<string, AnyField>,
+    S extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     dynamic: D;
     static: S;
 }
 
 export interface GeometryDataLayout<
-    D extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    S extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    U extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    D extends Record<string, AnyField> = Record<string, AnyField>,
+    S extends Record<string, AnyField> = Record<string, AnyField>,
+    U extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     dataLayout: GpuBindGroupLayout;
     instanceLayout: InstanceLayoutConfig<D, S>;
@@ -102,7 +101,7 @@ export interface GeometryDataLayout<
 // Helpers
 // =============================================================================
 
-export function getFieldFloats(desc: AnyWgslData): number {
+export function getFieldFloats(desc: AnyField): number {
     if (desc === d.f32) return 1;
     if (desc === d.vec2f) return 2;
     if (desc === d.vec3f) return 3;
@@ -115,7 +114,7 @@ export function getFieldFloats(desc: AnyWgslData): number {
     return 1;
 }
 
-function buildStructFromLayout(fields: Record<string, AnyWgslData>) {
+function buildStructFromLayout(fields: Record<string, AnyField>) {
     return d.struct(fields);
 }
 
@@ -149,9 +148,9 @@ function buildCustomGeometryData(config: CustomGeometryLayout): GeometryData {
 // =============================================================================
 
 export function createGeometryDataLayout<
-    D extends Record<string, AnyWgslData>,
-    S extends Record<string, AnyWgslData>,
-    U extends Record<string, AnyWgslData>,
+    D extends Record<string, AnyField>,
+    S extends Record<string, AnyField>,
+    U extends Record<string, AnyField>,
 >(
     instanceLayout: InstanceLayoutConfig<D, S>,
     uniformDefs: U,
@@ -164,7 +163,7 @@ export function createGeometryDataLayout<
         ? buildStructFromLayout(instanceLayout.static)
         : d.struct({ _pad: d.f32 });
 
-    const parsedUniformDefs: Record<string, AnyWgslData> = {};
+    const parsedUniformDefs: Record<string, AnyField> = {};
     for (const [key, val] of Object.entries(uniformDefs)) {
         if (val === d.f32 || val === d.vec2f || val === d.vec3f || val === d.vec4f) {
             parsedUniformDefs[key] = val;
@@ -190,9 +189,9 @@ export function createGeometryDataLayout<
 // =============================================================================
 
 export class CustomGeometry<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TUniforms extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     readonly name: string;
     readonly maxInstances: number;
@@ -422,8 +421,8 @@ export class CustomGeometry<
 // =============================================================================
 
 export class InstanceContext<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     private dynamicData!: Float32Array;
     private staticData!: Float32Array;
@@ -493,7 +492,7 @@ export class InstanceContext<
         throw new Error(`Field "${field}" not found`);
     }
 
-    private fieldOffset(field: string, names: string[], layoutFields: Record<string, AnyWgslData>): number | null {
+    private fieldOffset(field: string, names: string[], layoutFields: Record<string, AnyField>): number | null {
         let offset = 0;
         for (const name of names) {
             if (name === field) return offset;
@@ -508,8 +507,8 @@ export class InstanceContext<
 // =============================================================================
 
 export class InstanceAccessor<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     private dynamicData: Float32Array;
     private staticData: Float32Array;
@@ -577,7 +576,7 @@ export class InstanceAccessor<
         throw new Error(`Field "${field}" not found`);
     }
 
-    private fieldOffset(field: string, names: string[], layoutFields: Record<string, AnyWgslData>): number | null {
+    private fieldOffset(field: string, names: string[], layoutFields: Record<string, AnyField>): number | null {
         let offset = 0;
         for (const name of names) {
             if (name === field) return offset;
@@ -592,8 +591,8 @@ export class InstanceAccessor<
 // =============================================================================
 
 type ShaderResult = {
-    vertex: GpuShader<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
-    fragment: GpuShader<Record<string, AnyWgslData>, AnyWgslData>;
+    vertex: GpuShader<Record<string, AnyField>, Record<string, AnyField>>;
+    fragment: GpuShader<Record<string, AnyField>, AnyField>;
 };
 
 /** Vertex input builtins available in shader functions. */
@@ -609,13 +608,13 @@ export interface VertexInput {
  * The builder handles all TypeGPU wiring internally.
  */
 export interface DeclarativeShaders<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TUniforms extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     vertex: {
         /** Varyings output from vertex to fragment (position is always included). */
-        out: Record<string, AnyWgslData>;
+        out: Record<string, AnyField>;
         /** Vertex shader body. Receives typed context and vertex input. */
         fn: (
             ctx: ShaderContext<TDynamic, TStatic, TUniforms>,
@@ -633,7 +632,7 @@ type ResolveWgsl<T> =
   T extends (...args: any) => infer R ? R :
   T;
 
-type ResolveRecord<T extends Record<string, AnyWgslData>> = {
+type ResolveRecord<T extends Record<string, AnyField>> = {
   readonly [K in keyof T]: ResolveWgsl<T[K]>;
 };
 
@@ -655,9 +654,9 @@ type ResolveRecord<T extends Record<string, AnyWgslData>> = {
  * ```
  */
 export interface ShaderContext<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TUniforms extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
     > {
     /** Per-instance dynamic data (updated every frame). Access: `dynamic[instanceIndex].fieldName` */
     readonly dynamic: Readonly<Record<number, Readonly<ResolveRecord<TDynamic>>>>;
@@ -670,15 +669,15 @@ export interface ShaderContext<
 }
 
 type ShaderFactory<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TUniforms extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
 > = (ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => ShaderResult;
 
 export class GeometryBuilder<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, never>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, never>,
-    TUniforms extends Record<string, AnyWgslData> = Record<string, never>,
+    TDynamic extends Record<string, AnyField> = Record<string, never>,
+    TStatic extends Record<string, AnyField> = Record<string, never>,
+    TUniforms extends Record<string, AnyField> = Record<string, never>,
 > {
     private _name: string;
     private _options: GeometryOptions;
@@ -686,10 +685,10 @@ export class GeometryBuilder<
     private _format: GPUTextureFormat;
     private _layoutConfig: InstanceLayoutConfig<TDynamic, TStatic> | null = null;
     private _uniformDefs: TUniforms = {} as TUniforms;
-    private _vertexFn: GpuShader<Record<string, AnyWgslData>, Record<string, AnyWgslData>> | null = null;
-    private _fragmentFn: GpuShader<Record<string, AnyWgslData>, AnyWgslData> | null = null;
+    private _vertexFn: GpuShader<Record<string, AnyField>, Record<string, AnyField>> | null = null;
+    private _fragmentFn: GpuShader<Record<string, AnyField>, AnyField> | null = null;
     private _shaderFactory: ShaderFactory<TDynamic, TStatic, TUniforms> | null = null;
-    private _vertexVaryings: Record<string, AnyWgslData> | null = null;
+    private _vertexVaryings: Record<string, AnyField> | null = null;
     private _vertexFactory: ((ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => Function) | null = null;
     private _fragmentFactory: Function | null = null;
     private _declarativeShaders: DeclarativeShaders<TDynamic, TStatic, TUniforms> | null = null;
@@ -709,8 +708,8 @@ export class GeometryBuilder<
     }
 
     instanceLayout<
-        D extends Record<string, AnyWgslData>,
-        S extends Record<string, AnyWgslData>,
+        D extends Record<string, AnyField>,
+        S extends Record<string, AnyField>,
     >(layout: InstanceLayoutConfig<D, S> | GeometryDataLayout<D, S, TUniforms>): GeometryBuilder<D, S, TUniforms> {
         const next = this as unknown as GeometryBuilder<D, S, TUniforms>;
         if ('dataLayout' in layout) {
@@ -723,7 +722,7 @@ export class GeometryBuilder<
         return next;
     }
 
-    uniforms<U extends Record<string, AnyWgslData>>(defs: U): GeometryBuilder<TDynamic, TStatic, U> {
+    uniforms<U extends Record<string, AnyField>>(defs: U): GeometryBuilder<TDynamic, TStatic, U> {
         const next = this as unknown as GeometryBuilder<TDynamic, TStatic, U>;
         next._uniformDefs = defs;
         return next;
@@ -785,14 +784,14 @@ export class GeometryBuilder<
      */
     shaders(
         vertexOrFactoryOrConfig:
-            | GpuShader<Record<string, AnyWgslData>, Record<string, AnyWgslData>>
+            | GpuShader<Record<string, AnyField>, Record<string, AnyField>>
             | ShaderFactory<TDynamic, TStatic, TUniforms>
             | DeclarativeShaders<TDynamic, TStatic, TUniforms>,
-        fragment?: GpuShader<Record<string, AnyWgslData>, AnyWgslData>,
+        fragment?: GpuShader<Record<string, AnyField>, AnyField>,
     ): this {
         if (fragment !== undefined) {
             // .shaders(vertexFn, fragmentFn)
-            this._vertexFn = vertexOrFactoryOrConfig as GpuShader<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
+            this._vertexFn = vertexOrFactoryOrConfig as GpuShader<Record<string, AnyField>, Record<string, AnyField>>;
             this._fragmentFn = fragment;
         } else if (typeof vertexOrFactoryOrConfig === 'function') {
             // .shaders((ctx) => ({ vertex, fragment }))
@@ -819,9 +818,9 @@ export class GeometryBuilder<
      * )
      * ```
      */
-    vertexShader<V extends Record<string, AnyWgslData>>(
+    vertexShader<V extends Record<string, AnyField>>(
         varyings: V,
-        factory: (ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => (input: { vertexIndex: number; instanceIndex: number }) => Record<string, AnyWgslData>,
+        factory: (ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => (input: { vertexIndex: number; instanceIndex: number }) => Record<string, AnyField>,
     ): this {
         this._vertexVaryings = varyings;
         this._vertexFactory = factory;
@@ -965,7 +964,7 @@ export class GeometryBuilder<
         const StatStruct = Object.keys(this._layoutConfig.static).length > 0
             ? buildStructFromLayout(this._layoutConfig.static)
             : d.struct({ _pad: d.f32 });
-        const parsedUniformDefs: Record<string, AnyWgslData> = {};
+        const parsedUniformDefs: Record<string, AnyField> = {};
         for (const [key, val] of Object.entries(this._uniformDefs)) {
             parsedUniformDefs[key] = (val === d.f32 || val === d.vec2f || val === d.vec3f || val === d.vec4f) ? val : d.f32;
         }

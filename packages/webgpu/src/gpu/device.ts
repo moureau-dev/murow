@@ -115,12 +115,12 @@ class WebGpuDevice implements GpuDevice {
 
     beginRenderPass(options: RenderPassOptions): void {
         this.encoder = this.device.createCommandEncoder();
-        const colorAttachments = (options.colorAttachments ?? []).map((attachment) => ({
+        const colorAttachments: GPURenderPassColorAttachment[] = (options.colorAttachments ?? []).map((attachment) => ({
             view: this.textureOf(attachment.texture).createView(),
-            clearValue: attachment.clear,
+            clearValue: attachment.clear ? ([...attachment.clear] as GPUColor) : undefined,
             loadOp: attachment.loadOp ?? (attachment.clear ? 'clear' : 'load'),
             storeOp: attachment.storeOp ?? 'store',
-        })) as GPURenderPassColorAttachment[];
+        }));
         const depthStencil = options.depthAttachment
             ? {
                 view: this.textureOf(options.depthAttachment.texture).createView(),

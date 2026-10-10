@@ -1,4 +1,4 @@
-type AnyWgslData = any;
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 
 export type BlendMode =
     | 'opaque'
@@ -87,7 +87,7 @@ export interface EngineMaterialSpec extends MaterialSpecBase {
 
 export interface ShaderMaterialSpec extends MaterialSpecBase {
     readonly type: 'shader';
-    readonly uniforms?: Record<string, AnyWgslData>;
+    readonly uniforms?: Record<string, AnyField>;
     readonly defaultUniforms?: Record<string, number | readonly number[]>;
     readonly textures?: Readonly<Record<string, string>>;
     readonly lit?: boolean;
@@ -97,7 +97,7 @@ export interface ShaderMaterialSpec extends MaterialSpecBase {
 export interface ShaderMaterialShaders {
     /** Optional custom vertex. When omitted, the engine mesh vertex is used. */
     readonly vertex?: {
-        readonly out: Record<string, AnyWgslData>;
+        readonly out: Record<string, AnyField>;
         readonly fn: (ctx: any, input: any) => Record<string, unknown>;
     };
     readonly fragment: { readonly fn: (input: any, bindings?: any) => unknown };

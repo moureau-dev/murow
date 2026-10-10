@@ -1,4 +1,4 @@
-type AnyWgslData = any;
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 import { FreeList } from 'murow/core/free-list';
 
 /**
@@ -38,7 +38,7 @@ export type CameraEffectSpec =
 export interface CustomCameraEffectSpec {
     readonly type: 'shader';
     readonly fragment: (input: { vUV: { x: number; y: number } }) => unknown;
-    readonly uniforms?: Record<string, AnyWgslData>;
+    readonly uniforms?: Record<string, AnyField>;
     readonly defaultUniforms?: Record<string, number | readonly number[]>;
 }
 

@@ -17,7 +17,7 @@ const d: any = dRaw;
 const std: any = stdRaw;
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { AnimComputeUniforms, InstanceAnimStateGPU } from '../../core/types';
-type TgpuRoot = any;
+type GpuDeviceRef = { device: GPUDevice };
 import { packAnimationData, type PackedBuffers } from './packer';
 import type { PackedAnimationData } from 'murow/renderer';
 
@@ -35,7 +35,7 @@ export interface AnimationKernelBudgets {
 }
 
 export function buildAnimationKernel(
-    root: TgpuRoot,
+    root: GpuDeviceRef,
     packed: PackedAnimationData,
     maxInstances: number,
     maxTotalBones: number,
@@ -323,7 +323,7 @@ export function buildAnimationKernel(
     return { kernel, packedBuffers: pb, budgets };
 }
 
-export function uploadPackedToKernel(root: TgpuRoot, kernel: ComputeKernel, pb: PackedBuffers): void {
+export function uploadPackedToKernel(root: GpuDeviceRef, kernel: ComputeKernel, pb: PackedBuffers): void {
     const queue = root.device.queue;
 
     const skelBuf = kernel.getBuffer('skelI32');

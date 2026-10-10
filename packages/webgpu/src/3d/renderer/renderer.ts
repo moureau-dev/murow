@@ -7,8 +7,8 @@
  * - GPU index buffer for sparse instancing
  * - Depth testing + back-face culling
  */
-type TgpuRoot = any;
-type AnyWgslData = any;
+type GpuDeviceRef = { device: GPUDevice };
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 import { Base3DRenderer } from 'murow/renderer';
 import { MESH_UNIFORM_LIGHT_OFFSET } from '../../core/types';
 import { Logger } from 'murow/core';

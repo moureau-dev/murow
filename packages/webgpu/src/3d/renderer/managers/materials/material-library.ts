@@ -1,7 +1,7 @@
 import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d as dRaw, std as stdRaw, sizeOf } from '../../../../gpu';
 import { lightContribution, tonemap } from '../../../../shaders/utils';
 
-type AnyWgslData = any;
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 type Infer<T> = any;
 // The shader authoring DSL stays loose so bodies read naturally.
 const d: any = dRaw;
@@ -40,7 +40,7 @@ import {
     type EngineMaterialLayout,
 } from './built-in';
 
-type UniformSchema = Record<string, AnyWgslData>;
+type UniformSchema = Record<string, AnyField>;
 type UniformValues<U extends UniformSchema> = { [K in keyof U]: Infer<U[K]> };
 
 export interface MaterialHandle<
@@ -554,11 +554,11 @@ export class MaterialLibrary {
     }
 }
 
-function coerceUniform(_type: AnyWgslData, value: unknown): unknown {
+function coerceUniform(_type: AnyField, value: unknown): unknown {
     return value;
 }
 
-function zeroValue(type: AnyWgslData): unknown {
+function zeroValue(type: AnyField): unknown {
     if (type === (d.vec2f as unknown)) return [0, 0];
     if (type === (d.vec3f as unknown)) return [0, 0, 0];
     if (type === (d.vec4f as unknown)) return [0, 0, 0, 0];
