@@ -8,6 +8,8 @@
  */
 export * from './value';
 export * from './data';
+export * from './shape';
+export * from './typed';
 export * from './std';
 export * from './entry';
 export * from './control';

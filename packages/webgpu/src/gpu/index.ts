@@ -11,7 +11,7 @@ export * from './helpers';
 export * from './device';
 
 // The authoring namespaces, re-exported so the shim import sites keep working.
-export { d, std, typeOf, alignOf, sizeOf, typeSize, typeAlign, alignUp } from 'murow/gpu/dsl';
+export { d, std, typeOf, alignOf, sizeOf, typeSize, typeAlign, alignUp, typedD, typedStd } from 'murow/gpu/dsl';
 
 // The class-based `murow/gpu` surface, re-exported for the renderer.
 export {

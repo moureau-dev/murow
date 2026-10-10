@@ -5,13 +5,12 @@
  * Instance data from storage buffers (TRS + color) via index buffer indirection.
  * Basic diffuse lighting.
  */
-import { GpuBindGroupLayout, GpuShader, d as dRaw, std as stdRaw } from '../../gpu';
+import { GpuBindGroupLayout, GpuShader, d as dRaw, std as stdRaw, typedD, typedStd } from '../../gpu';
 import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms, Light } from '../../core/types';
 import { lightContribution, tonemap } from '../../shaders/utils';
 
-// The shader authoring DSL stays loose so bodies read naturally.
-const d: any = dRaw;
-const std: any = stdRaw;
+const d = typedD(dRaw);
+const std = typedStd(stdRaw);
 
 /** Max point/spot lights the mesh shaders' storage buffer holds. */
 export const MAX_LIGHTS = 64;
