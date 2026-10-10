@@ -1,4 +1,4 @@
-import type { TgpuRoot } from 'typegpu';
+import type { TgpuRoot } from '../../../shaders/typegpu';
 import { MESH_UNIFORM_FLOATS } from '../../../core/types';
 import type { MeshPipelines } from '../internals/mesh-pipelines';
 import type { ModelLibrary } from '../internals/model-library';

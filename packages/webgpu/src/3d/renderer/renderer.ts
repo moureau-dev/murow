@@ -7,8 +7,8 @@
  * - GPU index buffer for sparse instancing
  * - Depth testing + back-face culling
  */
-import type { TgpuRoot } from 'typegpu';
-import type { AnyWgslData } from 'typegpu/data';
+import type { TgpuRoot } from '../../shaders/typegpu';
+import type { AnyWgslData } from '../../shaders/typegpu';
 import { Base3DRenderer } from 'murow/renderer';
 import { tgpu } from '../../shaders/typegpu';
 import { MESH_UNIFORM_LIGHT_OFFSET } from '../../core/types';

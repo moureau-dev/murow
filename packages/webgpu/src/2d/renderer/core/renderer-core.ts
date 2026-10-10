@@ -1,4 +1,4 @@
-import type { TgpuRoot, TgpuBuffer } from 'typegpu';
+import type { TgpuRoot, TgpuBuffer } from '../../../shaders/typegpu';
 import type { SpriteDataLayout, SpriteTextureLayout } from '../internals/sprite-shader';
 import type { CameraManager2D } from '../managers/camera';
 

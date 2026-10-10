@@ -11,11 +11,11 @@
 // Use bundler-safe wraps so `d.X` / `std.X` accesses inside the shader
 // function body survive Rollup's namespace-member inlining (see
 // ../../shaders/typegpu.ts).
-import type * as _d from 'typegpu/data';
+import type * as _d from '../../shaders/typegpu';
 import { d, std } from '../../shaders/typegpu';
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { AnimComputeUniforms, InstanceAnimStateGPU } from '../../core/types';
-import type { TgpuRoot } from 'typegpu';
+import type { TgpuRoot } from '../../shaders/typegpu';
 import { packAnimationData, type PackedBuffers } from './packer';
 import type { PackedAnimationData } from 'murow/renderer';
 

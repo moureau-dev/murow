@@ -22,8 +22,8 @@
  * geom.updateUniforms({ time: 1.5 });                           // ← typed uniform names
  * ```
  */
-import type { TgpuRoot, TgpuBuffer, TgpuRenderPipeline, TgpuBindGroup, TgpuBindGroupLayout, TgpuVertexFn, TgpuFragmentFn } from 'typegpu';
-import type { AnyWgslData, AnyData } from 'typegpu/data';
+import type { TgpuRoot, TgpuBuffer, TgpuRenderPipeline, TgpuBindGroup, TgpuBindGroupLayout, TgpuVertexFn, TgpuFragmentFn } from '../shaders/typegpu';
+import type { AnyWgslData, AnyData } from '../shaders/typegpu';
 import { tgpu, d, std } from '../shaders/typegpu';
 import type { BuiltInGeometry, GeometryData } from './built-in';
 import { resolveBuiltInGeometry } from './built-in';
@@ -890,10 +890,9 @@ export class GeometryBuilder<
                 return base;
             };
 
-            // Attach runtime metadata — parses function source with Acorn + tinyest-for-wgsl.
-            // Vertex fn has (ctx, input) — strip the first param, its destructured names become externals.
-            // Pass `{ d, std }` as namespace aliases so bundler-renamed identifiers (e.g. `d10`, `std7`)
-            // are auto-detected by member-access matching and aliased to the right namespace object.
+            // Attach metadata so the facade can lower the body. A vertex fn has
+            // (ctx, input): strip the first param, and its destructured names
+            // resolve against the externals provider below.
             attachShaderMetadata(decl.vertex.fn, resolveExternals({}), true, { d, std });
             attachShaderMetadata(decl.fragment.fn, resolveExternals({}), false, { d, std });
 

@@ -1,7 +1,7 @@
 import { tgpu, d, std } from '../../../../shaders/typegpu';
 import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
 import { DynamicMesh, SkinnedStaticMesh } from '../../../../core/types';
-import type { TgpuVertexFn, TgpuFragmentFn } from 'typegpu';
+import type { TgpuVertexFn, TgpuFragmentFn } from '../../../../shaders/typegpu';
 
 /**
  * Skinned layout for a light shadow pass: the same per-light uniform the

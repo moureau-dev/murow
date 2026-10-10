@@ -1,4 +1,4 @@
-import type { TgpuRoot, TgpuVertexFn, TgpuFragmentFn } from 'typegpu';
+import type { TgpuRoot, TgpuVertexFn, TgpuFragmentFn } from '../../../../shaders/typegpu';
 import { tgpu, d, std } from '../../../../shaders/typegpu';
 import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
 import { DynamicMesh, SkinnedStaticMesh, StaticMesh } from '../../../../core/types';

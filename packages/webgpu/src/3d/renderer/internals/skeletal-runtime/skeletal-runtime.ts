@@ -1,4 +1,4 @@
-import type { TgpuRoot } from 'typegpu';
+import type { TgpuRoot } from '../../../../shaders/typegpu';
 import type { PrefabBucket3D, PackedAnimationData, ParsedGltf, SkeletalAnimation } from 'murow/renderer';
 import { createPackedAnimationData, packSkinAndAnimations } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../../../../core/types';

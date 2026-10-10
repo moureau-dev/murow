@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import * as d from 'typegpu/data';
+import { d } from '../../../../shaders/typegpu';
 import { StaticMesh, STATIC_MESH_FLOATS } from '../../../../core/types';
 import {
     STAT_SX,
@@ -13,7 +13,7 @@ import {
     STAT_CUSTOM1,
 } from './offsets';
 
-const fields = Object.keys((StaticMesh as any).propTypes);
+const fields = ((StaticMesh as any).fields as Array<{ name: string }>).map((field) => field.name);
 
 describe('StaticMesh GPU layout', () => {
     test('packed f32 count matches statically declared float count', () => {

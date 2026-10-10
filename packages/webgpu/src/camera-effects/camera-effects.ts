@@ -1,5 +1,5 @@
-import type { TgpuRoot, TgpuBuffer } from 'typegpu';
-import type { AnyWgslData } from 'typegpu/data';
+import type { TgpuRoot, TgpuBuffer } from '../shaders/typegpu';
+import type { AnyWgslData } from '../shaders/typegpu';
 import { tgpu, d, std } from '../shaders/typegpu';
 import { attachShaderMetadata } from '../shaders/runtime-transpile';
 import type { CameraEffect, CameraEffectList } from '../camera/camera-effect';
@@ -523,13 +523,7 @@ export class CameraEffectStack {
     }
 }
 
-function coerceUniform(type: AnyWgslData, value: unknown): unknown {
-    if (Array.isArray(value)) {
-        const a = value as number[];
-        if (type === (d.vec2f as unknown)) return d.vec2f(a[0]!, a[1]!);
-        if (type === (d.vec3f as unknown)) return d.vec3f(a[0]!, a[1]!, a[2]!);
-        if (type === (d.vec4f as unknown)) return d.vec4f(a[0]!, a[1]!, a[2]!, a[3]!);
-    }
+function coerceUniform(_type: AnyWgslData, value: unknown): unknown {
     return value;
 }
 

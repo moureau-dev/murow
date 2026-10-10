@@ -1,4 +1,4 @@
-import type { TgpuRoot, TgpuBuffer, TgpuBindGroupLayout } from 'typegpu';
+import type { TgpuRoot, TgpuBuffer, TgpuBindGroupLayout } from '../../../../shaders/typegpu';
 import { tgpu, d, std } from '../../../../shaders/typegpu';
 import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
 import { ComputeBuilder, type ComputeKernel } from '../../../../compute/compute-builder';

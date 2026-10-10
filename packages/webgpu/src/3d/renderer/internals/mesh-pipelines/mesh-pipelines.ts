@@ -1,4 +1,4 @@
-import type { TgpuRoot, TgpuBuffer, TgpuVertexFn, TgpuFragmentFn, TgpuBindGroupLayout } from 'typegpu';
+import type { TgpuRoot, TgpuBuffer, TgpuVertexFn, TgpuFragmentFn, TgpuBindGroupLayout } from '../../../../shaders/typegpu';
 import { tgpu, d } from '../../../../shaders/typegpu';
 import {
     DynamicMesh,

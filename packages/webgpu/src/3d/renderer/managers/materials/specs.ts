@@ -1,4 +1,4 @@
-import type { AnyWgslData } from 'typegpu/data';
+import type { AnyWgslData } from '../../../../shaders/typegpu';
 
 export type BlendMode =
     | 'opaque'

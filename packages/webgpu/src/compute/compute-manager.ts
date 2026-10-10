@@ -1,4 +1,4 @@
-import type { TgpuRoot } from 'typegpu';
+import type { TgpuRoot } from '../shaders/typegpu';
 import { ComputeBuilder, type ComputeOptions } from './compute-builder';
 
 /**

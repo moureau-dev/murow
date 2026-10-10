@@ -22,8 +22,8 @@
  * physics.dispatch(MAX);
  * ```
  */
-import type { TgpuRoot, TgpuBuffer, TgpuBindGroupLayout, TgpuBindGroup, TgpuComputePipeline } from 'typegpu';
-import type { AnyWgslData, AnyData } from 'typegpu/data';
+import type { TgpuRoot, TgpuBuffer, TgpuBindGroupLayout, TgpuBindGroup, TgpuComputePipeline } from '../shaders/typegpu';
+import type { AnyWgslData, AnyData } from '../shaders/typegpu';
 import { attachShaderMetadata } from '../shaders/runtime-transpile';
 import { tgpu, d, std } from '../shaders/typegpu';
 
