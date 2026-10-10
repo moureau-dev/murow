@@ -7,10 +7,9 @@
  * - GPU index buffer for sparse instancing
  * - Depth testing + back-face culling
  */
-import type { TgpuRoot } from '../../shaders/typegpu';
-import type { AnyWgslData } from '../../shaders/typegpu';
+type TgpuRoot = any;
+type AnyWgslData = any;
 import { Base3DRenderer } from 'murow/renderer';
-import { tgpu } from '../../shaders/typegpu';
 import { MESH_UNIFORM_LIGHT_OFFSET } from '../../core/types';
 import { Logger } from 'murow/core';
 import {
@@ -205,8 +204,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             maxComputeInvocationsPerWorkgroup: a.maxComputeInvocationsPerWorkgroup,
         };
         const device = await adapter.requestDevice({ requiredLimits });
-        this.core.root = tgpu.initFromDevice({ device });
-        this.core.device = this.core.root.device;
+        this.core.root = { device } as never;
+        this.core.device = device;
         this.compute = new ComputeManager(this.core.device);
 
         this.core.context = this.canvas.getContext('webgpu')!;
@@ -699,6 +698,5 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.particles?.system.destroy();
         this.core.pipelines?.destroy();
         this.core.models?.destroy();
-        this.core.root?.destroy();
     }
 }

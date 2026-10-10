@@ -1,34 +1,26 @@
 # webgpu/gpu
 
-WebGPU's implementation of the `murow/gpu` target seam.
-
-`murow/gpu` is target-agnostic: it owns the shader IR, the emit walker, the data
-schemas, the resource descriptors, and the class-based backend, context, and
-resource API. This module supplies the WGSL and WebGPU side.
+WebGPU's implementation of the `murow/gpu` target seam. Small on purpose: a
+backend is a target syntax plus a device factory, and everything else lives in
+`murow/gpu`.
 
 ## Layout
 
-- `syntax.ts` - `WgslSyntax` implements every `TargetSyntax` hook with WGSL
-  (`typeName`, `builtin`, `paramDecl`, `returnType`, `entrySignature`,
-  `declareBinding`, `declareLet`, `construct`, `cast`, `sample`, `literal`,
-  `formatScalar`, `structDecl`, `loop`, `discard`/`break`/`continue`,
-  `addressSpace`, `preamblePrefix`).
+- `syntax.ts` - `WgslSyntax`, the `TargetSyntax` for WGSL: type names, builtins,
+  parameter and binding declarations, entry signatures, casts, sampling,
+  literals, struct declarations, loops, and the preamble prefix.
 - `helpers.ts` - injectable engine helper source (noise, snoise,
-  `lightContribution`, `tonemap`). The backend prepends each helper only when an
+  `lightContribution`, `tonemap`). The backend prepends a helper only when an
   entry calls it.
-- `backend/` - `wgslSpec` (a `GpuBackendSpec` ready for `new GpuBackend`),
-  `wgslIntrinsics` (WGSL-only intrinsics: `saturate` to `clamp`, atomics take a
-  pointer), and `WgslBackend` (`BaseBackend` with `WgslSyntax`).
+- `backend/` - `wgslSpec` (a `GpuBackendSpec` for WGSL), `wgslIntrinsics`
+  (WGSL-only intrinsics: `saturate` to `clamp`, atomics take a pointer),
+  `compileProgram`, and the `WgslBackend` `BaseBackend`.
 - `device.ts` - `webGpuDevice` (a `GpuDevice` over a raw `GPUDevice`),
-  `createWebGpuContext` (a `GpuContext` for WebGPU), and
-  `createGpuBindGroupLayout`.
+  `createWebGpuContext` (a `GpuContext`), `createGpuBindGroupLayout`, and
+  `createRawBuffer`.
 
-Compile a program with `new GpuBackend(wgslSpec).compile(program)`; build a
-context with `await createWebGpuContext()`.
+## Building a backend
 
-## Facade (being removed)
-
-`tgpu.ts`, `root.ts`, and `environment.ts` are the transitional typegpu-style
-facade the renderer still uses. They are removed as the renderer moves onto
-`GpuShader`/`GpuProgram`/`GpuContext` (the compute path already has). `d` and
-`std` come from `murow/gpu/dsl`.
+Compile with `compileProgram(shaders)` (or `new GpuBackend(wgslSpec).compile`).
+Build a context with `await createWebGpuContext()`. A different target (WebGL) is
+the same shape: a `TargetSyntax`, a spec object, and a device factory.

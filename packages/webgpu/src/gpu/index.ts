@@ -9,9 +9,6 @@ export * from './syntax';
 export * from './backend';
 export * from './helpers';
 export * from './device';
-export * from './environment';
-export * from './root';
-export * from './tgpu';
 
 // The authoring namespaces, re-exported so the shim import sites keep working.
 export { d, std, typeOf, alignOf, sizeOf, typeSize, typeAlign, alignUp } from 'murow/gpu/dsl';

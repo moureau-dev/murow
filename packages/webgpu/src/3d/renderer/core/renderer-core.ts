@@ -1,4 +1,3 @@
-import type { TgpuRoot } from '../../../shaders/typegpu';
 import { MESH_UNIFORM_FLOATS } from '../../../core/types';
 import type { MeshPipelines } from '../internals/mesh-pipelines';
 import type { ModelLibrary } from '../internals/model-library';
@@ -13,7 +12,7 @@ import type { SceneUniforms } from './scene';
  * cannot become a service locator.
  */
 export class RendererCore {
-    root!: TgpuRoot;
+    root!: { device: GPUDevice };
     device!: GPUDevice;
     context!: GPUCanvasContext;
     format!: GPUTextureFormat;

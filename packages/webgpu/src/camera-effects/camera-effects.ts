@@ -1,7 +1,18 @@
-import type { TgpuRoot, TgpuBuffer } from '../shaders/typegpu';
-import type { AnyWgslData } from '../shaders/typegpu';
-import { tgpu, d, std } from '../shaders/typegpu';
-import { attachShaderMetadata } from '../shaders/runtime-transpile';
+import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d as dRaw, std as stdRaw, sizeOf } from '../gpu';
+
+type AnyWgslData = any;
+const d: any = dRaw;
+const std: any = stdRaw;
+
+/** Pack a schema value to bytes for upload. */
+function pack(schema: any, value: unknown): Uint8Array {
+    const size = sizeOf(schema);
+    const buffer = new ArrayBuffer(size);
+    const dv = new DataView(buffer);
+    if (Array.isArray(schema.fields)) for (const m of schema.fields) m.field.write(dv, m.offset, (value as Record<string, unknown>)?.[m.name]);
+    else schema.write(dv, 0, value);
+    return new Uint8Array(buffer);
+}
 import type { CameraEffect, CameraEffectList } from '../camera/camera-effect';
 import { CAMERA_EFFECT_WGSL, EFFECT_SCENE_UNIFORMS } from './camera-effect-shaders';
 
@@ -14,7 +25,7 @@ const SLOT_FLOATS = SLOT / 4;
 interface CompiledCustomEffect {
     pipeline: GPURenderPipeline;
     layout: any;
-    buffer: TgpuBuffer<any>;
+    buffer: GPUBuffer;
     schema: Record<string, AnyWgslData>;
     bindA: GPUBindGroup | null;
     bindB: GPUBindGroup | null;
@@ -38,7 +49,7 @@ interface CompiledCustomEffect {
  */
 export interface CameraEffectStackOptions {
     /** TypeGPU root, used to compile custom effects. */
-    root: TgpuRoot;
+    root: { device: GPUDevice };
     /** The canvas color format that effect passes target. */
     format: GPUTextureFormat;
     /** Chain capacity; sizes the uniform buffer and compiled-effect table. Default 20. */
@@ -46,7 +57,7 @@ export interface CameraEffectStackOptions {
 }
 
 export class CameraEffectStack {
-    private readonly root: TgpuRoot;
+
     private readonly device: GPUDevice;
     private readonly format: GPUTextureFormat;
     private readonly layout: GPUBindGroupLayout;
@@ -95,7 +106,6 @@ export class CameraEffectStack {
      * sizes the uniform buffer, per-effect slots, and compiled-effect table.
      */
     constructor({ root, format, maxEffects = 20 }: CameraEffectStackOptions) {
-        this.root = root;
         this.device = root.device;
         this.format = format;
         this.maxEffects = maxEffects;
@@ -356,7 +366,7 @@ export class CameraEffectStack {
             ? effect.uniforms
             : { _unused: d.f32 };
         const Struct = d.struct(schema);
-        const layout = tgpu.bindGroupLayout({
+        const layout = new GpuBindGroupLayout({
             material: { uniform: Struct },
             scene: { uniform: EFFECT_SCENE_UNIFORMS },
             src: { texture: 'float' },
@@ -364,36 +374,31 @@ export class CameraEffectStack {
             history: { texture: 'float' },
         });
         const fragmentFn = effect.fragment!;
-        attachShaderMetadata(
+        const fragment = GpuShader.fragment(
+            {
+                in: { vUV: d.vec2f },
+                out: d.vec4f,
+                bindings: { fx: layout },
+                expose: {
+                    material: 'fx.material',
+                    scene: 'fx.scene',
+                    history: 'fx.history',
+                    textures: { src: 'fx.src', sampler: 'fx.sampler' },
+                },
+            } as any,
             fragmentFn as any,
-            () => {
-                const ext: Record<string, unknown> = { d, std };
-                // Texture views are only accessible during codegen; outside it
-                // these reads throw and TypeGPU re-invokes the getter in codegen
-                // mode. Mirror the material library's guarded pattern.
-                try {
-                    ext.textures = { src: (layout as any).$.src, sampler: (layout as any).$.sampler };
-                    ext.material = (layout as any).$.material;
-                    ext.scene = (layout as any).$.scene;
-                    ext.history = (layout as any).$.history;
-                } catch { /* outside shader codegen */ }
-                return ext;
-            },
-            false,
-            { d, std },
         );
-        const fragment = tgpu.fragmentFn({ in: { vUV: d.vec2f }, out: d.vec4f } as any)(fragmentFn as any);
         if (!this.fullscreenVertex) this.fullscreenVertex = this.createFullscreenVertex();
-        const { code } = tgpu.resolveWithContext([this.fullscreenVertex as any, fragment as any]);
+        const { code } = compileProgram([this.fullscreenVertex as any, fragment as any]);
         const module = this.device.createShaderModule({ code, label: 'camera-effect-custom' });
         const pipeline = this.device.createRenderPipeline({
             label: 'camera-effect-custom',
-            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.root.unwrap(layout) as unknown as GPUBindGroupLayout] }),
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [createGpuBindGroupLayout(this.device, layout.toDescriptor())] }),
             vertex: { module },
             fragment: { module, targets: [{ format: this.format }] },
             primitive: { topology: 'triangle-list' },
         });
-        const buffer = this.root.createBuffer(Struct).$usage('uniform');
+        const buffer = createRawBuffer(this.device, Struct, 'uniform');
         const keys = Object.keys(schema);
         const mirror: Record<string, unknown> = {};
         const compiled: CompiledCustomEffect = {
@@ -408,7 +413,7 @@ export class CameraEffectStack {
                     const key = keys[i]!;
                     mirror[key] = coerceUniform(schema[key]!, effect.params?.[key] ?? zeroValue(schema[key]!));
                 }
-                buffer.write(mirror as never);
+                this.device.queue.writeBuffer(buffer, 0, pack(Struct, mirror) as GPUAllowSharedBufferSource);
             },
         };
         this.rebindCustom(compiled);
@@ -417,8 +422,8 @@ export class CameraEffectStack {
 
     private rebindCustom(compiled: CompiledCustomEffect): void {
         if (!this.viewA || !this.viewB || !this.historyView) return;
-        const rawLayout = this.root.unwrap(compiled.layout) as unknown as GPUBindGroupLayout;
-        const rawMaterial = this.root.unwrap(compiled.buffer) as unknown as GPUBuffer;
+        const rawLayout = createGpuBindGroupLayout(this.device, compiled.layout.toDescriptor());
+        const rawMaterial = compiled.buffer;
         const bind = (view: GPUTextureView) => this.device.createBindGroup({
             layout: rawLayout,
             entries: [
@@ -433,19 +438,17 @@ export class CameraEffectStack {
         compiled.bindB = bind(this.viewB);
     }
 
-    private createFullscreenVertex(): unknown {
-        const fn = function(input: { vertexIndex: number }) {
+    private createFullscreenVertex(): GpuShader {
+        return GpuShader.vertex(
+            { in: { vertexIndex: d.builtin.vertexIndex }, out: { pos: d.builtin.position, vUV: d.vec2f } },
+            (input) => {
             const fi = d.f32(input.vertexIndex);
             // Fullscreen triangle: i=0 -> (-1,-1), i=1 -> (3,-1), i=2 -> (-1,3).
             const x = -1.0 + 4.0 * std.step(1.0, fi) * (1.0 - std.step(2.0, fi));
             const y = -1.0 + 4.0 * std.step(2.0, fi);
             return { pos: d.vec4f(x, y, 0.0, 1.0), vUV: d.vec2f(x * 0.5 + 0.5, 0.5 - y * 0.5) };
-        };
-        attachShaderMetadata(fn as any, () => ({ d, std }), false, { d, std });
-        return tgpu.vertexFn({
-            in: { vertexIndex: d.builtin.vertexIndex },
-            out: { pos: d.builtin.position, vUV: d.vec2f },
-        } as any)(fn as any);
+            },
+        );
     }
 
     // --- Built-in effects ---

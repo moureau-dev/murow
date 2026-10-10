@@ -1,6 +1,7 @@
-import type { TgpuRoot, TgpuVertexFn, TgpuFragmentFn } from '../../../../shaders/typegpu';
-import { tgpu, d, std } from '../../../../shaders/typegpu';
-import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
+import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, d as dRaw, std as stdRaw } from '../../../../gpu';
+
+const d: any = dRaw;
+const std: any = stdRaw;
 import { DynamicMesh, StaticMesh } from '../../../../core/types';
 import type { RendererCore } from '../../core/renderer-core';
 import type { ShadowDrawBatch, ShadowModelLike } from './shadow-system';
@@ -58,7 +59,6 @@ export interface SpotLightInput {
  * comparison is well-conditioned. Lit materials project into it and PCF-sample.
  */
 export class SpotShadowSystem {
-    private readonly root: TgpuRoot;
     private readonly device: GPUDevice;
     private readonly maxInstances: number;
     private readonly slotIndexBuffer: GPUBuffer;
@@ -85,8 +85,7 @@ export class SpotShadowSystem {
     enabled = true;
 
     constructor(deps: SpotShadowSystemDeps, options: SpotShadowOptions = {}) {
-        this.root = deps.core.root;
-        this.device = deps.core.root.device;
+        this.device = deps.core.device;
         this.maxInstances = deps.maxInstances;
         this.maxShadows = Math.max(1, Math.min(options.maxShadows ?? MAX_SPOT_SHADOWS, MAX_SPOT_SHADOWS));
         this.slotIndexBuffer = this.device.createBuffer({
@@ -105,9 +104,9 @@ export class SpotShadowSystem {
         this.layout = createSpotLayout(deps.maxInstances);
         const vertex = createSpotShadowVertex(this.layout);
         const fragment = createSpotShadowFragment(this.layout);
-        const { code } = tgpu.resolveWithContext([vertex, fragment]);
+        const { code } = compileProgram([vertex, fragment]);
         const module = this.device.createShaderModule({ code, label: 'spot-shadow' });
-        const bgl = this.root.unwrap(this.layout) as unknown as GPUBindGroupLayout;
+        const bgl = createGpuBindGroupLayout(this.device, this.layout.toDescriptor());
         this.pipeline = this.device.createRenderPipeline({
             label: 'spot-shadow',
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
@@ -148,9 +147,9 @@ export class SpotShadowSystem {
             const skinnedLayout = createSkinnedLightLayout(SpotPassUniforms, s.maxInstances, s.maxBones);
             const sVertex = createSkinnedLightVertex(skinnedLayout);
             const sFragment = createLightDistanceFragment(skinnedLayout as never);
-            const { code: skinnedCode } = tgpu.resolveWithContext([sVertex, sFragment]);
+            const { code: skinnedCode } = compileProgram([sVertex, sFragment]);
             const skinnedModule = this.device.createShaderModule({ code: skinnedCode, label: 'spot-shadow-skinned' });
-            const skinnedBgl = this.root.unwrap(skinnedLayout) as unknown as GPUBindGroupLayout;
+            const skinnedBgl = createGpuBindGroupLayout(this.device, skinnedLayout.toDescriptor());
             this.skinnedPipeline = this.device.createRenderPipeline({
                 label: 'spot-shadow-skinned',
                 layout: this.device.createPipelineLayout({ bindGroupLayouts: [skinnedBgl] }),
@@ -270,7 +269,7 @@ export class SpotShadowSystem {
 }
 
 function createSpotLayout(maxInstances: number) {
-    return tgpu.bindGroupLayout({
+    return new GpuBindGroupLayout({
         uniforms: { uniform: SpotPassUniforms },
         dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
         staticInstances: { storage: d.arrayOf(StaticMesh, maxInstances) },
@@ -278,12 +277,22 @@ function createSpotLayout(maxInstances: number) {
     });
 }
 
-function createSpotShadowVertex(layout: ReturnType<typeof createSpotLayout>): TgpuVertexFn {
-    const _WS = ['d', 'std', 'layout', 'mix', 'cos', 'sin', 'mul'];
-    const fn = function(input: { position: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
-        const slot = layout.$.slotIndices[input.instanceIndex];
-        const dyn = layout.$.dynamicInstances[slot];
-        const stat = layout.$.staticInstances[slot];
+function createSpotShadowVertex(layout: ReturnType<typeof createSpotLayout>): GpuShader {
+    return GpuShader.vertex(
+        {
+            in: {
+                position: d.location(0, d.vec3f),
+                normal: d.location(1, d.vec3f),
+                uv: d.location(2, d.vec2f),
+                instanceIndex: d.builtin.instanceIndex,
+            },
+            out: { pos: d.builtin.position, vWorld: d.vec3f },
+            bindings: { shadows: layout },
+        },
+        (input, { shadows }) => {
+        const slot = shadows.slotIndices[input.instanceIndex];
+        const dyn = shadows.dynamicInstances[slot];
+        const stat = shadows.staticInstances[slot];
         const scaled = d.vec3f(
             std.mul(input.position.x, stat.scaleX),
             std.mul(input.position.y, stat.scaleY),
@@ -308,29 +317,21 @@ function createSpotShadowVertex(layout: ReturnType<typeof createSpotLayout>): Tg
             std.add(std.mul(ry1.y, sxr), std.mul(ry1.z, cxr)),
         );
         const world = d.vec4f(std.add(rx1.x, dyn.currPosX), std.add(rx1.y, dyn.currPosY), std.add(rx1.z, dyn.currPosZ), 1.0);
-        const clip = std.mul(layout.$.uniforms.viewProjection, world);
+        const clip = std.mul(shadows.uniforms.viewProjection, world);
         return { pos: clip, vWorld: d.vec3f(world.x, world.y, world.z) };
-    };
-    attachShaderMetadata(fn as any, () => ({ d, std, layout }), false, { d, std, layout }, _WS);
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            uv: d.location(2, d.vec2f),
-            instanceIndex: d.builtin.instanceIndex,
         },
-        out: { pos: d.builtin.position, vWorld: d.vec3f },
-    } as any)(fn as any);
+    );
 }
 
-function createSpotShadowFragment(layout: ReturnType<typeof createSpotLayout>): TgpuFragmentFn {
-    const fn = function(input: { vWorld: { x: number; y: number; z: number } }) {
-        const lp = layout.$.uniforms.lightPosFar;
+function createSpotShadowFragment(layout: ReturnType<typeof createSpotLayout>): GpuShader {
+    return GpuShader.fragment(
+        { in: { vWorld: d.vec3f }, out: d.vec4f, bindings: { shadows: layout } },
+        (input, { shadows }) => {
+        const lp = shadows.uniforms.lightPosFar;
         const dist = std.length(d.vec3f(input.vWorld.x - lp.x, input.vWorld.y - lp.y, input.vWorld.z - lp.z)) / lp.w;
         return d.vec4f(dist, dist, dist, 1.0);
-    };
-    attachShaderMetadata(fn as any, () => ({ d, std, layout }), false, { d, std, layout });
-    return tgpu.fragmentFn({ in: { vWorld: d.vec3f }, out: d.vec4f } as any)(fn as any);
+        },
+    );
 }
 
 /** `proj * view` for a spot light (column-major, WebGPU depth). */

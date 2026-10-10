@@ -1,4 +1,4 @@
-import type { AnyWgslData } from '../shaders/typegpu';
+type AnyWgslData = any;
 import { FreeList } from 'murow/core/free-list';
 
 /**

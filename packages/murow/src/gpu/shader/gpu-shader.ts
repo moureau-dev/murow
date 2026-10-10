@@ -66,7 +66,7 @@ export interface GpuShaderOptions {
 }
 
 /** A stage definition to be linked by a {@link GpuProgram}. */
-export class GpuShader {
+export class GpuShader<A = unknown, B = unknown> {
     /** Pipeline stage. */
     readonly stage: IrStage;
     /** Input schema. */

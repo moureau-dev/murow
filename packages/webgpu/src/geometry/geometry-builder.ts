@@ -22,14 +22,26 @@
  * geom.updateUniforms({ time: 1.5 });                           // ← typed uniform names
  * ```
  */
-import type { TgpuRoot, TgpuBuffer, TgpuRenderPipeline, TgpuBindGroup, TgpuBindGroupLayout, TgpuVertexFn, TgpuFragmentFn } from '../shaders/typegpu';
-import type { AnyWgslData, AnyData } from '../shaders/typegpu';
-import { tgpu, d, std } from '../shaders/typegpu';
+import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d as dRaw, std as stdRaw, sizeOf } from '../gpu';
 import type { BuiltInGeometry, GeometryData } from './built-in';
 import { resolveBuiltInGeometry } from './built-in';
 import { SlotMap } from 'murow/core/slot-map';
-import { attachShaderMetadata } from '../shaders/runtime-transpile';
 import type { ComputeKernel } from '../compute/compute-builder';
+
+type AnyWgslData = any;
+type AnyData = any;
+const d: any = dRaw;
+const std: any = stdRaw;
+
+/** Pack a schema value to bytes for upload. */
+function pack(schema: any, value: unknown): Uint8Array {
+    const size = sizeOf(schema);
+    const buffer = new ArrayBuffer(size);
+    const dv = new DataView(buffer);
+    if (Array.isArray(schema.fields)) for (const m of schema.fields) m.field.write(dv, m.offset, (value as Record<string, unknown>)?.[m.name]);
+    else schema.write(dv, 0, value);
+    return new Uint8Array(buffer);
+}
 
 // =============================================================================
 // Type utilities
@@ -81,7 +93,7 @@ export interface GeometryDataLayout<
     S extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
     U extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
 > {
-    dataLayout: TgpuBindGroupLayout;
+    dataLayout: GpuBindGroupLayout;
     instanceLayout: InstanceLayoutConfig<D, S>;
     uniformDefs: U;
 }
@@ -164,7 +176,7 @@ export function createGeometryDataLayout<
         ? buildStructFromLayout(parsedUniformDefs)
         : d.struct({ _pad: d.f32 });
 
-    const dataLayout = tgpu.bindGroupLayout({
+    const dataLayout = new GpuBindGroupLayout({
         uniforms: { uniform: UniformStruct },
         dynamic: { storage: d.arrayOf(DynStruct, maxInstances) },
         statics: { storage: d.arrayOf(StatStruct, maxInstances) },
@@ -186,7 +198,7 @@ export class CustomGeometry<
     readonly maxInstances: number;
     readonly geometryData: GeometryData;
 
-    private root: TgpuRoot;
+    private device: GPUDevice;
     private slots: SlotMap;
     private layoutConfig: InstanceLayoutConfig<TDynamic, TStatic>;
 
@@ -206,27 +218,29 @@ export class CustomGeometry<
 
     private _ctx: InstanceContext<TDynamic, TStatic>;
 
-    private dynamicBuffer: TgpuBuffer<AnyWgslData>;
-    private staticBuffer: TgpuBuffer<AnyWgslData>;
-    private uniformBuffer: TgpuBuffer<AnyWgslData>;
-    private pipeline: TgpuRenderPipeline;
-    private dataBindGroup: TgpuBindGroup;
+    private dynamicBuffer: GPUBuffer;
+    private staticBuffer: GPUBuffer;
+    private uniformBuffer: GPUBuffer;
+    private uniformSchema: any;
+    private staticSchema: any;
+    private pipeline: GPURenderPipeline;
+    private dataBindGroup: GPUBindGroup;
     private canvas: HTMLCanvasElement;
     private clearColor: [number, number, number, number];
 
     /** @internal — use GeometryBuilder to create instances. */
     constructor(
-        name: string, root: TgpuRoot, maxInstances: number, geometryData: GeometryData,
+        name: string, device: GPUDevice, maxInstances: number, geometryData: GeometryData,
         layoutConfig: InstanceLayoutConfig<TDynamic, TStatic>,
         uniformValues: Record<string, unknown>,
-        dynamicBuffer: TgpuBuffer<AnyWgslData>, staticBuffer: TgpuBuffer<AnyWgslData>,
-        uniformBuffer: TgpuBuffer<AnyWgslData>,
-        pipeline: TgpuRenderPipeline, dataBindGroup: TgpuBindGroup,
+        dynamicBuffer: GPUBuffer, staticBuffer: GPUBuffer,
+        uniformBuffer: GPUBuffer, uniformSchema: any, staticSchema: any,
+        pipeline: GPURenderPipeline, dataBindGroup: GPUBindGroup,
         canvas: HTMLCanvasElement, clearColor: [number, number, number, number],
         isComputeSourced = false,
     ) {
         this.name = name;
-        this.root = root;
+        this.device = device;
         this.maxInstances = maxInstances;
         this.geometryData = geometryData;
         this.layoutConfig = layoutConfig;
@@ -247,6 +261,8 @@ export class CustomGeometry<
         this.dynamicBuffer = dynamicBuffer;
         this.staticBuffer = staticBuffer;
         this.uniformBuffer = uniformBuffer;
+        this.uniformSchema = uniformSchema;
+        this.staticSchema = staticSchema;
         this.pipeline = pipeline;
         this.dataBindGroup = dataBindGroup;
         this.canvas = canvas;
@@ -358,7 +374,7 @@ export class CustomGeometry<
     }
 
     render(): void {
-        const device = this.root.device;
+        const device = this.device;
         const count = this._isComputeSourced ? this._drawCount : this.slots.size;
         if (count === 0) return;
 
@@ -368,30 +384,30 @@ export class CustomGeometry<
 
         // Skip dynamic buffer upload for compute-sourced geometries — compute owns the buffer
         if (!this._isComputeSourced && this._dynamicDirty) {
-            device.queue.writeBuffer(this.root.unwrap(this.dynamicBuffer) as GPUBuffer, 0,
+            device.queue.writeBuffer(this.dynamicBuffer, 0,
                 this.dynamicData.buffer, this.dynamicData.byteOffset, this.dynamicData.byteLength);
             this._dynamicDirty = false;
         }
         if (this._staticDirty) {
-            device.queue.writeBuffer(this.root.unwrap(this.staticBuffer) as GPUBuffer, 0,
+            device.queue.writeBuffer(this.staticBuffer, 0,
                 this.staticData.buffer, this.staticData.byteOffset, this.staticData.byteLength);
             this._staticDirty = false;
         }
         if (this._uniformDirty) {
-            (this.uniformBuffer as TgpuBuffer<AnyWgslData>).write(this.uniformValues);
+            device.queue.writeBuffer(this.uniformBuffer, 0, pack(this.uniformSchema, this.uniformValues) as GPUAllowSharedBufferSource);
             this._uniformDirty = false;
         }
 
         const [r, g, b, a] = this.clearColor;
-        (this.pipeline as unknown as { with(bg: TgpuBindGroup): { withColorAttachment(opts: Record<string, unknown>): { draw(v: number, i: number): void } } })
-            .with(this.dataBindGroup)
-            .withColorAttachment({
-                view,
-                loadOp: 'clear',
-                storeOp: 'store',
-                clearValue: { r, g, b, a },
-            })
-            .draw(this.geometryData.vertexCount, count);
+        const encoder = device.createCommandEncoder();
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r, g, b, a } }],
+        });
+        pass.setPipeline(this.pipeline);
+        pass.setBindGroup(0, this.dataBindGroup);
+        pass.draw(this.geometryData.vertexCount, count);
+        pass.end();
+        device.queue.submit([encoder.finish()]);
     }
 
     destroy(): void {
@@ -576,8 +592,8 @@ export class InstanceAccessor<
 // =============================================================================
 
 type ShaderResult = {
-    vertex: TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
-    fragment: TgpuFragmentFn<Record<string, AnyWgslData>, AnyWgslData>;
+    vertex: GpuShader<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
+    fragment: GpuShader<Record<string, AnyWgslData>, AnyWgslData>;
 };
 
 /** Vertex input builtins available in shader functions. */
@@ -650,7 +666,7 @@ export interface ShaderContext<
     /** Shared uniforms. Access: `uniforms.fieldName` */
     readonly uniforms: Readonly<ResolveRecord<TUniforms>>;
     /** Raw TypeGPU bind group layout — escape hatch for advanced usage. */
-    readonly layout: TgpuBindGroupLayout;
+    readonly layout: GpuBindGroupLayout;
 }
 
 type ShaderFactory<
@@ -666,12 +682,12 @@ export class GeometryBuilder<
 > {
     private _name: string;
     private _options: GeometryOptions;
-    private _root: TgpuRoot;
+    private _root: { device: GPUDevice };
     private _format: GPUTextureFormat;
     private _layoutConfig: InstanceLayoutConfig<TDynamic, TStatic> | null = null;
     private _uniformDefs: TUniforms = {} as TUniforms;
-    private _vertexFn: TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>> | null = null;
-    private _fragmentFn: TgpuFragmentFn<Record<string, AnyWgslData>, AnyWgslData> | null = null;
+    private _vertexFn: GpuShader<Record<string, AnyWgslData>, Record<string, AnyWgslData>> | null = null;
+    private _fragmentFn: GpuShader<Record<string, AnyWgslData>, AnyWgslData> | null = null;
     private _shaderFactory: ShaderFactory<TDynamic, TStatic, TUniforms> | null = null;
     private _vertexVaryings: Record<string, AnyWgslData> | null = null;
     private _vertexFactory: ((ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => Function) | null = null;
@@ -683,7 +699,7 @@ export class GeometryBuilder<
     private _canvas: HTMLCanvasElement;
     private _clearColor: [number, number, number, number];
 
-    constructor(name: string, options: GeometryOptions, root: TgpuRoot, format: GPUTextureFormat, canvas: HTMLCanvasElement, clearColor: [number, number, number, number]) {
+    constructor(name: string, options: GeometryOptions, root: { device: GPUDevice }, format: GPUTextureFormat, canvas: HTMLCanvasElement, clearColor: [number, number, number, number]) {
         this._name = name;
         this._options = options;
         this._root = root;
@@ -769,14 +785,14 @@ export class GeometryBuilder<
      */
     shaders(
         vertexOrFactoryOrConfig:
-            | TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>>
+            | GpuShader<Record<string, AnyWgslData>, Record<string, AnyWgslData>>
             | ShaderFactory<TDynamic, TStatic, TUniforms>
             | DeclarativeShaders<TDynamic, TStatic, TUniforms>,
-        fragment?: TgpuFragmentFn<Record<string, AnyWgslData>, AnyWgslData>,
+        fragment?: GpuShader<Record<string, AnyWgslData>, AnyWgslData>,
     ): this {
         if (fragment !== undefined) {
             // .shaders(vertexFn, fragmentFn)
-            this._vertexFn = vertexOrFactoryOrConfig as TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
+            this._vertexFn = vertexOrFactoryOrConfig as GpuShader<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
             this._fragmentFn = fragment;
         } else if (typeof vertexOrFactoryOrConfig === 'function') {
             // .shaders((ctx) => ({ vertex, fragment }))
@@ -893,18 +909,19 @@ export class GeometryBuilder<
             // Attach metadata so the facade can lower the body. A vertex fn has
             // (ctx, input): strip the first param, and its destructured names
             // resolve against the externals provider below.
-            attachShaderMetadata(decl.vertex.fn, resolveExternals({}), true, { d, std });
-            attachShaderMetadata(decl.fragment.fn, resolveExternals({}), false, { d, std });
-
-            this._vertexFn = tgpu.vertexFn({
+            const geoExpose = { uniforms: 'geo.uniforms', dynamic: 'geo.dynamic', statics: 'geo.statics' };
+            this._vertexFn = GpuShader.vertex({
                 in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
                 out: vertexOut,
-            } as Parameters<typeof tgpu.vertexFn>[0])(decl.vertex.fn as unknown as Parameters<ReturnType<typeof tgpu.vertexFn>>[0]) as TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
-
-            this._fragmentFn = tgpu.fragmentFn({
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, decl.vertex.fn as any);
+            this._fragmentFn = GpuShader.fragment({
                 in: fragmentIn,
                 out: d.vec4f,
-            } as Parameters<typeof tgpu.fragmentFn>[0])(decl.fragment.fn as unknown as Parameters<ReturnType<typeof tgpu.fragmentFn>>[0]) as TgpuFragmentFn<Record<string, AnyWgslData>, AnyWgslData>;
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, decl.fragment.fn as any);
         } else if (this._vertexFactory && this._fragmentFactory) {
             // Builder methods: .vertexShader().fragmentShader()
             const varyings = this._vertexVaryings ?? {};
@@ -915,16 +932,20 @@ export class GeometryBuilder<
                 fragmentIn[k] = v;
             }
 
+            const geoExpose = { uniforms: 'geo.uniforms', dynamic: 'geo.dynamic', statics: 'geo.statics' };
             const vertexBody = this._vertexFactory(lazyCtx);
-            this._vertexFn = tgpu.vertexFn({
+            this._vertexFn = GpuShader.vertex({
                 in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
                 out: vertexOut,
-            } as Parameters<typeof tgpu.vertexFn>[0])(vertexBody as unknown as Parameters<ReturnType<typeof tgpu.vertexFn>>[0]) as TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
-
-            this._fragmentFn = tgpu.fragmentFn({
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, vertexBody as any);
+            this._fragmentFn = GpuShader.fragment({
                 in: fragmentIn,
                 out: d.vec4f,
-            } as Parameters<typeof tgpu.fragmentFn>[0])(this._fragmentFactory as unknown as Parameters<ReturnType<typeof tgpu.fragmentFn>>[0]) as TgpuFragmentFn<Record<string, AnyWgslData>, AnyWgslData>;
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, this._fragmentFactory as any);
         }
 
         if (!this._vertexFn) throw new Error(`Geometry "${this._name}": vertex shader is required`);
@@ -953,40 +974,47 @@ export class GeometryBuilder<
             : d.struct({ _pad: d.f32 });
 
         // Buffers — if fromCompute() was called, reuse the compute buffer as dynamic data
+        const device = root.device;
         const dynamicBuffer = this._computeSource
             ? this._computeSource.kernel.getBuffer(this._computeSource.bufferName)
-            : root.createBuffer(d.arrayOf(DynStruct, maxInstances)).$usage('storage');
-        const staticBuffer = root.createBuffer(d.arrayOf(StatStruct, maxInstances)).$usage('storage');
-        const uniformBuffer = root.createBuffer(UniformStruct).$usage('uniform');
+            : createRawBuffer(device, d.arrayOf(DynStruct, maxInstances), 'storage');
+        const staticBuffer = createRawBuffer(device, d.arrayOf(StatStruct, maxInstances), 'storage');
+        const uniformBuffer = createRawBuffer(device, UniformStruct, 'uniform');
 
-        // Bind group — TypeGPU's createBindGroup has complex generics, cast required
-        const dataBindGroup = (root as unknown as { createBindGroup(layout: TgpuBindGroupLayout, entries: Record<string, unknown>): TgpuBindGroup })
-            .createBindGroup(dataLayout, {
-                uniforms: uniformBuffer,
-                dynamic: dynamicBuffer,
-                statics: staticBuffer,
-            });
+        const dataBgl = createGpuBindGroupLayout(device, dataLayout.toDescriptor());
+        const dataBindGroup = device.createBindGroup({
+            layout: dataBgl,
+            entries: [
+                { binding: 0, resource: { buffer: uniformBuffer } },
+                { binding: 1, resource: { buffer: dynamicBuffer } },
+                { binding: 2, resource: { buffer: staticBuffer } },
+            ],
+        });
 
-        // Pipeline — TypeGPU's createRenderPipeline has complex generics, cast required
-        const pipeline = (root as unknown as { createRenderPipeline(opts: Record<string, unknown>): TgpuRenderPipeline })
-            .createRenderPipeline({
-                vertex: this._vertexFn,
-                fragment: this._fragmentFn,
-                targets: {
+        const { code } = compileProgram([this._vertexFn as any, this._fragmentFn as any]);
+        const module = device.createShaderModule({ code, label: this._name });
+        const pipeline = device.createRenderPipeline({
+            label: this._name,
+            layout: device.createPipelineLayout({ bindGroupLayouts: [dataBgl] }),
+            vertex: { module },
+            fragment: {
+                module,
+                targets: [{
                     format: this._format,
                     blend: {
                         color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
                         alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
                     },
-                },
-                primitive: { topology: 'triangle-list' },
-            });
+                }],
+            },
+            primitive: { topology: 'triangle-list' },
+        });
 
         return new CustomGeometry<TDynamic, TStatic, TUniforms>(
-            this._name, root, maxInstances, geometryData,
+            this._name, device, maxInstances, geometryData,
             this._layoutConfig, uniformInitial,
-            dynamicBuffer as TgpuBuffer<AnyWgslData>, staticBuffer as TgpuBuffer<AnyWgslData>,
-            uniformBuffer as TgpuBuffer<AnyWgslData>,
+            dynamicBuffer, staticBuffer,
+            uniformBuffer, UniformStruct, StatStruct,
             pipeline, dataBindGroup,
             this._canvas, this._clearColor,
             !!this._computeSource,

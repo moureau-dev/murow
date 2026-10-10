@@ -11,7 +11,7 @@
  */
 
 // TypeGPU re-exports — bundler-safe wraps (see ./shaders/typegpu.ts).
-export { d, std } from './shaders/typegpu';
+export { d, std } from './gpu';
 
 // 2D Renderer
 export { WebGPU2DRenderer } from './2d/renderer';

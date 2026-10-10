@@ -11,7 +11,7 @@
  * (`renderer.sprites`, `renderer.sheets`, `renderer.geometry`,
  * `renderer.compute`), and the camera is `renderer.camera`.
  */
-import { tgpu, d } from '../../shaders/typegpu';
+import { compileProgram, createGpuBindGroupLayout, createRawBuffer, d } from '../../gpu';
 import { BaseRenderer } from 'murow/renderer';
 import type {
     AssetBucket,
@@ -129,9 +129,11 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     }
 
     async init(): Promise<void> {
-        this.core.root = await tgpu.init();
-        this.core.device = this.core.root.device;
-        const device = this.core.device;
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) throw new Error('WebGPU2DRenderer: no GPU adapter available');
+        const device = await adapter.requestDevice();
+        this.core.root = { device } as never;
+        this.core.device = device;
 
         this.core.context = this.canvas.getContext('webgpu')!;
         this.core.format = navigator.gpu.getPreferredCanvasFormat();
@@ -155,50 +157,44 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         const vertex = createSpriteVertex(this.core.spriteLayout, this.core.textureLayout);
         const fragment = createSpriteFragment(this.core.spriteLayout, this.core.textureLayout);
 
-        // TypeGPU render pipeline (no vertex buffer — quad generated from vertexIndex)
-        const tgpuPipeline = this.core.root.createRenderPipeline({
-            vertex,
-            fragment,
-            targets: {
-                format: this.core.format,
-                blend: {
-                    color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-                    alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-                },
-            } as any,
+        // Render pipeline (no vertex buffer — quad generated from vertexIndex)
+        const { code } = compileProgram([vertex, fragment]);
+        const spriteModule = device.createShaderModule({ code, label: 'sprite-2d' });
+        const spriteBgl = createGpuBindGroupLayout(device, this.core.spriteLayout.toDescriptor());
+        this.core.rawTextureLayout = createGpuBindGroupLayout(device, this.core.textureLayout.toDescriptor());
+        this.core.rawPipeline = device.createRenderPipeline({
+            label: 'sprite-2d',
+            layout: device.createPipelineLayout({ bindGroupLayouts: [spriteBgl, this.core.rawTextureLayout] }),
+            vertex: { module: spriteModule },
+            fragment: {
+                module: spriteModule,
+                targets: [{
+                    format: this.core.format,
+                    blend: {
+                        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                    },
+                }],
+            },
             primitive: { topology: 'triangle-list' },
         });
 
         // Instance data buffers
-        this.core.dynamicBuffer = this.core.root
-            .createBuffer(d.arrayOf(DynamicSprite, this.maxSprites))
-            .$usage('storage');
-        this.core.staticBuffer = this.core.root
-            .createBuffer(d.arrayOf(StaticSprite, this.maxSprites))
-            .$usage('storage');
-        this.core.uniformBuffer = this.core.root
-            .createBuffer(SpriteUniforms)
-            .$usage('uniform');
-        this.core.slotIndexBuffer = this.core.root
-            .createBuffer(d.arrayOf(d.u32, this.maxSprites))
-            .$usage('storage');
+        this.core.rawDynamicBuffer = createRawBuffer(device, d.arrayOf(DynamicSprite, this.maxSprites), 'storage');
+        this.core.rawStaticBuffer = createRawBuffer(device, d.arrayOf(StaticSprite, this.maxSprites), 'storage');
+        this.core.rawUniformBuffer = createRawBuffer(device, SpriteUniforms, 'uniform');
+        this.core.rawSlotIndexBuffer = createRawBuffer(device, d.arrayOf(d.u32, this.maxSprites), 'storage');
 
         // Bind group for sprite data
-        const spriteBindGroup = (this.core.root as any).createBindGroup(this.core.spriteLayout, {
-            uniforms: this.core.uniformBuffer,
-            dynamicInstances: this.core.dynamicBuffer,
-            staticInstances: this.core.staticBuffer,
-            slotIndices: this.core.slotIndexBuffer,
+        this.core.rawSpriteBindGroup = device.createBindGroup({
+            layout: spriteBgl,
+            entries: [
+                { binding: 0, resource: { buffer: this.core.rawUniformBuffer } },
+                { binding: 1, resource: { buffer: this.core.rawDynamicBuffer } },
+                { binding: 2, resource: { buffer: this.core.rawStaticBuffer } },
+                { binding: 3, resource: { buffer: this.core.rawSlotIndexBuffer } },
+            ],
         });
-
-        // Unwrap TypeGPU resources for raw render pass usage
-        this.core.rawPipeline = this.core.root.unwrap(tgpuPipeline) as any;
-        this.core.rawSpriteBindGroup = this.core.root.unwrap(spriteBindGroup) as any;
-        this.core.rawTextureLayout = this.core.root.unwrap(this.core.textureLayout) as any;
-        this.core.rawDynamicBuffer = this.core.root.unwrap(this.core.dynamicBuffer) as any;
-        this.core.rawStaticBuffer = this.core.root.unwrap(this.core.staticBuffer) as any;
-        this.core.rawSlotIndexBuffer = this.core.root.unwrap(this.core.slotIndexBuffer) as any;
-        this.core.rawUniformBuffer = this.core.root.unwrap(this.core.uniformBuffer) as any;
 
         // Managers
         this.sheets = new SpritesheetManager(this.core);
@@ -401,10 +397,9 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         this.resizeObserver = null;
         this.resizeCallbacks.length = 0;
         this.cameraEffects?.destroy();
-        this.core?.dynamicBuffer?.destroy();
-        this.core?.staticBuffer?.destroy();
-        this.core?.uniformBuffer?.destroy();
-        this.core?.slotIndexBuffer?.destroy();
-        this.core?.root?.destroy();
+        this.core?.rawDynamicBuffer?.destroy();
+        this.core?.rawStaticBuffer?.destroy();
+        this.core?.rawUniformBuffer?.destroy();
+        this.core?.rawSlotIndexBuffer?.destroy();
     }
 }

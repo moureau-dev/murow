@@ -22,15 +22,12 @@
  * ```
  */
 import {
-    GpuBackend,
     GpuBindGroupLayout,
-    GpuProgram,
     GpuShader,
     type BindingSpec,
 } from 'murow/gpu';
-import { createGpuBindGroupLayout } from '../gpu/device';
+import { compileProgram, createGpuBindGroupLayout } from '../gpu';
 import { d, sizeOf } from 'murow/gpu/dsl';
-import { wgslSpec } from '../gpu/backend';
 
 // =============================================================================
 // Types
@@ -237,7 +234,7 @@ export class ComputeBuilder<
             },
             this._shaderFn as unknown as (input: unknown, bindings: unknown) => unknown,
         );
-        const { code } = new GpuBackend(wgslSpec).compile(GpuProgram.link([shader]));
+        const { code } = compileProgram([shader]);
 
         const module = device.createShaderModule({ code, label: this.name });
         const rawLayout = createGpuBindGroupLayout(device, layout.toDescriptor());

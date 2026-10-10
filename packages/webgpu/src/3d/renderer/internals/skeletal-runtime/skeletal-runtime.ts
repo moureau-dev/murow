@@ -1,4 +1,3 @@
-import type { TgpuRoot } from '../../../../shaders/typegpu';
 import type { PrefabBucket3D, PackedAnimationData, ParsedGltf, SkeletalAnimation } from 'murow/renderer';
 import { createPackedAnimationData, packSkinAndAnimations } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../../../../core/types';
@@ -20,7 +19,7 @@ export interface SkinnedModelEntry {
 }
 
 export interface SkeletalRuntimeDeps {
-    root: TgpuRoot;
+    root: { device: GPUDevice };
     device: GPUDevice;
     pipelines: MeshPipelines;
     skinned: SkinnedInstanceStore;
@@ -138,7 +137,7 @@ export class SkeletalRuntime {
             this.channelTableOffset = packedBuffers.channelTableOffset;
             this.jointLookupOffset = packedBuffers.jointLookupOffset;
 
-            const rawBoneBuffer = this.deps.root.unwrap(kernel.getBuffer('boneMatrices')) as GPUBuffer;
+            const rawBoneBuffer = kernel.getBuffer('boneMatrices');
             this.deps.pipelines.setBoneBuffer(rawBoneBuffer);
 
             this.deps.device.queue.writeBuffer(
@@ -225,7 +224,7 @@ export class SkeletalRuntime {
                     jointLookupOffset: this.jointLookupOffset,
                 });
                 const instBuf = this.kernel.getBuffer('instances');
-                const rawInstBuf = this.deps.root.unwrap(instBuf) as GPUBuffer;
+                const rawInstBuf = instBuf;
                 this.deps.device.queue.writeBuffer(rawInstBuf, 0, this.gpuInstData.buffer, 0, count * 32);
                 this.kernel.dispatch(count);
             } else {

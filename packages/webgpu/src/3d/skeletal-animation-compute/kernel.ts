@@ -11,11 +11,13 @@
 // Use bundler-safe wraps so `d.X` / `std.X` accesses inside the shader
 // function body survive Rollup's namespace-member inlining (see
 // ../../shaders/typegpu.ts).
-import type * as _d from '../../shaders/typegpu';
-import { d, std } from '../../shaders/typegpu';
+import { d as dRaw, std as stdRaw } from '../../gpu';
+
+const d: any = dRaw;
+const std: any = stdRaw;
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { AnimComputeUniforms, InstanceAnimStateGPU } from '../../core/types';
-import type { TgpuRoot } from '../../shaders/typegpu';
+type TgpuRoot = any;
 import { packAnimationData, type PackedBuffers } from './packer';
 import type { PackedAnimationData } from 'murow/renderer';
 
@@ -297,9 +299,9 @@ export function buildAnimationKernel(
                     // Blend: final = lerp(prevBone, currentBone, blendWeight)
                     // Assign to variables first so .columns resolve correctly.
                     // @ts-ignore
-                    const prevBoneMat: _d.Mat4x4f = boneMatrices[(worldOff + pj)] * matrices[(ibmOff + pj)];
+                    const prevBoneMat: any = boneMatrices[(worldOff + pj)] * matrices[(ibmOff + pj)];
                     // @ts-ignore
-                    const curBoneMat: _d.Mat4x4f = boneMatrices[(boneOff + pj)];
+                    const curBoneMat: any = boneMatrices[(boneOff + pj)];
                     const blendWeight = inst.blendWeight;
                     const oneMinusBlend = d.f32(1) - blendWeight;
                     boneMatrices[(boneOff + pj)] = d.mat4x4f(
@@ -324,12 +326,12 @@ export function buildAnimationKernel(
 export function uploadPackedToKernel(root: TgpuRoot, kernel: ComputeKernel, pb: PackedBuffers): void {
     const queue = root.device.queue;
 
-    const skelBuf = root.unwrap(kernel.getBuffer('skelI32')) as GPUBuffer;
+    const skelBuf = kernel.getBuffer('skelI32');
     queue.writeBuffer(skelBuf, 0, pb.skelI32 as GPUAllowSharedBufferSource);
 
-    const animBuf = root.unwrap(kernel.getBuffer('animF32')) as GPUBuffer;
+    const animBuf = kernel.getBuffer('animF32');
     queue.writeBuffer(animBuf, 0, pb.animF32 as GPUAllowSharedBufferSource);
 
-    const matBuf = root.unwrap(kernel.getBuffer('matrices')) as GPUBuffer;
+    const matBuf = kernel.getBuffer('matrices');
     queue.writeBuffer(matBuf, 0, pb.matFloats as GPUAllowSharedBufferSource);
 }

@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { d } from '../../../../shaders/typegpu';
+import { d } from '../../../../gpu';
 import { StaticMesh, STATIC_MESH_FLOATS } from '../../../../core/types';
 import {
     STAT_SX,

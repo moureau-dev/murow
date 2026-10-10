@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { d } from '../shaders/typegpu';
+import { d } from '../gpu';
 import {
     DynamicSprite,
     StaticSprite,

@@ -293,10 +293,16 @@ function entryToGpu(entry: BindingEntry): Pick<GPUBindGroupLayoutEntry, 'buffer'
         case 'readonly-storage':
             return { buffer: { type: 'read-only-storage' } };
         case 'texture':
-            return { texture: { sampleType: 'float', viewDimension: '2d' } };
+            return { texture: { sampleType: 'float', viewDimension: textureDimension(entry.gpuType) } };
         case 'sampler':
             return { sampler: { type: 'filtering' } };
     }
+}
+
+/** View dimension for a texture slot, from its GPU type. */
+function textureDimension(type: unknown): GPUTextureViewDimension {
+    const dim = (type as { kind?: string; dim?: string } | undefined);
+    return (dim && dim.kind === 'texture' && dim.dim ? dim.dim : '2d') as GPUTextureViewDimension;
 }
 
 function toGpuBlend(blend: { color?: any; alpha?: any }): GPUBlendState {
@@ -325,9 +331,12 @@ export function createGpuBindGroupLayout(device: GPUDevice, layout: BindGroupLay
 export function createRawBuffer(
     device: GPUDevice,
     schema: { readonly size: number },
-    usage: 'uniform' | 'storage' | 'vertex' | 'index' | 'indirect',
+    usage: 'uniform' | 'storage' | 'vertex' | 'index' | 'indirect' | readonly ('uniform' | 'storage' | 'vertex' | 'index' | 'indirect')[],
 ): GPUBuffer {
-    const bits = { uniform: BUF.UNIFORM, storage: BUF.STORAGE, vertex: BUF.VERTEX, index: BUF.INDEX, indirect: 0x0100 }[usage];
+    const kinds = Array.isArray(usage) ? usage : [usage];
+    const flag = { uniform: BUF.UNIFORM, storage: BUF.STORAGE, vertex: BUF.VERTEX, index: BUF.INDEX, indirect: 0x0100 };
+    let bits = 0;
+    for (const kind of kinds) bits |= flag[kind];
     return device.createBuffer({ size: schema.size, usage: bits | BUF.COPY_DST });
 }
 

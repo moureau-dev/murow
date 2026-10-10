@@ -1,4 +1,4 @@
-import type { AnyWgslData } from '../../../../shaders/typegpu';
+type AnyWgslData = any;
 import { PooledCollection } from 'murow/core/collection';
 import type { MaterialId } from '../../ids';
 import { generateId, type Logger } from 'murow/core';

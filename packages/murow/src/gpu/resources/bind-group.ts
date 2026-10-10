@@ -11,6 +11,8 @@ import type { GpuType } from '../types';
 import type { GpuStruct } from '../schema/struct';
 import type { Field } from '../schema/field';
 import { sampler as samplerType, texture as textureType, type TextureDim } from '../ir/types';
+import { binding as bindingNode } from '../ir/builders';
+import { ShaderValue } from '../dsl/value';
 import { BindGroupLayout, binding as bindingEntry, type BindingType } from '../descriptors/bind-group';
 
 /** Role of a binding slot. */
@@ -106,6 +108,17 @@ export class GpuBindGroupLayout {
             });
         }
         this.slots = slots;
+    }
+
+    /** IR-valued view of every slot, for shader bodies that read `layout.$.name`. */
+    get $(): Record<string, ShaderValue> {
+        const out: Record<string, ShaderValue> = {};
+        for (const slot of this.slots) {
+            const node = bindingNode(slot.type, this.group, slot.binding);
+            if (slot.readwrite) (node as { access?: string }).access = 'read_write';
+            out[slot.name] = new ShaderValue({ node });
+        }
+        return out;
     }
 
     /** Slot with a name, or undefined. */
