@@ -381,6 +381,7 @@ export class BaseBackend implements Backend {
             case 'swizzle':
                 return `${this.emitNode(node.value, ctx)}.${node.mask}`;
             case 'access':
+                if (node.index === 'columns') return this.emitNode(node.value, ctx);
                 return typeof node.index === 'string'
                     ? `${this.emitNode(node.value, ctx)}.${node.index}`
                     : `${this.emitNode(node.value, ctx)}[${this.emitNode(node.index, ctx)}]`;

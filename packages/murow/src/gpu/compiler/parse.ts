@@ -79,7 +79,7 @@ export interface ParseShaderOptions {
 }
 
 interface Token {
-    readonly kind: 'num' | 'ident' | 'punc' | 'eof';
+    readonly kind: 'num' | 'ident' | 'punc' | 'str' | 'eof';
     readonly value: string;
     readonly start: number;
 }
@@ -114,9 +114,24 @@ function tokenize(source: string): Token[] {
             i += 2;
             continue;
         }
+        if (ch === '"' || ch === "'") {
+            let j = i + 1;
+            while (j < source.length && source[j] !== ch) { if (source[j] === '\\') j++; j++; }
+            tokens.push({ kind: 'str', value: source.slice(i, j + 1), start: i });
+            i = j + 1;
+            continue;
+        }
         if (/[0-9]/.test(ch) || (ch === '.' && /[0-9]/.test(source[i + 1] ?? ''))) {
             const start = i;
             while (i < source.length && /[0-9.]/.test(source[i]!)) i++;
+            if (source[i] === 'e' || source[i] === 'E') {
+                let j = i + 1;
+                if (source[j] === '+' || source[j] === '-') j++;
+                if (/[0-9]/.test(source[j] ?? '')) {
+                    i = j;
+                    while (i < source.length && /[0-9]/.test(source[i]!)) i++;
+                }
+            }
             if (source[i] === 'f') i++;
             tokens.push({ kind: 'num', value: source.slice(start, i).replace(/f$/, ''), start });
             continue;
@@ -250,6 +265,7 @@ class Parser {
         this.expectPunc('{');
         const body: IrStmt[] = [];
         while (!this.peekPunc('}') && !this.peekKind('eof')) {
+            if (this.peekKind('str')) { this.next(); this.consumeSemicolon(); continue; }
             for (const stmt of this.parseStatement()) body.push(stmt);
         }
         this.expectPunc('}');
@@ -362,7 +378,8 @@ class Parser {
                 if (name.kind !== 'ident') throw this.error('expected a variable name', name);
                 this.expectPunc('=');
                 const value = this.parseExpression();
-                out.push(this.bind(name.value, value));
+                const stmt = this.bind(name.value, value);
+                if (stmt) out.push(stmt);
             }
             if (this.peekPunc(',')) {
                 this.next();
@@ -398,20 +415,33 @@ class Parser {
         this.expectPunc('}');
         this.expectPunc('=');
         const source = this.parseExpression();
-        return bindings.map((binding) => this.bind(binding.name, this.member(source, binding.key)));
+        const out: IrStmt[] = [];
+        for (const binding of bindings) {
+            const stmt = this.bind(binding.name, this.member(source, binding.key));
+            if (stmt) out.push(stmt);
+        }
+        return out;
     }
 
-    /** Bind a value to a new local and emit its `let`. */
-    private bind(name: string, value: unknown): IrStmt {
+    /**
+     * Bind a value to a new local and emit its `let`. A storage resource is
+     * aliased instead, since WGSL cannot copy a binding into a function local.
+     */
+    private bind(name: string, value: unknown): IrStmt | null {
+        const expr = this.exprOf(value);
+        if (expr.kind === 'binding') {
+            this.locals[name] = expr;
+            return null;
+        }
         const id = this.nextLocal++;
-        this.locals[name] = local(exprType(this.exprOf(value)), id);
-        return letStmt(id, this.locals[name]!.type, this.exprOf(value));
+        this.locals[name] = local(exprType(expr), id);
+        return letStmt(id, this.locals[name]!.type, expr);
     }
 
     private parseReturn(): IrStmt {
         this.next();
-        if (this.peekPunc(';')) {
-            this.next();
+        if (this.peekPunc(';') || this.peekPunc('}')) {
+            if (this.peekPunc(';')) this.next();
             return returnStmt(null);
         }
         const value = this.parseExpression();
@@ -587,7 +617,10 @@ class Parser {
 
     private parsePrimary(): unknown {
         const token = this.next();
-        if (token.kind === 'num') return literal(f32Type(), parseFloat(token.value));
+        if (token.kind === 'num') {
+            const isInteger = !/[.eE]/.test(token.value);
+            return literal(isInteger ? i32Type() : f32Type(), parseFloat(token.value));
+        }
         if (token.kind === 'punc' && token.value === '(') {
             const inner = this.parseExpression();
             this.expectPunc(')');
@@ -621,9 +654,64 @@ class Parser {
             }
             const external = this.options.externals?.[token.value];
             if (external !== undefined) return external;
+            const recovered = this.recoverExternal(token.value);
+            if (recovered !== undefined) return recovered;
             throw this.error(`unknown identifier '${token.value}'`, token);
         }
         throw this.error('unexpected token', token);
+    }
+
+    /**
+     * Recover a bundler-renamed external. A bundler renames colliding free
+     * variables (for example `std` becomes `std2`), but the external object
+     * still exposes the same members. This matches the member path that follows
+     * the identifier against the registered externals, so `std2.sin` resolves
+     * to `std` and `meshLayout2.$.uniforms` resolves to `meshLayout`.
+     */
+    private recoverExternal(name: string): unknown {
+        const externals = this.options.externals;
+        if (!externals) return undefined;
+        // A bundler renames colliding free variables by appending a counter
+        // (`counts` becomes `counts2`). Stripping the suffix recovers the name.
+        const stripped = name.replace(/[0-9]+$/, '');
+        if (stripped && stripped !== name && externals[stripped] !== undefined) return externals[stripped];
+        const path: string[] = [];
+        let i = this.pos;
+        for (;;) {
+            if (this.tokens[i]?.kind === 'punc' && this.tokens[i]!.value === '.'
+                && this.tokens[i + 1]?.kind === 'ident') {
+                path.push(this.tokens[i + 1]!.value);
+                i += 2;
+                continue;
+            }
+            if (this.tokens[i]?.kind === 'punc' && this.tokens[i]!.value === '[') {
+                let depth = 0;
+                while (i < this.tokens.length) {
+                    const t = this.tokens[i]!;
+                    if (t.kind === 'punc' && t.value === '[') depth += 1;
+                    else if (t.kind === 'punc' && t.value === ']') {
+                        depth -= 1;
+                        if (depth === 0) { i += 1; break; }
+                    }
+                    i += 1;
+                }
+                path.push('[]');
+                continue;
+            }
+            break;
+        }
+        if (path.length === 0) return undefined;
+        for (const key of Object.keys(externals)) {
+            let value: unknown = externals[key];
+            let ok = true;
+            for (const step of path) {
+                const next = memberNext(value, step);
+                if (!next.ok) { ok = false; break; }
+                value = next.value;
+            }
+            if (ok && value !== undefined) return externals[key];
+        }
+        return undefined;
     }
 
     /**
@@ -678,7 +766,12 @@ class Parser {
             if (value !== undefined) return value;
         }
         const expr = this.exprOf(base);
-        if (SWIZZLE.test(name)) return swizzle(expr, name);
+        if (expr.type.kind === 'mat' && name === 'columns') {
+            const column = { kind: 'vec', scalar: expr.type.scalar, width: expr.type.rows } as GpuType;
+            const array = { kind: 'array', element: column, count: expr.type.cols } as GpuType;
+            return access(array, expr, 'columns');
+        }
+        if (expr.type.kind === 'vec' && SWIZZLE.test(name)) return swizzle(expr, name);
         return access(fieldType(expr.type, name), expr, name);
     }
 
@@ -760,6 +853,38 @@ function exprResult(value: unknown): IrExpr {
 
 function isObject(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
+}
+
+interface MemberStep {
+    readonly ok: boolean;
+    readonly value?: unknown;
+}
+
+/** One step of a renamed-external member path, understanding struct types. */
+function memberNext(value: unknown, step: string): MemberStep {
+    if (typeof value !== 'object' || value === null) return { ok: false };
+    if (step in (value as object)) return { ok: true, value: (value as Record<string, unknown>)[step] };
+    const type = (value as { type?: GpuType }).type
+        ?? (value as { node?: { type?: GpuType } }).node?.type;
+    if (type && type.kind === 'struct') {
+        const field = type.fields.find((f) => f.name === step);
+        if (field) return { ok: true, value: { type: field.type } };
+    }
+    if (step === '[]' && type && type.kind === 'array') {
+        return { ok: true, value: { type: type.element } };
+    }
+    if (type && type.kind === 'vec') {
+        const components: Record<string, number> = { x: 0, y: 1, z: 2, w: 3, r: 0, g: 1, b: 2, a: 3 };
+        const indices = step.split('').map((c) => components[c]);
+        if (indices.length > 0 && indices.every((n) => n !== undefined)) {
+            const width = indices.length;
+            const swizzled = width === 1
+                ? { kind: 'scalar', scalar: type.scalar } as GpuType
+                : { kind: 'vec', scalar: type.scalar, width } as GpuType;
+            return { ok: true, value: { type: swizzled } };
+        }
+    }
+    return { ok: false };
 }
 
 function isObjectLiteral(value: unknown): value is { __object: Array<{ key: string; value: IrExpr }> } {

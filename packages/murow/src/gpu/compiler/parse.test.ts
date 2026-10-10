@@ -29,7 +29,7 @@ describe('parseShaderBody', () => {
     test('lower an expression body to a fragment return', () => {
         const code = wgsl('(_v, _m, s) => s.vec4f(1, 0, 0, 1)');
         expect(code).toContain('@fragment');
-        expect(code).toContain('return vec4<f32>(1.0, 0.0, 0.0, 1.0);');
+        expect(code).toContain('return vec4<f32>(1, 0, 0, 1);');
     });
 
     test('lowers const declarations and native operators', () => {
@@ -133,7 +133,7 @@ describe('transformSource', () => {
             compiler,
         });
         expect(artifact.name).toBe('green');
-        expect(artifact.code).toContain('return vec4<f32>(0.0, 1.0, 0.0, 1.0);');
+        expect(artifact.code).toContain('return vec4<f32>(0, 1, 0, 1);');
         expect(compiler.has('green')).toBe(true);
     });
 });

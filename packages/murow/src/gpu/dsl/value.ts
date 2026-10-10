@@ -37,7 +37,13 @@ export function vecOf(type: GpuType, width: 2 | 3 | 4): VecType {
 
 /** The wider of two operand types: a scalar widened by a vector or matrix. */
 export function combineType(left: GpuType, right: GpuType): GpuType {
-    if (left.kind === 'scalar' && right.kind !== 'scalar') return right;
+    if (left.kind === 'scalar' && right.kind === 'scalar') {
+        return left.scalar === 'f32' ? left : right.scalar === 'f32' ? right : left;
+    }
+    if (left.kind === 'scalar') return right;
+    if (right.kind === 'scalar') return left;
+    if (left.kind === 'mat' && right.kind === 'vec') return { kind: 'vec', scalar: left.scalar, width: left.rows };
+    if (left.kind === 'vec' && right.kind === 'mat') return { kind: 'vec', scalar: left.scalar, width: right.cols };
     return left;
 }
 
