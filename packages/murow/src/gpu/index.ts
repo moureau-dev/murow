@@ -11,6 +11,35 @@ export * from './descriptors';
 export * from './device';
 export * from './runtime';
 
+// The class-based backend, resources, and shader authoring surface.
+export {
+    GpuBackend,
+    GpuContext,
+    type GpuBackendSpec,
+    type GpuCapabilities,
+    type GpuCompiledShader,
+    type GpuContextOptions,
+} from './backend';
+export {
+    GpuBuffer,
+    type BufferSchema,
+    GpuBindGroupLayout,
+    GpuBindGroup,
+    type BindingSpec,
+    type BindingSlot,
+    type BindingKind,
+} from './resources';
+export {
+    GpuShader,
+    GpuProgram,
+    builtin as shaderBuiltin,
+    isBuiltin as isShaderBuiltin,
+    type GpuShaderOptions,
+    type ShaderBody,
+    type ShaderBindings,
+    type ShaderBuiltin,
+} from './shader';
+
 // Build-time only. Kept out of the runtime barrel so importing `murow/gpu`
 // never pulls the parser; import `murow/gpu/compiler` from build tooling.
 

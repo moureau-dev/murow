@@ -50,6 +50,7 @@ import {
 } from '../ir';
 import { ShaderValue, toExpr } from '../dsl/value';
 import { std as stdLib } from '../dsl/std';
+import { d as dLib } from '../dsl/d';
 import { binding } from '../ir/builders';
 
 /** Options describing the entry to build from parsed source. */
@@ -61,6 +62,11 @@ export interface ParseShaderOptions {
     /** WGSL/protocol builtin spelling for a source name (for example `instance_index`). */
     readonly builtinNames?: Record<string, string>;
     readonly material?: Record<string, GpuType>;
+    /**
+     * Named bind group layouts the body reaches through its second parameter.
+     * Each layout contributes a view whose slots resolve to binding nodes.
+     */
+    readonly bindings?: Readonly<Record<string, { group: number; slots: readonly { name: string; binding: number; type: GpuType; readwrite: boolean }[] }>>;
     readonly workgroupSize?: readonly [number, number, number];
     /**
      * Vertex outputs in declaration order. When present, a body that returns an
@@ -178,7 +184,7 @@ class Parser {
     private nextLocal = 0;
     private readonly locals: Record<string, IrExpr> = Object.create(null);
     private readonly params: Record<string, ShaderValue> = Object.create(null);
-    private readonly material: Record<string, ShaderValue> = Object.create(null);
+    private readonly material: Record<string, ShaderValue | Record<string, ShaderValue>> = Object.create(null);
     private namespaceParams = '';
     private namespaceMaterial = '';
     private namespaceStd = '';
@@ -634,7 +640,8 @@ class Parser {
             if (token.value === 'false') return literal(boolType(), false);
             const known = this.locals[token.value];
             if (known) return known;
-            if (token.value === 'd') return { __namespace: 'd' };
+            if (token.value === 'd' || /^d\d+$/.test(token.value)) return { __namespace: 'd' };
+            if (token.value === 'std' || /^std\d+$/.test(token.value)) return { __namespace: 'std' };
             if (token.value === this.namespaceParams || token.value === this.namespaceMaterial || token.value === this.namespaceStd) {
                 return { __namespace: token.value };
             }
@@ -747,16 +754,17 @@ class Parser {
             // d namespace: a scalar cast such as d.u32(x), or a constructor
             // such as d.vec3f(...) when a `d` object is registered as an external.
             if (base.__namespace === 'd') {
-                const dns = this.options.externals?.d as Record<string, unknown> | undefined;
-                const constructor = dns?.[name];
+                // Prefer a backend-supplied namespace when present (it may be a
+                // superset with extra constructors); otherwise the DSL's own.
+                const dns = (this.options.externals?.d ?? dLib) as Record<string, unknown>;
+                const constructor = dns[name];
                 if (typeof constructor === 'function') return constructor;
                 return { __cast: name };
             }
-            // std namespace: prefer the environment's own namespace so its
-            // overrides (argument order, extra builtins) apply. Fall back to a
-            // name-only intrinsic the backend resolves.
-            const stdNs = this.options.externals?.std as Record<string, unknown> | undefined;
-            const member = stdNs?.[name];
+            // std namespace: prefer the backend's own namespace so its overrides
+            // apply; otherwise the DSL's. Fall back to a name-only intrinsic.
+            const stdNs = (this.options.externals?.std ?? stdLib) as Record<string, unknown>;
+            const member = stdNs[name];
             if (typeof member === 'function') return member;
             return { __intrinsic: name };
         }
@@ -825,7 +833,7 @@ class Parser {
 function buildSchemas(
     options: ParseShaderOptions,
     params: Record<string, ShaderValue>,
-    material: Record<string, ShaderValue>,
+    material: Record<string, ShaderValue | Record<string, ShaderValue>>,
 ): void {
     for (const name of Object.keys(options.params ?? {})) {
         params[name] = new ShaderValue({ node: builtin((options.params as Record<string, GpuType>)[name]!, name) });
@@ -837,6 +845,16 @@ function buildSchemas(
     let index = 0;
     for (const name of Object.keys(options.material ?? {})) {
         material[name] = new ShaderValue({ node: binding((options.material as Record<string, GpuType>)[name]!, 0, index++) });
+    }
+    for (const name of Object.keys(options.bindings ?? {})) {
+        const layout = options.bindings![name]!;
+        const view: Record<string, ShaderValue> = {};
+        for (const slot of layout.slots) {
+            const node = binding(slot.type, layout.group, slot.binding);
+            if (slot.readwrite) (node as { access?: string }).access = 'read_write';
+            view[slot.name] = new ShaderValue({ node });
+        }
+        material[name] = view;
     }
 }
 

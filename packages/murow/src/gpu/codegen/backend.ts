@@ -126,6 +126,7 @@ export interface Backend {
     readonly name: string;
     readonly capabilities: Capabilities;
     readonly passes: readonly LoweringPass[];
+    readonly syntax: TargetSyntax;
     emitNode(node: IrExpr | IrStmt, ctx: EmitContext): string;
     mapBuiltin(builtin: IrBuiltin, ctx: EmitContext): string;
     entryPointSignature(entry: IrEntry, ctx: EmitContext): string;
