@@ -50,7 +50,7 @@ import {
 } from '../ir';
 import { ShaderValue, toExpr } from '../dsl/value';
 import { std as stdLib } from '../dsl/std';
-import { d as dLib } from '../dsl/d';
+import { d as dLib } from '../dsl/data';
 import { binding } from '../ir/builders';
 
 /** Options describing the entry to build from parsed source. */
@@ -66,7 +66,7 @@ export interface ParseShaderOptions {
      * Named bind group layouts the body reaches through its second parameter.
      * Each layout contributes a view whose slots resolve to binding nodes.
      */
-    readonly bindings?: Readonly<Record<string, { group: number; slots: readonly { name: string; binding: number; type: GpuType; readwrite: boolean }[] }>>;
+    readonly bindings?: Readonly<Record<string, unknown>>;
     readonly workgroupSize?: readonly [number, number, number];
     /**
      * Vertex outputs in declaration order. When present, a body that returns an
@@ -654,10 +654,11 @@ class Parser {
                 }
                 if (destructured === 'material') {
                     const value = this.material[token.value];
-                    if (!value) throw this.error(`unknown material field '${token.value}'`, token);
-                    return value;
+                    if (value !== undefined) return value;
+                    // Otherwise fall through: the name may be a helper external.
+                } else {
+                    return this.member({ __namespace: 'std' }, token.value);
                 }
-                return this.member({ __namespace: 'std' }, token.value);
             }
             const external = this.options.externals?.[token.value];
             if (external !== undefined) return external;
@@ -847,14 +848,22 @@ function buildSchemas(
         material[name] = new ShaderValue({ node: binding((options.material as Record<string, GpuType>)[name]!, 0, index++) });
     }
     for (const name of Object.keys(options.bindings ?? {})) {
-        const layout = options.bindings![name]!;
-        const view: Record<string, ShaderValue> = {};
-        for (const slot of layout.slots) {
-            const node = binding(slot.type, layout.group, slot.binding);
-            if (slot.readwrite) (node as { access?: string }).access = 'read_write';
-            view[slot.name] = new ShaderValue({ node });
+        const value = options.bindings![name] as
+            | { group: number; slots: readonly { name: string; binding: number; type: GpuType; readwrite: boolean }[] }
+            | ShaderValue
+            | Record<string, ShaderValue>;
+        if (value && typeof value === 'object' && Array.isArray((value as { slots?: unknown }).slots)) {
+            const layout = value as { group: number; slots: readonly { name: string; binding: number; type: GpuType; readwrite: boolean }[] };
+            const view: Record<string, ShaderValue> = {};
+            for (const slot of layout.slots) {
+                const node = binding(slot.type, layout.group, slot.binding);
+                if (slot.readwrite) (node as { access?: string }).access = 'read_write';
+                view[slot.name] = new ShaderValue({ node });
+            }
+            material[name] = view;
+        } else {
+            material[name] = value as ShaderValue | Record<string, ShaderValue>;
         }
-        material[name] = view;
     }
 }
 

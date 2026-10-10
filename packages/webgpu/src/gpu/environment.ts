@@ -15,7 +15,7 @@ import {
     type GpuType,
     type TextureDim,
 } from 'murow/gpu/ir';
-import { typeOf } from './data';
+import { typeOf } from 'murow/gpu/dsl';
 import type { LayoutHandle, PlainBindGroupLayoutDescriptor, PlainBindingEntry } from './root';
 
 /** An object shaped like a layout accessor, with `$` yielding IR values. */

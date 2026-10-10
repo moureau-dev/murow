@@ -100,7 +100,7 @@ export interface ShaderMaterialShaders {
         readonly out: Record<string, AnyWgslData>;
         readonly fn: (ctx: any, input: any) => Record<string, unknown>;
     };
-    readonly fragment: { readonly fn: (input: any) => unknown };
+    readonly fragment: { readonly fn: (input: any, bindings?: any) => unknown };
 }
 
 export type MaterialSpec = EngineMaterialSpec | ShaderMaterialSpec;

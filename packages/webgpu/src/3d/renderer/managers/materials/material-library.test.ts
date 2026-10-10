@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { tgpu } from '../../../../shaders/typegpu';
+import { compileProgram } from '../../../../gpu';
 import { createMeshLayout } from '../../../shader';
 import {
     createEngineMaterialLayout,
@@ -13,7 +13,7 @@ describe('engine material shaders lower through the gpu facade', () => {
         const meshLayout = createMeshLayout(4);
         const matLayout = createEngineMaterialLayout();
         const fragment = createStandardMaterialFragment(meshLayout, matLayout);
-        const { code } = tgpu.resolveWithContext([fragment]);
+        const { code } = compileProgram([fragment]);
         expect(code).toContain('@fragment');
         expect(code).toContain('fn fs_main(');
         expect(code).toContain('textureSample(');
@@ -28,7 +28,7 @@ describe('engine material shaders lower through the gpu facade', () => {
             createUnlitMaterialFragment(meshLayout, matLayout),
             createEmissiveMaterialFragment(meshLayout, matLayout),
         ]) {
-            const { code } = tgpu.resolveWithContext([fragment]);
+            const { code } = compileProgram([fragment]);
             expect(code).toContain('fn fs_main(');
         }
     });

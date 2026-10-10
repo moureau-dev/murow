@@ -207,7 +207,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const device = await adapter.requestDevice({ requiredLimits });
         this.core.root = tgpu.initFromDevice({ device });
         this.core.device = this.core.root.device;
-        this.compute = new ComputeManager(this.core.root);
+        this.compute = new ComputeManager(this.core.device);
 
         this.core.context = this.canvas.getContext('webgpu')!;
         this.core.format = navigator.gpu.getPreferredCanvasFormat();

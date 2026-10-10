@@ -10,7 +10,7 @@
 import type { GpuType } from '../types';
 import type { GpuStruct } from '../schema/struct';
 import type { Field } from '../schema/field';
-import { sampler as samplerType, texture as textureType } from '../ir/types';
+import { sampler as samplerType, texture as textureType, type TextureDim } from '../ir/types';
 import { BindGroupLayout, binding as bindingEntry, type BindingType } from '../descriptors/bind-group';
 
 /** Role of a binding slot. */
@@ -26,6 +26,8 @@ export interface BindingSpec {
     readonly readwrite?: boolean;
     /** A sampled texture, by sample type. */
     readonly texture?: string;
+    /** Texture view dimension for a texture slot. Default `2d`. */
+    readonly viewDimension?: string;
     /** A sampler, by type. */
     readonly sampler?: string;
 }
@@ -51,8 +53,22 @@ function bindingType(spec: BindingSpec): GpuType {
         const type = (spec.storage as { type: GpuType }).type;
         return type.kind === 'array' && type.count !== null ? { ...type, count: null } : type;
     }
-    if (spec.texture) return textureType('f32', '2d', 'sample');
+    if (spec.texture) return textureType('f32', textureDim(spec.viewDimension), 'sample');
     return samplerType(false);
+}
+
+/** Map a view dimension string to a texture dimension. */
+function textureDim(dim: string | undefined): TextureDim {
+    switch (dim) {
+        case '1d':
+        case '3d':
+        case 'cube':
+        case '2d-array':
+        case 'cube-array':
+            return dim;
+        default:
+            return '2d';
+    }
 }
 
 /** The role of a binding spec. */

@@ -1,12 +1,8 @@
-import { d, std } from '../../../../shaders/typegpu';
+import { d as dRaw, std as stdRaw } from '../../../../gpu';
 import type { MaterialSpec } from '../materials/specs';
 
-// Free variables injected into the fragment by the shader transpiler
-// (`attachShaderMetadata`). Declared here only so TypeScript accepts them; they
-// have no runtime binding and are resolved against the material externals.
-declare const material: { cols: number; rows: number; life: number };
-declare const textures: { atlas: any; atlasSampler: any };
-declare const scene: { time: number };
+const d: any = dRaw;
+const std: any = stdRaw;
 
 export interface DecalMaterialOptions {
     /** Atlas texture id from the AssetBucket. */
@@ -36,7 +32,7 @@ export function decalMaterialSpec(opts: DecalMaterialOptions): MaterialSpec {
         defaultUniforms: { cols: opts.cols, rows: opts.rows, life: opts.life ?? 8 },
         shaders: {
             fragment: {
-                fn: (input: { vUV: { x: number; y: number }; vCustom: { x: number; y: number } }) => {
+                fn: (input: { vUV: { x: number; y: number }; vCustom: { x: number; y: number } }, { material, textures, scene }: any) => {
                     const cell = input.vCustom.x;
                     const spawn = input.vCustom.y;
                     const col = std.mod(cell, material.cols);

@@ -1,15 +1,29 @@
 /**
  * WebGPU's implementation of the `murow/gpu` target seam.
  *
- * `murow/gpu` is target-agnostic. This module supplies the WGSL syntax and the
- * WGSL backend used by the renderer (and any other WebGPU code) to compile
- * `murow/gpu` IR.
+ * `murow/gpu` is target-agnostic. This module supplies the WGSL syntax and
+ * backend (`backend/`), the WGSL helper source, and the WebGPU device and
+ * context. The `d` and `std` namespaces come from `murow/gpu/dsl`.
  */
-export * from './wgsl-syntax';
-export * from './wgsl-backend';
-export * from './data';
-export * from './std';
-export * from './environment';
+export * from './syntax';
+export * from './backend';
 export * from './helpers';
+export * from './device';
+export * from './environment';
 export * from './root';
 export * from './tgpu';
+
+// The authoring namespaces, re-exported so the shim import sites keep working.
+export { d, std, typeOf, alignOf, sizeOf, typeSize, typeAlign, alignUp } from 'murow/gpu/dsl';
+
+// The class-based `murow/gpu` surface, re-exported for the renderer.
+export {
+    GpuBackend,
+    GpuContext,
+    GpuShader,
+    GpuProgram,
+    GpuBindGroupLayout,
+    GpuBindGroup,
+    GpuBuffer,
+    type GpuBackendSpec,
+} from 'murow/gpu';

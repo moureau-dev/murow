@@ -69,6 +69,16 @@ export interface PipelineDescriptorOptions {
     /** `false` disables the depth attachment. */
     readonly depth?: DepthState | boolean;
     readonly multisample?: MultisampleState;
+    /** Color target format. Required for a render pipeline. */
+    readonly colorFormat?: string;
+    /** Depth target format. Defaults to the depth state's format. */
+    readonly depthFormat?: string;
+    /** Vertex entry point name. Default `vs_main`. */
+    readonly vertexEntry?: string;
+    /** Fragment entry point name. Default `fs_main`. */
+    readonly fragmentEntry?: string;
+    /** Compute entry point name. Default `cs_main`. */
+    readonly computeEntry?: string;
 }
 
 /**
@@ -85,6 +95,11 @@ export class PipelineDescriptor {
     readonly primitive: ResolvedPrimitiveState;
     readonly depth: DepthState | undefined;
     readonly multisample: Required<MultisampleState>;
+    readonly colorFormat: string | undefined;
+    readonly depthFormat: string | undefined;
+    readonly vertexEntry: string;
+    readonly fragmentEntry: string;
+    readonly computeEntry: string;
 
     constructor(options: PipelineDescriptorOptions) {
         this.label = options.label;
@@ -107,6 +122,11 @@ export class PipelineDescriptor {
             count: options.multisample?.count ?? 1,
             alphaToCoverageEnabled: options.multisample?.alphaToCoverageEnabled ?? false,
         };
+        this.colorFormat = options.colorFormat;
+        this.depthFormat = options.depthFormat;
+        this.vertexEntry = options.vertexEntry ?? 'vs_main';
+        this.fragmentEntry = options.fragmentEntry ?? 'fs_main';
+        this.computeEntry = options.computeEntry ?? 'cs_main';
     }
 
     /**

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { ALL_CAPABILITIES } from '../codegen';
 import { TestWgslSyntax } from '../codegen/test-syntax';
-import { d } from '../dsl/d';
+import { d } from '../dsl/data';
 import { vec } from '../ir/types';
 import { vec4f } from '../schema/primitives';
 import { gpuStruct } from '../schema/struct';

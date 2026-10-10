@@ -27,11 +27,11 @@ import {
 } from 'murow/gpu/ir';
 import { ShaderValue, toExpr } from 'murow/gpu/dsl';
 import { parseShaderBody } from 'murow/gpu/compiler';
-import { d as facadeD, typeOf } from './data';
+import { d as facadeD, typeOf } from 'murow/gpu/dsl';
 import { handleView } from './environment';
 import { HELPER_WGSL } from './helpers';
-import { std as facadeStd } from './std';
-import { WgslBackend } from './wgsl-backend';
+import { std as facadeStd } from 'murow/gpu/dsl';
+import { WgslBackend } from './backend';
 import {
     createLayoutHandle,
     GpuRoot,

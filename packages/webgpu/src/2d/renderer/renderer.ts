@@ -209,7 +209,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
             prefabs: this._prefabs,
         });
         this.geometry = new GeometryManager(this.core, this.canvas, () => this._clearColor);
-        this.compute = new ComputeManager(this.core.root);
+        this.compute = new ComputeManager(this.core.device);
         this.cameraEffects = new CameraEffectStack({
             root: this.core.root,
             format: this.core.format,

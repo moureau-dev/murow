@@ -263,10 +263,10 @@ export class ParticleSystem3D {
                 spawnRecords: { storage: d.arrayOf(Particle3D, this.maxSpawns), external: spawns },
                 frame: { uniform: ComputeFrame, external: frame },
             })
-            .shader(({ particles, spawnRecords, frame }, { globalId }) => {
+            .shader(({ globalId }, { buffers }) => {
                 'use gpu';
+                const { particles, spawnRecords, frame } = buffers;
                 const i = globalId.x;
-                // @ts-ignore — TGSL uniform struct access
                 if (i >= frame.counts.y) { return; }
                 // @ts-ignore — TGSL uniform struct access
                 const slot = (frame.counts.x + i) & frame.counts.w;
@@ -300,8 +300,9 @@ export class ParticleSystem3D {
                 particles: { storage: d.arrayOf(Particle3D, this.max), readwrite: true, external: pool },
                 frame: { uniform: ComputeFrame, external: frame },
             })
-            .shader(({ particles, frame }, { globalId }) => {
+            .shader(({ globalId }, { buffers }) => {
                 'use gpu';
+                const { particles, frame } = buffers;
                 const i = globalId.x;
                 const p = particles[i];
                 if (p.life <= 0.0) { return; }
@@ -343,8 +344,9 @@ export class ParticleSystem3D {
                 indices: { storage: d.arrayOf(d.u32, this.maxMaterials * this.max), readwrite: true, external: indices },
                 frame: { uniform: ComputeFrame, external: frame },
             })
-            .shader(({ particles, counts, indices, frame }, { globalId }) => {
+            .shader(({ globalId }, { buffers }) => {
                 'use gpu';
+                const { particles, counts, indices, frame } = buffers;
                 const i = globalId.x;
                 const p = particles[i];
                 if (p.life <= 0.0) { return; }
@@ -363,8 +365,9 @@ export class ParticleSystem3D {
                 args: { storage: d.arrayOf(DrawArgs, this.maxMaterials), readwrite: true, external: args },
                 frame: { uniform: ComputeFrame, external: frame },
             })
-            .shader(({ counts, args, frame }, { globalId }) => {
+            .shader(({ globalId }, { buffers }) => {
                 'use gpu';
+                const { counts, args, frame } = buffers;
                 const m = globalId.x;
                 // @ts-ignore — atomic on a storage array element
                 args[m].vertexCount = d.u32(4);

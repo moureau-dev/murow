@@ -1,12 +1,13 @@
 /**
- * A typegpu-compatible `d` data namespace backed by `murow/gpu`.
+ * The unified `d` namespace: value constructors, schema type descriptors, and
+ * builtin markers.
  *
  * Each member is both a type descriptor usable in struct fields and IR
- * signatures, and a callable that builds an IR value through `murow/gpu`'s
- * `d`. `d.struct` returns a `GpuStruct` from `murow/gpu/schema`, so it can be
- * passed straight to `root.createBuffer`.
+ * signatures, and a callable that builds an IR value. `d.struct({...})` returns
+ * a `GpuStruct` from `murow/gpu/schema`, so it can be passed straight to a
+ * context's `createBuffer`.
  *
- * Pure. No device, no allocations in hot paths.
+ * Pure. No backend, no device.
  */
 import {
     GpuStruct,
@@ -22,10 +23,24 @@ import {
     mat2x2f as mat2x2fField,
     mat3x3f as mat3x3fField,
     mat4x4f as mat4x4fField,
-} from 'murow/gpu/schema';
-import { d as gpuD, ShaderValue, toExpr } from 'murow/gpu/dsl';
-import { construct as constructNode, texture as textureType, vec as vecType } from 'murow/gpu/ir';
-import type { ArrayType, GpuScalar, GpuType, StructType } from 'murow/gpu/ir';
+} from '../schema';
+import type { Field } from '../schema/field';
+import {
+    array as arrayType,
+    bool as boolType,
+    f32 as f32Type,
+    i32 as i32Type,
+    mat as matType,
+    texture as textureType,
+    u32 as u32Type,
+    vec as vecType,
+    type ArrayType,
+    type GpuScalar,
+    type GpuType,
+    type StructType,
+} from '../ir/types';
+import { cast, construct, literal } from '../ir/builders';
+import { ShaderValue, toExpr, type ShaderInput } from './value';
 
 /** Marker for a stage builtin such as `position` or `instance_index`. */
 export interface BuiltinMarker {
@@ -53,20 +68,6 @@ export function typeOf(value: any): GpuType {
     return value as GpuType;
 }
 
-/** Alignment of a schema value, a struct, or a bare type descriptor. */
-export function alignOf(value: any): number {
-    if (value instanceof GpuStruct) return value.align;
-    if (typeof value?.align === 'number') return value.align;
-    return typeAlign(typeOf(value));
-}
-
-/** Byte size of a schema value, a struct, or a bare type descriptor. */
-export function sizeOf(value: any): number {
-    if (value instanceof GpuStruct) return value.size;
-    if (typeof value?.size === 'number') return value.size;
-    return typeSize(typeOf(value));
-}
-
 /** Byte size of a bare GPU type descriptor. */
 export function typeSize(type: GpuType): number {
     switch (type.kind) {
@@ -89,8 +90,7 @@ export function typeSize(type: GpuType): number {
                 offset += typeSize(field.type);
                 if (fieldAlign > memberAlign) memberAlign = fieldAlign;
             }
-            const structAlign = alignUp(memberAlign, 16);
-            return alignUp(offset, structAlign);
+            return alignUp(offset, alignUp(memberAlign, 16));
         }
         default:
             return 0;
@@ -121,41 +121,74 @@ export function typeAlign(type: GpuType): number {
     }
 }
 
-function makeScalar(name: GpuScalar, field: any): any {
-    const construct = (value: any) => (gpuD as any)[name](value);
-    return Object.assign(construct, field, { kind: 'scalar', scalar: name });
+/** Alignment of a schema value, a struct, or a bare type descriptor. */
+export function alignOf(value: any): number {
+    if (value instanceof GpuStruct) return value.align;
+    if (typeof value?.align === 'number') return value.align;
+    return typeAlign(typeOf(value));
 }
 
-function makeVec(name: string, width: 2 | 3 | 4, field: any): any {
-    const construct = (...args: any[]) => (gpuD as any)[name](...args);
-    return Object.assign(construct, field, { kind: 'vec', scalar: 'f32', width });
+/** Byte size of a schema value, a struct, or a bare type descriptor. */
+export function sizeOf(value: any): number {
+    if (value instanceof GpuStruct) return value.size;
+    if (typeof value?.size === 'number') return value.size;
+    return typeSize(typeOf(value));
 }
 
-function makeMat(name: string, cols: 2 | 3 | 4, rows: 2 | 3 | 4, field: any): any {
-    const construct = (...args: any[]) => (gpuD as any)[name](...args);
-    return Object.assign(construct, field, { kind: 'mat', scalar: 'f32', cols, rows });
+function value(node: ReturnType<typeof literal> | ReturnType<typeof construct> | ReturnType<typeof cast>): ShaderValue {
+    return new ShaderValue({ node });
 }
 
-function makeU32Vec(width: 2 | 3 | 4, field: any): any {
+function scalarType(scalar: GpuScalar): GpuType {
+    return { kind: 'scalar', scalar };
+}
+
+/** Build a scalar constructor that also carries its schema field. */
+function makeScalar(name: GpuScalar, field: Field<any, any>): any {
+    const type = scalarType(name);
+    const constructValue = (v: ShaderInput): ShaderValue =>
+        typeof v === 'number' ? value(literal(type, v)) : value(cast(type, toExpr(v)));
+    return Object.assign(constructValue, field, { kind: 'scalar', scalar: name, type });
+}
+
+/** Build a float vector constructor that also carries its schema field. */
+function makeVec(name: string, width: 2 | 3 | 4, field: Field<any, any>): any {
+    const type = vecType('f32', width);
+    const constructValue = (...args: readonly ShaderInput[]): ShaderValue =>
+        value(construct(type, args.map(toExpr)));
+    return Object.assign(constructValue, field, { kind: 'vec', scalar: 'f32', width, type });
+}
+
+/** Build a float matrix constructor that also carries its schema field. */
+function makeMat(name: string, cols: 2 | 3 | 4, rows: 2 | 3 | 4, field: Field<any, any>): any {
+    const type = matType('f32', cols, rows);
+    const constructValue = (...args: readonly ShaderInput[]): ShaderValue =>
+        value(construct(type, args.map(toExpr)));
+    return Object.assign(constructValue, field, { kind: 'mat', scalar: 'f32', cols, rows, type });
+}
+
+/** Build an unsigned integer vector constructor. */
+function makeU32Vec(width: 2 | 3 | 4, field: Field<any, any>): any {
     const type = vecType('u32', width);
-    const construct = (...args: any[]) =>
-        new ShaderValue({ node: constructNode(type, args.map(toExpr)) });
-    return Object.assign(construct, field, type, { type });
+    const constructValue = (...args: readonly ShaderInput[]): ShaderValue =>
+        value(construct(type, args.map(toExpr)));
+    return Object.assign(constructValue, field, { kind: 'vec', scalar: 'u32', width, type });
 }
 
 const u32Vec3 = makeU32Vec(3, vec3fField);
 
 let structCount = 0;
 
+/** A struct exposed as a schema field, so it can nest. */
 function structAsField(struct: GpuStruct): any {
     return {
         size: struct.size,
         align: struct.align,
         type: struct.type,
-        write(dv: DataView, offset: number, value: any): void {
-            if (value === null || value === undefined) return;
+        write(dv: DataView, offset: number, value_: any): void {
+            if (value_ === null || value_ === undefined) return;
             for (const member of struct.fields) {
-                member.field.write(dv, offset + member.offset, value[member.name]);
+                member.field.write(dv, offset + member.offset, value_[member.name]);
             }
         },
         read(dv: DataView, offset: number): Record<string, any> {
@@ -173,7 +206,6 @@ function structAsField(struct: GpuStruct): any {
     };
 }
 
-/** The zero value for an array element, matching its field shape. */
 function elementNil(element: any): any {
     if (element && typeof element.toNil === 'function') return element.toNil();
     if (element instanceof GpuStruct) {
@@ -184,14 +216,14 @@ function elementNil(element: any): any {
     return 0;
 }
 
-function writeElement(element: any, dv: DataView, offset: number, value: any): void {
+function writeElement(element: any, dv: DataView, offset: number, value_: any): void {
     if (typeof element.write === 'function') {
-        element.write(dv, offset, value);
+        element.write(dv, offset, value_);
         return;
     }
     if (element instanceof GpuStruct) {
         for (const member of element.fields) {
-            member.field.write(dv, offset + member.offset, value?.[member.name]);
+            member.field.write(dv, offset + member.offset, value_?.[member.name]);
         }
     }
 }
@@ -234,7 +266,7 @@ const builtins: Record<string, BuiltinMarker> = {
     numWorkgroups: { __builtin: 'num_workgroups', type: u32Vec3 },
 };
 
-/** The typegpu-compatible data namespace. */
+/** The unified data/value namespace. */
 export const d = {
     f32: makeScalar('f32', f32Field),
     i32: makeScalar('i32', i32Field),
@@ -260,13 +292,15 @@ export const d = {
     /** Alias for `mat4x4f`. */
     m4x4f: null as any,
 
+    /** Build an array value from a type and its element values. */
+    array(element: any, values: readonly ShaderInput[]): ShaderValue {
+        const type = arrayType(typeOf(element), values.length);
+        return value(construct(type, values.map(toExpr)));
+    },
+
     /** A sampled 2D texture type, used in a bind group layout descriptor. */
     texture2d(): any {
-        return {
-            type: textureType('f32', '2d', 'sample'),
-            sampleType: 'float',
-            viewDimension: '2d',
-        };
+        return { type: textureType('f32', '2d', 'sample'), sampleType: 'float', viewDimension: '2d' };
     },
 
     /** Mark an integer type as an atomic, for storage-buffer atomics. */
@@ -277,12 +311,17 @@ export const d = {
         return out;
     },
 
-    /** Build a `GpuStruct` from a record of fields. */
-    struct(fields: Record<string, any>): GpuStruct {
-        const normalized: Record<string, any> = {};
+    /**
+     * Build a `GpuStruct` from a record of fields. A nested `GpuStruct` is
+     * exposed as a field, so structs can compose.
+     */
+    struct(fields: Record<string, Field<any, any> | GpuStruct>): GpuStruct {
+        const normalized: Record<string, Field<any, any>> = {};
         for (const key of Object.keys(fields)) {
-            const value = fields[key];
-            normalized[key] = value instanceof GpuStruct ? structAsField(value) : value;
+            const member = fields[key]!;
+            normalized[key] = member instanceof GpuStruct
+                ? (structAsField(member) as Field<any, any>)
+                : member;
         }
         return gpuStruct({ name: `Struct${structCount++}`, fields: normalized, packing: Std430 });
     },
@@ -293,17 +332,18 @@ export const d = {
         const size = sizeOf(element);
         const align = alignOf(element);
         const stride = alignUp(size, align);
-        const arrayType: ArrayType = { kind: 'array', element: type, count };
-        const construct = (...values: any[]) => (gpuD as any).array(type, values);
-        return Object.assign(construct, {
+        const array: ArrayType = { kind: 'array', element: type, count };
+        const constructValue = (...values: readonly ShaderInput[]): ShaderValue =>
+            value(construct(array, values.map(toExpr)));
+        return Object.assign(constructValue, {
             kind: 'array',
             element: type,
             count,
             size: stride * count,
             align,
-            type: arrayType,
-            write(dv: DataView, offset: number, value: any[]): void {
-                for (let i = 0; i < count; i++) writeElement(element, dv, offset + i * stride, value[i]);
+            type: array,
+            write(dv: DataView, offset: number, value_: any[]): void {
+                for (let i = 0; i < count; i++) writeElement(element, dv, offset + i * stride, value_[i]);
             },
             read(dv: DataView, offset: number): any[] {
                 const out: any[] = [];
@@ -335,5 +375,3 @@ d.v4f = d.vec4f;
 d.v2f = d.vec2f;
 d.m3x3f = d.mat3x3f;
 d.m4x4f = d.mat4x4f;
-
-export type StructDesc = StructType;

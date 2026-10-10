@@ -67,7 +67,7 @@ describe('std vector math', () => {
 describe('std select, sample, discard', () => {
     test('select boxes the condition last', () => {
         const cond = new ShaderValue({ node: local(bool(), 2) });
-        const node = std.select(cond, scalar(0), scalar(1)).node as IrCall;
+        const node = std.select(scalar(0), scalar(1), cond).node as IrCall;
         expect(node.name).toBe('select');
         expect(node.args[2]).toBe(cond.node);
     });

@@ -6,7 +6,7 @@
  */
 import type { GpuStruct } from '../schema/struct';
 import type { Field } from '../schema/field';
-import type { GpuDevice, GpuBuffer as GpuBufferHandle, BufferUsage } from '../device/gpu-device';
+import type { GpuDevice, GpuBufferHandle, BufferUsage } from '../device/gpu-device';
 
 /** A schema value: a struct block or a single field. */
 export type BufferSchema<T = unknown> = GpuStruct | Field<T, any>;

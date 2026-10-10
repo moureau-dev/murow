@@ -2,16 +2,17 @@
  * Builtins.
  *
  * `std` is the shader math namespace used inside entry bodies. Each builtin
- * builds an IR `call` (or `sample`) node with a sensible result type.
+ * builds an IR `call` (or `sample`) node with a sensible result type. It also
+ * spreads `d`, so constructors are reachable as `std.vec3f` and the like.
  *
  * Pure. No backend, no device.
  */
 import type { GpuType } from '../types';
 import type { IrExpr } from '../ir/nodes';
 import { call, discardStmt, sample } from '../ir/builders';
-import { bool as boolType } from '../ir/types';
+import { bool as boolType, u32 as u32Type, vec as vecType } from '../ir/types';
 import { combineType, scalarOf, ShaderValue, toExpr, vecOf, type ShaderInput } from './value';
-import { d } from './d';
+import { d } from './data';
 
 function value(node: IrExpr): ShaderValue {
     return new ShaderValue({ node });
@@ -238,15 +239,31 @@ export const std = {
         return value(call(boolType(), 'all', [toExpr(a)]));
     },
 
-    select(cond: ShaderInput, a: ShaderInput, b: ShaderInput): ShaderValue {
-        const ea = toExpr(a);
-        const eb = toExpr(b);
-        return value(call(combineType(ea.type, eb.type), 'select', [ea, eb, toExpr(cond)]));
+    /** `select(falseValue, trueValue, condition)`, matching WGSL argument order. */
+    select(falseValue: ShaderInput, trueValue: ShaderInput, condition: ShaderInput): ShaderValue {
+        const ef = toExpr(falseValue);
+        const et = toExpr(trueValue);
+        return value(call(combineType(ef.type, et.type), 'select', [ef, et, toExpr(condition)]));
     },
 
     textureSample(texture: ShaderInput, sampler: ShaderInput, coords: ShaderInput): ShaderValue {
         const texture_ = toExpr(texture);
         return value(sample(vecOf(texture_.type, 4), texture_, toExpr(sampler), toExpr(coords)));
+    },
+
+    /** Sample a texture at an explicit mip level. Extra arguments pass through. */
+    textureSampleLevel(...args: ShaderInput[]): ShaderValue {
+        return value(call(vecType('f32', 4), 'textureSampleLevel', args.map(toExpr)));
+    },
+
+    /** Atomically add to a storage-buffer atomic and return the previous value. */
+    atomicAdd(pointer: ShaderInput, amount: ShaderInput): ShaderValue {
+        return value(call(u32Type(), 'atomicAdd', [toExpr(pointer), toExpr(amount)]));
+    },
+
+    /** Atomically load a storage-buffer atomic. */
+    atomicLoad(pointer: ShaderInput): ShaderValue {
+        return value(call(u32Type(), 'atomicLoad', [toExpr(pointer)]));
     },
 
     discard(): ReturnType<typeof discardStmt> {

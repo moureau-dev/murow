@@ -13,20 +13,20 @@ import type { BindGroupLayout } from '../descriptors/bind-group';
 import type { PipelineDescriptor } from '../descriptors/pipeline';
 import type {
     BufferUsage,
-    GpuBindGroup,
+    GpuBindGroupHandle,
     GpuBindGroupEntry,
-    GpuBuffer,
+    GpuBufferHandle,
     GpuBufferOptions,
     GpuDevice,
-    GpuPipeline,
-    GpuTexture,
+    GpuPipelineHandle,
+    GpuTextureHandle,
     GpuTextureOptions,
     RenderPassOptions,
 } from './gpu-device';
 
 /** Record of a created buffer. */
 export interface BufferRecord {
-    readonly handle: GpuBuffer;
+    readonly handle: GpuBufferHandle;
     readonly size: number;
     readonly usage: BufferUsage;
     readonly struct?: GpuStruct;
@@ -35,7 +35,7 @@ export interface BufferRecord {
 
 /** Record of a created texture. */
 export interface TextureRecord {
-    readonly handle: GpuTexture;
+    readonly handle: GpuTextureHandle;
     readonly width: number;
     readonly height: number;
     readonly format: string;
@@ -45,14 +45,14 @@ export interface TextureRecord {
 
 /** Record of a created bind group. */
 export interface BindGroupRecord {
-    readonly handle: GpuBindGroup;
+    readonly handle: GpuBindGroupHandle;
     readonly layout: BindGroupLayout;
     readonly entries: readonly GpuBindGroupEntry[];
 }
 
 /** Record of a created pipeline. */
 export interface PipelineRecord {
-    readonly handle: GpuPipeline;
+    readonly handle: GpuPipelineHandle;
     readonly descriptor: PipelineDescriptor;
 }
 
@@ -72,20 +72,20 @@ export interface DispatchRecord {
 
 /** Every call recorded by a {@link RecordingDevice}. */
 export type DeviceCall =
-    | { readonly kind: 'create-buffer'; readonly buffer: GpuBuffer; readonly options: GpuBufferOptions }
-    | { readonly kind: 'write-buffer'; readonly buffer: GpuBuffer; readonly offset: number; readonly data: ArrayBufferView }
-    | { readonly kind: 'destroy-buffer'; readonly buffer: GpuBuffer }
-    | { readonly kind: 'create-texture'; readonly texture: GpuTexture; readonly options: GpuTextureOptions }
+    | { readonly kind: 'create-buffer'; readonly buffer: GpuBufferHandle; readonly options: GpuBufferOptions }
+    | { readonly kind: 'write-buffer'; readonly buffer: GpuBufferHandle; readonly offset: number; readonly data: ArrayBufferView }
+    | { readonly kind: 'destroy-buffer'; readonly buffer: GpuBufferHandle }
+    | { readonly kind: 'create-texture'; readonly texture: GpuTextureHandle; readonly options: GpuTextureOptions }
     | {
           readonly kind: 'create-bind-group';
-          readonly group: GpuBindGroup;
+          readonly group: GpuBindGroupHandle;
           readonly layout: BindGroupLayout;
           readonly entries: readonly GpuBindGroupEntry[];
       }
-    | { readonly kind: 'create-pipeline'; readonly pipeline: GpuPipeline; readonly descriptor: PipelineDescriptor }
+    | { readonly kind: 'create-pipeline'; readonly pipeline: GpuPipelineHandle; readonly descriptor: PipelineDescriptor }
     | { readonly kind: 'begin-render-pass'; readonly options: RenderPassOptions }
-    | { readonly kind: 'set-pipeline'; readonly pipeline: GpuPipeline }
-    | { readonly kind: 'set-bind-group'; readonly index: number; readonly group: GpuBindGroup }
+    | { readonly kind: 'set-pipeline'; readonly pipeline: GpuPipelineHandle }
+    | { readonly kind: 'set-bind-group'; readonly index: number; readonly group: GpuBindGroupHandle }
     | { readonly kind: 'draw'; readonly count: number; readonly firstInstance: number; readonly instanceCount: number }
     | { readonly kind: 'end-render-pass' }
     | {
@@ -129,8 +129,8 @@ export class RecordingDevice implements GpuDevice {
     private nextBindGroup = 1;
     private nextPipeline = 1;
 
-    private activePipeline: GpuPipeline | undefined;
-    private readonly boundGroups: (GpuBindGroup | undefined)[] = [];
+    private activePipeline: GpuPipelineHandle | undefined;
+    private readonly boundGroups: (GpuBindGroupHandle | undefined)[] = [];
     private _destroyed = false;
 
     constructor(options: RecordingDeviceOptions = {}) {
@@ -142,8 +142,8 @@ export class RecordingDevice implements GpuDevice {
         return this._destroyed;
     }
 
-    createBuffer(options: GpuBufferOptions): GpuBuffer {
-        const handle = this.nextBuffer++ as GpuBuffer;
+    createBuffer(options: GpuBufferOptions): GpuBufferHandle {
+        const handle = this.nextBuffer++ as GpuBufferHandle;
         let size: number;
         let usage: BufferUsage;
         let struct: GpuStruct | undefined;
@@ -160,19 +160,19 @@ export class RecordingDevice implements GpuDevice {
         return handle;
     }
 
-    writeBuffer(buffer: GpuBuffer, offset: number, data: ArrayBufferView): void {
+    writeBuffer(buffer: GpuBufferHandle, offset: number, data: ArrayBufferView): void {
         this.calls.push({ kind: 'write-buffer', buffer, offset, data });
     }
 
-    destroyBuffer(buffer: GpuBuffer): void {
+    destroyBuffer(buffer: GpuBufferHandle): void {
         for (const record of this.buffers) {
             if (record.handle === buffer) record.destroyed = true;
         }
         this.calls.push({ kind: 'destroy-buffer', buffer });
     }
 
-    createTexture(options: GpuTextureOptions): GpuTexture {
-        const handle = this.nextTexture++ as GpuTexture;
+    createTexture(options: GpuTextureOptions): GpuTextureHandle {
+        const handle = this.nextTexture++ as GpuTextureHandle;
         this.textures.push({
             handle,
             width: options.width,
@@ -185,15 +185,15 @@ export class RecordingDevice implements GpuDevice {
         return handle;
     }
 
-    createBindGroup(layout: BindGroupLayout, entries: readonly GpuBindGroupEntry[]): GpuBindGroup {
-        const handle = this.nextBindGroup++ as GpuBindGroup;
+    createBindGroup(layout: BindGroupLayout, entries: readonly GpuBindGroupEntry[]): GpuBindGroupHandle {
+        const handle = this.nextBindGroup++ as GpuBindGroupHandle;
         this.bindGroups.push({ handle, layout, entries });
         this.calls.push({ kind: 'create-bind-group', group: handle, layout, entries });
         return handle;
     }
 
-    createPipeline(descriptor: PipelineDescriptor): GpuPipeline {
-        const handle = this.nextPipeline++ as GpuPipeline;
+    createPipeline(descriptor: PipelineDescriptor): GpuPipelineHandle {
+        const handle = this.nextPipeline++ as GpuPipelineHandle;
         this.pipelines.push({ handle, descriptor });
         this.calls.push({ kind: 'create-pipeline', pipeline: handle, descriptor });
         return handle;
@@ -203,12 +203,12 @@ export class RecordingDevice implements GpuDevice {
         this.calls.push({ kind: 'begin-render-pass', options });
     }
 
-    setPipeline(pipeline: GpuPipeline): void {
+    setPipeline(pipeline: GpuPipelineHandle): void {
         this.activePipeline = pipeline;
         this.calls.push({ kind: 'set-pipeline', pipeline });
     }
 
-    setBindGroup(index: number, group: GpuBindGroup): void {
+    setBindGroup(index: number, group: GpuBindGroupHandle): void {
         this.boundGroups[index] = group;
         this.calls.push({ kind: 'set-bind-group', index, group });
     }
@@ -233,12 +233,12 @@ export class RecordingDevice implements GpuDevice {
     }
 
     /** The most recently bound pipeline, if any. */
-    lastPipeline(): GpuPipeline | undefined {
+    lastPipeline(): GpuPipelineHandle | undefined {
         return this.activePipeline;
     }
 
     /** The group bound at an index, if any. */
-    boundBindGroup(index: number): GpuBindGroup | undefined {
+    boundBindGroup(index: number): GpuBindGroupHandle | undefined {
         return this.boundGroups[index];
     }
 

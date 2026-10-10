@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { tgpu } from '../../../../shaders/typegpu';
+import { compileProgram } from '../../../../gpu';
 import { createMeshLayout } from '../../../shader';
 import { createEngineMaterialLayout, createStandardMaterialFragment } from './built-in';
 
@@ -13,7 +13,7 @@ describe('standard fragment shadow receive', () => {
             const meshLayout = createMeshLayout(4);
             const matLayout = createEngineMaterialLayout();
             const fragment = createStandardMaterialFragment(meshLayout, matLayout);
-            code = tgpu.resolveWithContext([fragment]).code;
+            code = compileProgram([fragment]).code;
         } finally {
             console.warn = originalWarn;
         }
@@ -36,7 +36,7 @@ describe('standard fragment shadow receive', () => {
         expect(branches).not.toBeNull();
         const literals: Record<string, string> = {};
         for (const line of code.split('\n')) {
-            const match = line.match(/let (\w+): f32 = f32\(([\d.]+)\)/);
+            const match = line.match(/(?:let|var) (\w+): f32 = f32\(([\d.]+)\)/);
             if (match) literals[match[1]!] = match[2]!;
         }
         expect(literals[branches![1]!]).toBe('0');

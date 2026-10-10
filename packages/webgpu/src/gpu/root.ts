@@ -9,7 +9,7 @@
  */
 import { GpuStruct } from 'murow/gpu/schema';
 import { handleView } from './environment';
-import { sizeOf as schemaSizeOf } from './data';
+import { sizeOf as schemaSizeOf } from 'murow/gpu/dsl';
 
 /** WebGPU shader stage bits, defined locally so tests need no GPU globals. */
 export const SHADER_STAGE = Object.freeze({ VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });

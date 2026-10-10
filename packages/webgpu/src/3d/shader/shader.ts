@@ -5,22 +5,19 @@
  * Instance data from storage buffers (TRS + color) via index buffer indirection.
  * Basic diffuse lighting.
  */
-import { tgpu, d, std } from '../../shaders/typegpu';
+import { GpuBindGroupLayout, GpuShader, d as dRaw, std as stdRaw } from '../../gpu';
 import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms, Light } from '../../core/types';
-import { attachShaderMetadata } from '../../shaders/runtime-transpile';
 import { lightContribution, tonemap } from '../../shaders/utils';
 
-
-const _WS = ['d','std','meshLayout','mix','mul','cos','sin','sub','add','vec3f','vec4f'];
-const _WSF = ['d','std','meshLayout','lightContribution','tonemap','mix','mul','cos','sin','sub','add','vec3f','vec4f','normalize','max','dot','u32','saturate','select','smoothstep','length'];
-const _WSFT = ['d','std','meshLayout','texLayout','lightContribution','tonemap','mix','mul','cos','sin','sub','add','vec3f','vec4f','vec2f','normalize','max','dot','u32','saturate','select','smoothstep','length','textureSample'];
-const _WSSK = ['d','std','layout','mix','mul','cos','sin','sub','add','vec3f','vec4f','mat4x4f'];
+// The shader authoring DSL stays loose so bodies read naturally.
+const d: any = dRaw;
+const std: any = stdRaw;
 
 /** Max point/spot lights the mesh shaders' storage buffer holds. */
 export const MAX_LIGHTS = 64;
 
 export function createMeshLayout(maxInstances: number, maxLights: number = MAX_LIGHTS) {
-    return tgpu.bindGroupLayout({
+    return new GpuBindGroupLayout({
         uniforms: { uniform: MeshUniforms },
         dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
         staticInstances: { storage: d.arrayOf(StaticMesh, maxInstances) },
@@ -32,12 +29,28 @@ export function createMeshLayout(maxInstances: number, maxLights: number = MAX_L
 export type MeshDataLayout = ReturnType<typeof createMeshLayout>;
 
 export function createMeshVertex(meshLayout: MeshDataLayout) {
-    const fn = function(input: { position: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; instanceIndex: number }) {
+    return GpuShader.vertex(
+        {
+            in: {
+                position: d.location(0, d.vec3f),
+                normal: d.location(1, d.vec3f),
+                instanceIndex: d.builtin.instanceIndex,
+            },
+            out: {
+                pos: d.builtin.position,
+                vNormal: d.vec3f,
+                vColor: d.vec3f,
+                vWorldPos: d.vec3f,
+                vCustom: d.vec2f,
+            },
+            bindings: { mesh: meshLayout },
+        },
+        (input, { mesh }) => {
         const instanceIndex = input.instanceIndex;
-        const slot = meshLayout.$.slotIndices[instanceIndex];
-        const dyn = meshLayout.$.dynamicInstances[slot];
-        const stat = meshLayout.$.staticInstances[slot];
-        const alpha = meshLayout.$.uniforms.alpha;
+        const slot = mesh.slotIndices[instanceIndex];
+        const dyn = mesh.dynamicInstances[slot];
+        const stat = mesh.staticInstances[slot];
+        const alpha = mesh.uniforms.alpha;
 
         // Interpolate position
         const px = std.mix(dyn.prevPosX, dyn.currPosX, alpha);
@@ -115,7 +128,7 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             std.add(std.mul(nRy.y, sxr), std.mul(nRy.z, cxr)),
         );
 
-        const clipPos = std.mul(meshLayout.$.uniforms.viewProjection, worldPos);
+        const clipPos = std.mul(mesh.uniforms.viewProjection, worldPos);
 
         return {
             pos: clipPos,
@@ -124,27 +137,20 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
             vCustom: d.vec2f(stat.custom0, stat.custom1),
         };
-    };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std, meshLayout }, _WS);
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            instanceIndex: d.builtin.instanceIndex,
         },
-        out: {
-            pos: d.builtin.position,
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vWorldPos: d.vec3f,
-            vCustom: d.vec2f,
-        },
-    })(fn as any);
+    );
 }
 
 export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout) {
-    const fn = function(input: { vNormal: { x: number; y: number; z: number }; vColor: { x: number; y: number; z: number }; vWorldPos: { x: number; y: number; z: number } }) {
-        const u = meshLayout.$.uniforms;
+    return GpuShader.fragment(
+        {
+            in: { vNormal: d.vec3f, vColor: d.vec3f, vWorldPos: d.vec3f },
+            out: d.vec4f,
+            bindings: { mesh: meshLayout },
+            helpers: { lightContribution, tonemap },
+        },
+        (input, { mesh }) => {
+        const u = mesh.uniforms;
         const baseColor = input.vColor;
         const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
         const normal = std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z));
@@ -164,7 +170,7 @@ export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataL
         const count = u.lightCount;
         const a = u.alpha;
         for (let i = d.u32(0); i < count; i++) {
-            const L = meshLayout.$.lights[i];
+            const L = mesh.lights[i];
             const pos = d.vec3f(
                 std.mix(L.prevPosX, L.currPosX, a),
                 std.mix(L.prevPosY, L.currPosY, a),
@@ -192,22 +198,14 @@ export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataL
 
         const mapped = tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, 1.0);
-    };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout, lightContribution, tonemap }), false, { d, std, meshLayout }, _WSF);
-    return tgpu.fragmentFn({
-        in: {
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vWorldPos: d.vec3f,
         },
-        out: d.vec4f,
-    })(fn as any);
+    );
 }
 
 // --- Textured pipeline: adds UV attribute + texture sampling ---
 
 export function createTextureBindGroupLayout() {
-    return tgpu.bindGroupLayout({
+    return new GpuBindGroupLayout({
         modelTexture: { texture: 'float' },
         modelSampler: { sampler: 'filtering' },
     });
@@ -216,12 +214,30 @@ export function createTextureBindGroupLayout() {
 export type TextureBindGroupLayout = ReturnType<typeof createTextureBindGroupLayout>;
 
 export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
-    const fn = function(input: { position: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
+    return GpuShader.vertex(
+        {
+            in: {
+                position: d.location(0, d.vec3f),
+                normal: d.location(1, d.vec3f),
+                uv: d.location(2, d.vec2f),
+                instanceIndex: d.builtin.instanceIndex,
+            },
+            out: {
+                pos: d.builtin.position,
+                vNormal: d.vec3f,
+                vColor: d.vec3f,
+                vUV: d.vec2f,
+                vWorldPos: d.vec3f,
+                vCustom: d.vec2f,
+            },
+            bindings: { mesh: meshLayout },
+        },
+        (input, { mesh }) => {
         const instanceIndex = input.instanceIndex;
-        const slot = meshLayout.$.slotIndices[instanceIndex];
-        const dyn = meshLayout.$.dynamicInstances[slot];
-        const stat = meshLayout.$.staticInstances[slot];
-        const alpha = meshLayout.$.uniforms.alpha;
+        const slot = mesh.slotIndices[instanceIndex];
+        const dyn = mesh.dynamicInstances[slot];
+        const stat = mesh.staticInstances[slot];
+        const alpha = mesh.uniforms.alpha;
 
         // Interpolate position
         const px = std.mix(dyn.prevPosX, dyn.currPosX, alpha);
@@ -298,7 +314,7 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
             std.add(std.mul(nRy.y, sxr), std.mul(nRy.z, cxr)),
         );
 
-        const clipPos = std.mul(meshLayout.$.uniforms.viewProjection, worldPos);
+        const clipPos = std.mul(mesh.uniforms.viewProjection, worldPos);
 
         return {
             pos: clipPos,
@@ -308,24 +324,8 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
             vCustom: d.vec2f(stat.custom0, stat.custom1),
         };
-    };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std, meshLayout }, _WS);
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            uv: d.location(2, d.vec2f),
-            instanceIndex: d.builtin.instanceIndex,
         },
-        out: {
-            pos: d.builtin.position,
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vUV: d.vec2f,
-            vWorldPos: d.vec3f,
-            vCustom: d.vec2f,
-        },
-    })(fn as any);
+    );
 }
 
 /**
@@ -334,13 +334,31 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
  * material bind group, so only engine materials use it.
  */
 export function createExtrudedMeshVertex(meshLayout: MeshDataLayout, matLayout: any) {
-    const fn = function(input: { position: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
+    return GpuShader.vertex(
+        {
+            in: {
+                position: d.location(0, d.vec3f),
+                normal: d.location(1, d.vec3f),
+                uv: d.location(2, d.vec2f),
+                instanceIndex: d.builtin.instanceIndex,
+            },
+            out: {
+                pos: d.builtin.position,
+                vNormal: d.vec3f,
+                vColor: d.vec3f,
+                vUV: d.vec2f,
+                vWorldPos: d.vec3f,
+                vCustom: d.vec2f,
+            },
+            bindings: { mesh: meshLayout, mat: matLayout },
+        },
+        (input, { mesh, mat }) => {
         const instanceIndex = input.instanceIndex;
-        const slot = meshLayout.$.slotIndices[instanceIndex];
-        const dyn = meshLayout.$.dynamicInstances[slot];
-        const stat = meshLayout.$.staticInstances[slot];
-        const alpha = meshLayout.$.uniforms.alpha;
-        const ext = matLayout.$.material.extrude;
+        const slot = mesh.slotIndices[instanceIndex];
+        const dyn = mesh.dynamicInstances[slot];
+        const stat = mesh.staticInstances[slot];
+        const alpha = mesh.uniforms.alpha;
+        const ext = mat.material.extrude;
 
         const px = std.mix(dyn.prevPosX, dyn.currPosX, alpha);
         const py = std.mix(dyn.prevPosY, dyn.currPosY, alpha);
@@ -408,7 +426,7 @@ export function createExtrudedMeshVertex(meshLayout: MeshDataLayout, matLayout: 
             std.add(std.mul(nRy.y, sxr), std.mul(nRy.z, cxr)),
         );
 
-        const clipPos = std.mul(meshLayout.$.uniforms.viewProjection, worldPos);
+        const clipPos = std.mul(mesh.uniforms.viewProjection, worldPos);
 
         return {
             pos: clipPos,
@@ -418,33 +436,33 @@ export function createExtrudedMeshVertex(meshLayout: MeshDataLayout, matLayout: 
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
             vCustom: d.vec2f(stat.custom0, stat.custom1),
         };
-    };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout, matLayout }), false, { d, std, meshLayout, matLayout } as any, _WS);
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            uv: d.location(2, d.vec2f),
-            instanceIndex: d.builtin.instanceIndex,
         },
-        out: {
-            pos: d.builtin.position,
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vUV: d.vec2f,
-            vWorldPos: d.vec3f,
-            vCustom: d.vec2f,
-        },
-    })(fn as any);
+    );
 }
 
 export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
-    const fn = function(input: { position: { x: number; y: number; z: number }; uv: { x: number; y: number }; instanceIndex: number }) {
+    return GpuShader.vertex(
+        {
+            in: {
+                position: d.location(0, d.vec3f),
+                normal: d.location(1, d.vec3f),
+                uv: d.location(2, d.vec2f),
+                instanceIndex: d.builtin.instanceIndex,
+            },
+            out: {
+                pos: d.builtin.position,
+                vColor: d.vec3f,
+                vUV: d.vec2f,
+                vCustom: d.vec2f,
+            },
+            bindings: { mesh: meshLayout },
+        },
+        (input, { mesh }) => {
         const instanceIndex = input.instanceIndex;
-        const slot = meshLayout.$.slotIndices[instanceIndex];
-        const dyn = meshLayout.$.dynamicInstances[slot];
-        const stat = meshLayout.$.staticInstances[slot];
-        const alpha = meshLayout.$.uniforms.alpha;
+        const slot = mesh.slotIndices[instanceIndex];
+        const dyn = mesh.dynamicInstances[slot];
+        const stat = mesh.staticInstances[slot];
+        const alpha = mesh.uniforms.alpha;
 
         const px = std.mix(dyn.prevPosX, dyn.currPosX, alpha);
         const py = std.mix(dyn.prevPosY, dyn.currPosY, alpha);
@@ -491,7 +509,7 @@ export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
             1.0,
         );
 
-        const clipPos = std.mul(meshLayout.$.uniforms.viewProjection, worldPos);
+        const clipPos = std.mul(mesh.uniforms.viewProjection, worldPos);
 
         return {
             pos: clipPos,
@@ -499,34 +517,27 @@ export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
             vUV: input.uv,
             vCustom: d.vec2f(stat.custom0, stat.custom1),
         };
-    };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout }), false, { d, std, meshLayout });
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            uv: d.location(2, d.vec2f),
-            instanceIndex: d.builtin.instanceIndex,
         },
-        out: {
-            pos: d.builtin.position,
-            vColor: d.vec3f,
-            vUV: d.vec2f,
-            vCustom: d.vec2f,
-        },
-    })(fn as any);
+    );
 }
 
 export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout, texLayout: TextureBindGroupLayout) {
-    const fn = function(input: { vNormal: { x: number; y: number; z: number }; vColor: { x: number; y: number; z: number }; vUV: { x: number; y: number }; vWorldPos: { x: number; y: number; z: number } }) {
-        const u = meshLayout.$.uniforms;
+    return GpuShader.fragment(
+        {
+            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f },
+            out: d.vec4f,
+            bindings: { mesh: meshLayout, tex: texLayout },
+            helpers: { lightContribution, tonemap },
+        },
+        (input, { mesh, tex }) => {
+        const u = mesh.uniforms;
         const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
         const normal = std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z));
 
         // Sample texture, multiply by instance color (tint)
         const texColor = std.textureSample(
-            texLayout.$.modelTexture,
-            texLayout.$.modelSampler,
+            tex.modelTexture,
+            tex.modelSampler,
             d.vec2f(input.vUV.x, input.vUV.y),
         );
 
@@ -548,7 +559,7 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
         const count = u.lightCount;
         const a = u.alpha;
         for (let i = d.u32(0); i < count; i++) {
-            const L = meshLayout.$.lights[i];
+            const L = mesh.lights[i];
             const pos = d.vec3f(
                 std.mix(L.prevPosX, L.currPosX, a),
                 std.mix(L.prevPosY, L.currPosY, a),
@@ -576,17 +587,8 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
 
         const mapped = tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, texColor.w);
-    };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout, texLayout, lightContribution, tonemap }), false, { d, std, meshLayout, texLayout }, _WSFT);
-    return tgpu.fragmentFn({
-        in: {
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vUV: d.vec2f,
-            vWorldPos: d.vec3f,
         },
-        out: d.vec4f,
-    })(fn as any);
+    );
 }
 
 // =============================================================================
@@ -594,7 +596,7 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
 // =============================================================================
 
 export function createSkinnedMeshLayout(maxInstances: number, maxBones: number, maxLights: number = MAX_LIGHTS) {
-    return tgpu.bindGroupLayout({
+    return new GpuBindGroupLayout({
         uniforms: { uniform: MeshUniforms },
         dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
         staticInstances: { storage: d.arrayOf(SkinnedStaticMesh, maxInstances) },
@@ -609,11 +611,31 @@ export function createSkinnedMeshLayout(maxInstances: number, maxBones: number, 
 export type SkinnedMeshDataLayout = ReturnType<typeof createSkinnedMeshLayout>;
 
 export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
-    const fn = function(input: { position: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; uv: { x: number; y: number }; joints: { x: number; y: number; z: number; w: number }; weights: { x: number; y: number; z: number; w: number }; instanceIndex: number }) {
-        const slot = layout.$.slotIndices[input.instanceIndex];
-        const dyn = layout.$.dynamicInstances[slot];
-        const stat = layout.$.staticInstances[slot];
-        const alpha = layout.$.uniforms.alpha;
+    return GpuShader.vertex(
+        {
+            in: {
+                position: d.location(0, d.vec3f),
+                normal: d.location(1, d.vec3f),
+                uv: d.location(2, d.vec2f),
+                joints: d.location(3, d.vec4u),
+                weights: d.location(4, d.vec4f),
+                instanceIndex: d.builtin.instanceIndex,
+            },
+            out: {
+                pos: d.builtin.position,
+                vNormal: d.vec3f,
+                vColor: d.vec3f,
+                vUV: d.vec2f,
+                vWorldPos: d.vec3f,
+                vCustom: d.vec2f,
+            },
+            bindings: { mesh: layout },
+        },
+        (input, { mesh }) => {
+        const slot = mesh.slotIndices[input.instanceIndex];
+        const dyn = mesh.dynamicInstances[slot];
+        const stat = mesh.staticInstances[slot];
+        const alpha = mesh.uniforms.alpha;
         const boneOffset = stat.boneOffset;
 
         // --- Skinning: blend 4 bone matrices ---
@@ -628,7 +650,7 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
 
         // Read bone matrices as full mat4x4f by value (TypeGPU returns by value
         // for d.arrayOf(d.mat4x4f, ...) storage buffers).
-        const bm = layout.$.boneMatrices;
+        const bm = mesh.boneMatrices;
         const m0 = bm[(d.i32(boneOffset) + d.i32(j0))];
         const m1 = bm[(d.i32(boneOffset) + d.i32(j1))];
         const m2 = bm[(d.i32(boneOffset) + d.i32(j2))];
@@ -733,7 +755,7 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
         );
 
         // @ts-ignore — TGSL: matrix * vector
-        const clipPos = layout.$.uniforms.viewProjection * worldPos as unknown as d.v4f;
+        const clipPos = mesh.uniforms.viewProjection * worldPos as unknown as d.v4f;
 
         return {
             pos: clipPos,
@@ -744,26 +766,8 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
             // SkinnedStaticMesh has no custom slots; keep the varying at location 4.
             vCustom: d.vec2f(0.0, 0.0),
         };
-    };
-    attachShaderMetadata(fn, () => ({ d, std, layout }), false, { d, std, layout }, _WSSK);
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            uv: d.location(2, d.vec2f),
-            joints: d.location(3, d.vec4u),
-            weights: d.location(4, d.vec4f),
-            instanceIndex: d.builtin.instanceIndex,
         },
-        out: {
-            pos: d.builtin.position,
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vUV: d.vec2f,
-            vWorldPos: d.vec3f,
-            vCustom: d.vec2f,
-        },
-    })(fn as any);
+    );
 }
 
 /**
@@ -771,13 +775,33 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
  * normal for inverted-hull outlines on animated models.
  */
 export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, matLayout: any) {
-    const fn = function(input: { position: { x: number; y: number; z: number }; normal: { x: number; y: number; z: number }; uv: { x: number; y: number }; joints: { x: number; y: number; z: number; w: number }; weights: { x: number; y: number; z: number; w: number }; instanceIndex: number }) {
-        const slot = layout.$.slotIndices[input.instanceIndex];
-        const dyn = layout.$.dynamicInstances[slot];
-        const stat = layout.$.staticInstances[slot];
-        const alpha = layout.$.uniforms.alpha;
+    return GpuShader.vertex(
+        {
+            in: {
+                position: d.location(0, d.vec3f),
+                normal: d.location(1, d.vec3f),
+                uv: d.location(2, d.vec2f),
+                joints: d.location(3, d.vec4u),
+                weights: d.location(4, d.vec4f),
+                instanceIndex: d.builtin.instanceIndex,
+            },
+            out: {
+                pos: d.builtin.position,
+                vNormal: d.vec3f,
+                vColor: d.vec3f,
+                vUV: d.vec2f,
+                vWorldPos: d.vec3f,
+                vCustom: d.vec2f,
+            },
+            bindings: { mesh: layout, mat: matLayout },
+        },
+        (input, { mesh, mat }) => {
+        const slot = mesh.slotIndices[input.instanceIndex];
+        const dyn = mesh.dynamicInstances[slot];
+        const stat = mesh.staticInstances[slot];
+        const alpha = mesh.uniforms.alpha;
         const boneOffset = stat.boneOffset;
-        const ext = matLayout.$.material.extrude;
+        const ext = mat.material.extrude;
 
         const j0 = input.joints.x;
         const j1 = input.joints.y;
@@ -788,7 +812,7 @@ export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, m
         const w2 = input.weights.z;
         const w3 = input.weights.w;
 
-        const bm = layout.$.boneMatrices;
+        const bm = mesh.boneMatrices;
         const m0 = bm[(d.i32(boneOffset) + d.i32(j0))];
         const m1 = bm[(d.i32(boneOffset) + d.i32(j1))];
         const m2 = bm[(d.i32(boneOffset) + d.i32(j2))];
@@ -887,7 +911,7 @@ export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, m
         );
 
         // @ts-ignore
-        const clipPos = layout.$.uniforms.viewProjection * worldPos as unknown as d.v4f;
+        const clipPos = mesh.uniforms.viewProjection * worldPos as unknown as d.v4f;
 
         return {
             pos: clipPos,
@@ -897,26 +921,8 @@ export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, m
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
             vCustom: d.vec2f(0.0, 0.0),
         };
-    };
-    attachShaderMetadata(fn, () => ({ d, std, layout, matLayout }), false, { d, std, layout, matLayout } as any, _WSSK);
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            uv: d.location(2, d.vec2f),
-            joints: d.location(3, d.vec4u),
-            weights: d.location(4, d.vec4f),
-            instanceIndex: d.builtin.instanceIndex,
         },
-        out: {
-            pos: d.builtin.position,
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vUV: d.vec2f,
-            vWorldPos: d.vec3f,
-            vCustom: d.vec2f,
-        },
-    })(fn as any);
+    );
 }
 
 /**
@@ -927,8 +933,15 @@ export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, m
  * UV is simply unused here. Lighting matches createMeshFragment.
  */
 export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
-    const fn = function(input: { vNormal: { x: number; y: number; z: number }; vColor: { x: number; y: number; z: number }; vUV: { x: number; y: number }; vWorldPos: { x: number; y: number; z: number } }) {
-        const u = meshLayout.$.uniforms;
+    return GpuShader.fragment(
+        {
+            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f },
+            out: d.vec4f,
+            bindings: { mesh: meshLayout },
+            helpers: { lightContribution, tonemap },
+        },
+        (input, { mesh }) => {
+        const u = mesh.uniforms;
         const baseColor = input.vColor;
         const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
         const normal = std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z));
@@ -945,7 +958,7 @@ export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
         const count = u.lightCount;
         const a = u.alpha;
         for (let i = d.u32(0); i < count; i++) {
-            const L = meshLayout.$.lights[i];
+            const L = mesh.lights[i];
             const pos = d.vec3f(
                 std.mix(L.prevPosX, L.currPosX, a),
                 std.mix(L.prevPosY, L.currPosY, a),
@@ -973,17 +986,8 @@ export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
 
         const mapped = tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, 1.0);
-    };
-    attachShaderMetadata(fn, () => ({ d, std, meshLayout, lightContribution, tonemap }), false, { d, std, meshLayout }, _WSF);
-    return tgpu.fragmentFn({
-        in: {
-            vNormal: d.vec3f,
-            vColor: d.vec3f,
-            vUV: d.vec2f,
-            vWorldPos: d.vec3f,
         },
-        out: d.vec4f,
-    })(fn as any);
+    );
 }
 
     export { createTexturedMeshFragment as createSkinnedTexturedMeshFragment };

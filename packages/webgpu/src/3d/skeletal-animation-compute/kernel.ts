@@ -57,7 +57,8 @@ export function buildAnimationKernel(
             matrices:     { storage: d.arrayOf(d.mat4x4f, budgets.matricesCapacity) },
             boneMatrices: { storage: d.arrayOf(d.mat4x4f, maxTotalBones), readwrite: true },
         })
-        .shader(({ uniforms, instances, skelI32, animF32, matrices, boneMatrices }, { globalId }) => {
+        .shader(({ globalId }, { buffers }) => {
+            const { uniforms, instances, skelI32, animF32, matrices, boneMatrices } = buffers;
             'use gpu';
             const idx = globalId.x;
             // @ts-ignore — TGSL struct field access

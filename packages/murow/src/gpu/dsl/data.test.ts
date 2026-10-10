@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { d } from './d';
+import { d } from './data';
 import type { IrConstruct, IrLiteral } from '../ir/nodes';
-import { bool, f32, i32, mat, struct, u32, vec } from '../ir/types';
+import { bool, f32, i32, mat, u32, vec } from '../ir/types';
+import { f32 as f32Field, vec3f as vec3fField } from '../schema/primitives';
 
 describe('d scalars', () => {
     test('numeric literals carry their type', () => {
@@ -37,19 +38,9 @@ describe('d composites', () => {
         expect(node.args).toHaveLength(3);
     });
 
-    test('struct orders args by field', () => {
-        const type = struct('S', [
-            { name: 'a', type: f32() },
-            { name: 'b', type: vec('f32', 3) },
-        ]);
-        const node = d.struct(type, { b: d.vec3f(1, 2, 3), a: d.f32(1) }).node as IrConstruct;
-        expect(node.type).toEqual(type);
-        expect(node.args).toHaveLength(2);
-        expect((node.args[0] as IrLiteral).value).toBe(1);
-    });
-
-    test('struct throws on a missing field', () => {
-        const type = struct('S', [{ name: 'a', type: f32() }]);
-        expect(() => d.struct(type, {})).toThrow();
+    test('struct builds a schema with the declared fields', () => {
+        const material = d.struct({ a: f32Field, b: vec3fField });
+        expect(material.type.kind).toBe('struct');
+        expect(material.fields.map((field) => field.name)).toEqual(['a', 'b']);
     });
 });

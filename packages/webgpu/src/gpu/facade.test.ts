@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { lightContribution, tonemap } from 'murow/gpu/dsl';
-import { d } from './data';
+import { d } from 'murow/gpu/dsl';
 import { handleView } from './environment';
-import { std } from './std';
+import { std } from 'murow/gpu/dsl';
 import { tgpu } from './tgpu';
 
 describe('facade shader lowering', () => {
