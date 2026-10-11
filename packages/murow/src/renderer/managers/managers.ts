@@ -186,6 +186,7 @@ export class RendererManagers {
             getSkinModel: (i) => deps.core.models.skinnedModel(i),
             skinnedModelCount: () => deps.core.models.skinnedModelCount(),
         });
+        this.animation = animation;
 
         deps.core.models = new ModelLibrary({
             device: deps.core.device,

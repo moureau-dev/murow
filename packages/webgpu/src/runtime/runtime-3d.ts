@@ -66,7 +66,7 @@ import type {
     LightHandle,
     MeshInstanceOptions,
     WebGPU3DRendererOptions,
-} from '../3d/renderer/types';
+} from 'murow/renderer/managers/runtime';
 
 /** Compute auto-sizing stats from a loaded prefab bucket. */
 function computeBucketStats(bucket: PrefabBucket3D): { maxSkinnedParts: number; maxJointCount: number } {

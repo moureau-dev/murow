@@ -104,9 +104,3 @@ export const HELPER_WGSL: Record<string, string> = {
     lightContribution: LIGHT_CONTRIBUTION_WGSL,
     tonemap: TONEMAP_WGSL,
 };
-
-/** Lowercase aliases kept for call sites that import a single helper. */
-export const noise = NOISE_WGSL;
-export const snoise = SNOISE_WGSL;
-export const lightContribution = LIGHT_CONTRIBUTION_WGSL;
-export const tonemap = TONEMAP_WGSL;

@@ -190,6 +190,8 @@ class Parser {
     private namespaceStd = '';
     /** Names bound by destructured parameters, mapped to their namespace kind. */
     private readonly destructured: Record<string, 'params' | 'material' | 'std'> = Object.create(null);
+    /** Destructured local name -> bound slot key (they differ when a bundler renames the local). */
+    private readonly destructuredKey: Record<string, string> = Object.create(null);
 
     constructor(
         private readonly tokens: Token[],
@@ -217,11 +219,11 @@ class Parser {
     private parseArrowHeader(): void {
         // Accept `(a, b, c) =>`, `a =>`, `({ a, b }) =>`, or a plain `{ ... }` body.
         if (this.startsBlock()) return;
-        const names: Array<string | string[]> = [];
-        const readPattern = (): string | string[] => {
+        const names: Array<string | Array<{ name: string; key: string }>> = [];
+        const readPattern = (): string | Array<{ name: string; key: string }> => {
             if (this.peekPunc('{')) {
                 this.next();
-                const bound: string[] = [];
+                const bound: Array<{ name: string; key: string }> = [];
                 while (!this.peekPunc('}')) {
                     const key = this.next();
                     if (key.kind !== 'ident') throw this.error('expected a bind name', key);
@@ -230,7 +232,7 @@ class Parser {
                         this.next();
                         binding = this.next().value;
                     }
-                    bound.push(binding);
+                    bound.push({ name: binding, key: key.value });
                     if (this.peekPunc(',')) this.next();
                 }
                 this.expectPunc('}');
@@ -257,7 +259,7 @@ class Parser {
         for (let i = 0; i < names.length; i++) {
             const entry = names[i]!;
             const kind = kinds[i] ?? 'params';
-            if (Array.isArray(entry)) for (const name of entry) this.destructured[name] = kind;
+            if (Array.isArray(entry)) for (const b of entry) { this.destructured[b.name] = kind; this.destructuredKey[b.name] = b.key; }
         }
         const first = names[0];
         const second = names[1];
@@ -303,10 +305,16 @@ class Parser {
                 return [discardStmt()];
             }
         }
-        // Expression statement.
-        const expr = this.parseExpression();
+        // Expression statement, possibly a comma sequence (`a = x, b = y`).
+        const stmts: IrStmt[] = [];
+        for (;;) {
+            const expr = this.parseExpression();
+            if (isStmtNode(expr)) stmts.push(expr as IrStmt);
+            if (this.peekPunc(',')) { this.next(); continue; }
+            break;
+        }
         this.consumeSemicolon();
-        if (isStmtNode(expr)) return [expr as IrStmt];
+        if (stmts.length > 0) return stmts;
         throw this.error('parseShader: unsupported expression statement');
     }
 
@@ -648,12 +656,12 @@ class Parser {
             const destructured = this.destructured[token.value];
             if (destructured) {
                 if (destructured === 'params') {
-                    const value = this.params[token.value];
+                    const value = this.params[this.destructuredKey[token.value] ?? token.value];
                     if (!value) throw this.error(`unknown input '${token.value}'`, token);
                     return value;
                 }
                 if (destructured === 'material') {
-                    const value = this.material[token.value];
+                    const value = this.material[this.destructuredKey[token.value] ?? token.value];
                     if (value !== undefined) return value;
                     // Otherwise fall through: the name may be a helper external.
                 } else {
@@ -718,6 +726,9 @@ class Parser {
             break;
         }
         if (path.length === 0) return undefined;
+        // Bare-helper path: `renamedNs.lightContribution` where the helper is a
+        // flat external (`externals.lightContribution`), not a namespace member.
+        if (path.length === 1 && candidates[path[0]!] !== undefined) return { [path[0]!]: candidates[path[0]!] };
         for (const key of Object.keys(candidates)) {
             let value: unknown = candidates[key];
             let ok = true;
@@ -834,7 +845,9 @@ class Parser {
     }
     private consumeSemicolon(): void { if (this.peekPunc(';')) this.next(); }
     private error(message: string, token?: Token): Error {
-        return new Error(`${message}${token ? ` (at ${token.start})` : ''}`);
+        const idx = token ? this.tokens.indexOf(token) : this.pos;
+        const around = this.tokens.slice(Math.max(0, idx - 30), idx + 20).map((t) => (t === token ? `>>${t.value}<<` : t.value)).join(' ');
+        return new Error(`${message}${token ? ` (at ${token.start})` : ''} :: ${around}`);
     }
 }
 

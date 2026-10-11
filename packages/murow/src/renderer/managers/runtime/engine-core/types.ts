@@ -5,7 +5,8 @@
  * All fields are f32 to guarantee contiguous layout matching our flat Float32Arrays.
  * No vec2f/vec4f here — that would introduce alignment padding.
  */
-import { d } from 'murow/gpu';
+import { d } from '../gpu-ns';
+
 
 // --- 2D Sprite Instance Data ---
 

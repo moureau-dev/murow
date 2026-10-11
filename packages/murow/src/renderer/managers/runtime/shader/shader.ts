@@ -5,7 +5,9 @@
  * Instance data from storage buffers (TRS + color) via index buffer indirection.
  * Basic diffuse lighting.
  */
-import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
+import { GpuBindGroupLayout, GpuShader } from 'murow/gpu';
+import { d, std } from '../gpu-ns';
+
 import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms, Light } from '../engine-core/types';
 import { lightContribution, tonemap } from '../shaders/utils';
 

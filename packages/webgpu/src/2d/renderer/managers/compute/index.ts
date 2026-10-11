@@ -1,1 +1,0 @@
-export { ComputeManager } from './compute';

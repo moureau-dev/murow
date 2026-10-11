@@ -1,4 +1,5 @@
-import { d, std } from 'murow/gpu';
+import { d, std } from '../gpu-ns';
+
 
 import type { MaterialSpec } from '../materials/specs';
 

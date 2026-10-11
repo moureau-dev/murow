@@ -25,7 +25,9 @@ async function main() {
             outdir: 'dist/esm',
             format: 'esm',
             platform: 'neutral',
-            minify: true,
+            minifyWhitespace: true,
+            minifyIdentifiers: false,
+            minifySyntax: false,
         }),
         build({
             entryPoints,
@@ -33,7 +35,9 @@ async function main() {
             outdir: 'dist/cjs',
             format: 'cjs',
             platform: 'neutral',
-            minify: true,
+            minifyWhitespace: true,
+            minifyIdentifiers: false,
+            minifySyntax: false,
         }),
     ]);
 }

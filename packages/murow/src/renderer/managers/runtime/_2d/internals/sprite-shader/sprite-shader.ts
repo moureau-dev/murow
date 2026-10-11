@@ -6,7 +6,9 @@
  *
  * NOTE: TGSL bodies must use `function` syntax, not arrow functions.
  */
-import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
+import { GpuBindGroupLayout, GpuShader } from 'murow/gpu';
+import { d, std } from '../../../gpu-ns';
+
 
 import { DynamicSprite, StaticSprite, SpriteUniforms } from '../../../engine-core/types';
 

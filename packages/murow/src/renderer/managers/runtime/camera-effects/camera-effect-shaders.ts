@@ -1,4 +1,5 @@
-import { d } from 'murow/gpu';
+import { d } from '../gpu-ns';
+
 
 /** Shared uniforms for custom camera effects: time + drawable resolution. */
 export const EFFECT_SCENE_UNIFORMS = d.struct({

@@ -1,1 +1,0 @@
-export { GeometryManager } from './geometry';

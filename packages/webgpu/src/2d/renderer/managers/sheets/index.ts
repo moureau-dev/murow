@@ -1,1 +1,0 @@
-export { SpritesheetManager } from './sheets';
