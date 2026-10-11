@@ -1,3 +1,5 @@
+import { sizeOf } from 'murow/gpu/dsl';
+import type { RendererRuntime } from '../backend';
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 /**
  * GeometryBuilder — fluent builder for custom instanced geometries.
@@ -24,14 +26,13 @@ import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent,
  * ```
  */
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
-import { compileProgram, createGpuBindGroupLayout, createRawBuffer, sizeOf, getPresentation } from '../backend';
 
 // Stable local names: shader bodies are parsed from their source, so bundlers
 // must not rename `d`/`std` inside them.
 import type { BuiltInGeometry, GeometryData } from './built-in';
 import { resolveBuiltInGeometry } from './built-in';
 import { SlotMap } from 'murow/core/slot-map';
-import type { ComputeKernel } from '../compute/compute-builder';
+type ComputeKernel<T = any> = any;
 
 type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 
@@ -231,6 +232,7 @@ export class CustomGeometry<
     private clearColor: [number, number, number, number];
 
     /** @internal — use GeometryBuilder to create instances. */
+    private runtime!: RendererRuntime;
     constructor(
         name: string, device: RawDevice, maxInstances: number, geometryData: GeometryData,
         layoutConfig: InstanceLayoutConfig<TDynamic, TStatic>,
@@ -240,8 +242,11 @@ export class CustomGeometry<
         pipeline: RawRenderPipeline, dataBindGroup: RawBindGroup,
         canvas: HTMLCanvasElement, clearColor: [number, number, number, number],
         isComputeSourced = false,
+        runtime: RendererRuntime,
     ) {
+        this.runtime = runtime;
         this.name = name;
+        this.runtime = runtime;
         this.device = device;
         this.maxInstances = maxInstances;
         this.geometryData = geometryData;
@@ -380,7 +385,7 @@ export class CustomGeometry<
         const count = this._isComputeSourced ? this._drawCount : this.slots.size;
         if (count === 0) return;
 
-        const context = getPresentation().context;
+        const context = this.runtime.presentation.context;
         if (!context) return;
         const view = context.getCurrentTexture().createView();
 
@@ -701,7 +706,9 @@ export class GeometryBuilder<
     private _canvas: HTMLCanvasElement;
     private _clearColor: [number, number, number, number];
 
-    constructor(name: string, options: GeometryOptions, root: { device: RawDevice }, format: RawTextureFormat, canvas: HTMLCanvasElement, clearColor: [number, number, number, number]) {
+    private runtime!: RendererRuntime;
+    constructor(name: string, options: GeometryOptions, root: { device: RawDevice }, format: RawTextureFormat, canvas: HTMLCanvasElement, clearColor: [number, number, number, number], runtime: RendererRuntime) {
+        this.runtime = runtime;
         this._name = name;
         this._options = options;
         this._root = root;
@@ -979,11 +986,11 @@ export class GeometryBuilder<
         const device = root.device;
         const dynamicBuffer = this._computeSource
             ? this._computeSource.kernel.getBuffer(this._computeSource.bufferName)
-            : createRawBuffer(device, d.arrayOf(DynStruct, maxInstances), 'storage');
-        const staticBuffer = createRawBuffer(device, d.arrayOf(StatStruct, maxInstances), 'storage');
-        const uniformBuffer = createRawBuffer(device, UniformStruct, 'uniform');
+            : this.runtime.createRawBuffer(d.arrayOf(DynStruct, maxInstances), 'storage');
+        const staticBuffer = this.runtime.createRawBuffer(d.arrayOf(StatStruct, maxInstances), 'storage');
+        const uniformBuffer = this.runtime.createRawBuffer(UniformStruct, 'uniform');
 
-        const dataBgl = createGpuBindGroupLayout(device, dataLayout.toDescriptor());
+        const dataBgl = this.runtime.createBindGroupLayout(dataLayout.toDescriptor());
         const dataBindGroup = device.createBindGroup({
             layout: dataBgl,
             entries: [
@@ -993,7 +1000,7 @@ export class GeometryBuilder<
             ],
         });
 
-        const { code } = compileProgram([this._vertexFn as any, this._fragmentFn as any]);
+        const { code } = this.runtime.compile([this._vertexFn as any, this._fragmentFn as any]);
         const module = device.createShaderModule({ code, label: this._name });
         const pipeline = device.createRenderPipeline({
             label: this._name,
@@ -1020,6 +1027,7 @@ export class GeometryBuilder<
             pipeline, dataBindGroup,
             this._canvas, this._clearColor,
             !!this._computeSource,
+            this.runtime,
         );
     }
 }

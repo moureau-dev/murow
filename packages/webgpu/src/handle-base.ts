@@ -1,1 +1,1 @@
-export type { HandleBase } from 'murow/renderer';
+export type { HandleBase } from 'murow/renderer/managers';

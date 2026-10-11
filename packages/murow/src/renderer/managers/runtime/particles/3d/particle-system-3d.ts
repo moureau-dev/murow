@@ -1,9 +1,8 @@
+import type { RendererRuntime } from '../../backend';
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
-import { compileProgram, createGpuBindGroupLayout, createRawBuffer } from '../../backend';
 
-
-import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
+type ComputeKernel<T = any> = any;
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotMap } from 'murow/core/slot-map';
 import { Logger } from 'murow/core';
@@ -61,8 +60,6 @@ const DrawArgs = d.struct({
     firstVertex: d.u32,
     firstInstance: d.u32,
 });
-
-
 
 export type ParticleBlend = 'additive' | 'alpha';
 
@@ -142,6 +139,7 @@ export interface ParticleEmitter3D {
 }
 
 export interface ParticleSystem3DOptions {
+    runtime: RendererRuntime;
     root: { device: RawDevice };
     /** Target color format. */
     format: RawTextureFormat;
@@ -158,7 +156,6 @@ export interface ParticleSystem3DOptions {
     /** Diagnostic logger for non-fatal warnings. Defaults to a no-op. */
     logger?: Logger;
 }
-
 
 interface ParticleMaterial {
     key: string;
@@ -180,6 +177,7 @@ function nextPowerOfTwo(n: number): number {
  * camera-facing quads batched by material.
  */
 export class ParticleSystem3D {
+    private readonly runtime!: RendererRuntime;
     private readonly device: RawDevice;
     private readonly format: RawTextureFormat;
     private readonly max: number;
@@ -232,6 +230,7 @@ export class ParticleSystem3D {
     private cullFrustum: Frustum | null = null;
 
     constructor(options: ParticleSystem3DOptions) {
+        this.runtime = options.runtime;
         const { root, format } = options;
         this.device = root.device;
         this.format = format;
@@ -248,16 +247,16 @@ export class ParticleSystem3D {
         this.emitters = new Array(this.maxEmitters).fill(null);
         this.countsZero = new Uint32Array(this.maxMaterials);
 
-        this.pool = createRawBuffer(this.device, d.arrayOf(Particle3D, this.max), 'storage');
-        this.spawns = createRawBuffer(this.device, d.arrayOf(Particle3D, this.maxSpawns), 'storage');
-        this.computeFrame = createRawBuffer(this.device, ComputeFrame, 'uniform');
+        this.pool = this.runtime.createRawBuffer(d.arrayOf(Particle3D, this.max), 'storage');
+        this.spawns = this.runtime.createRawBuffer(d.arrayOf(Particle3D, this.maxSpawns), 'storage');
+        this.computeFrame = this.runtime.createRawBuffer(ComputeFrame, 'uniform');
         this.spawnStaging = new Float32Array(this.maxSpawns * PARTICLE_3D_STRIDE);
 
         const spawns = this.spawns;
         const pool = this.pool;
         const frame = this.computeFrame;
 
-        this.spawnKernel = new ComputeBuilder('particles-spawn', { workgroupSize: 64 }, root)
+        this.spawnKernel = new this.runtime.compute.ComputeBuilder('particles-spawn', { workgroupSize: 64 }, root)
             .buffers({
                 particles: { storage: d.arrayOf(Particle3D, this.max), readwrite: true, external: pool },
                 spawnRecords: { storage: d.arrayOf(Particle3D, this.maxSpawns), external: spawns },
@@ -296,7 +295,7 @@ export class ParticleSystem3D {
             })
             .build();
 
-        this.integrateKernel = new ComputeBuilder('particles-integrate', { workgroupSize: 64 }, root)
+        this.integrateKernel = new this.runtime.compute.ComputeBuilder('particles-integrate', { workgroupSize: 64 }, root)
             .buffers({
                 particles: { storage: d.arrayOf(Particle3D, this.max), readwrite: true, external: pool },
                 frame: { uniform: ComputeFrame, external: frame },
@@ -331,14 +330,14 @@ export class ParticleSystem3D {
 
         // Per-material compaction: atomic counters + a compacted index list, then
         // an indirect-args buffer, so each material draws only its live particles.
-        this.counts = createRawBuffer(this.device, d.arrayOf(d.atomic(d.u32), this.maxMaterials), 'storage');
-        this.indices = createRawBuffer(this.device, d.arrayOf(d.u32, this.maxMaterials * this.max), 'storage');
-        this.args = createRawBuffer(this.device, d.arrayOf(DrawArgs, this.maxMaterials), ['storage', 'indirect']);
+        this.counts = this.runtime.createRawBuffer(d.arrayOf(d.atomic(d.u32), this.maxMaterials), 'storage');
+        this.indices = this.runtime.createRawBuffer(d.arrayOf(d.u32, this.maxMaterials * this.max), 'storage');
+        this.args = this.runtime.createRawBuffer(d.arrayOf(DrawArgs, this.maxMaterials), ['storage', 'indirect']);
         const counts = this.counts;
         const indices = this.indices;
         const args = this.args;
 
-        this.compactKernel = new ComputeBuilder('particles-compact', { workgroupSize: 64 }, root)
+        this.compactKernel = new this.runtime.compute.ComputeBuilder('particles-compact', { workgroupSize: 64 }, root)
             .buffers({
                 particles: { storage: d.arrayOf(Particle3D, this.max), external: pool },
                 counts: { storage: d.arrayOf(d.atomic(d.u32), this.maxMaterials), readwrite: true, external: counts },
@@ -360,7 +359,7 @@ export class ParticleSystem3D {
             })
             .build();
 
-        this.argsKernel = new ComputeBuilder('particles-args', { workgroupSize: this.maxMaterials }, root)
+        this.argsKernel = new this.runtime.compute.ComputeBuilder('particles-args', { workgroupSize: this.maxMaterials }, root)
             .buffers({
                 counts: { storage: d.arrayOf(d.atomic(d.u32), this.maxMaterials), readwrite: true, external: counts },
                 args: { storage: d.arrayOf(DrawArgs, this.maxMaterials), readwrite: true, external: args },
@@ -458,9 +457,9 @@ export class ParticleSystem3D {
             },
         );
 
-        const { code } = compileProgram([vertex, fragment]);
+        const { code } = this.runtime.compile([vertex, fragment]);
         const module = this.device.createShaderModule({ code, label: 'particles-3d' });
-        const pipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [createGpuBindGroupLayout(this.device, layout.toDescriptor())] });
+        const pipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.runtime.createBindGroupLayout(layout.toDescriptor())] });
         const target = (blend: RawBlendState | undefined): RawColorTargetState => ({ format, blend });
         this.additivePipeline = this.device.createRenderPipeline({
             label: 'particles-3d-additive',
@@ -652,7 +651,7 @@ export class ParticleSystem3D {
         const atlas = spec.atlas;
         this.device.queue.writeBuffer(buffer, 0, new Float32Array([id, useTexture, id * this.max, atlas?.cols ?? 1, atlas?.rows ?? 1, atlas?.fps ?? 0, 0, 0]));
         const bindGroup = this.device.createBindGroup({
-            layout: createGpuBindGroupLayout(this.device, this.layout.toDescriptor()),
+            layout: this.runtime.createBindGroupLayout(this.layout.toDescriptor()),
             entries: [
                 { binding: 0, resource: { buffer: this.renderFrame } },
                 { binding: 1, resource: { buffer: this.pool } },

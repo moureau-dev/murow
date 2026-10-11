@@ -1,7 +1,6 @@
+import type { RendererRuntime } from '../backend';
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
-import { compileProgram, createGpuBindGroupLayout } from '../backend';
-
 
 import { DynamicMesh, SkinnedStaticMesh, StaticMesh } from '../engine-core/types';
 import type { RendererCore } from '../core/renderer-core';
@@ -20,6 +19,7 @@ export const ShadowUniforms = d.struct({
 });
 
 export interface ShadowSystemDeps {
+    runtime: RendererRuntime;
     core: RendererCore;
     maxInstances: number;
     /** Skinned sizing; enables skinned casters when provided. */
@@ -57,6 +57,7 @@ const FLOATS = 16 + 4 + 4;
  * against it with a 3x3 PCF.
  */
 export class ShadowSystem {
+    private readonly runtime!: RendererRuntime;
     private readonly device: RawDevice;
     private readonly maxInstances: number;
     /** Slot indices of casters, written per frame from the all-instance list. */
@@ -97,6 +98,7 @@ export class ShadowSystem {
     private resolutionHook: (() => void) | null = null;
 
     constructor(deps: ShadowSystemDeps, options: ShadowOptions = {}) {
+        this.runtime = deps.runtime;
         this.device = deps.core.device;
         this.maxInstances = deps.maxInstances;
         this.resolutionValue = options.resolution ?? 2048;
@@ -127,9 +129,9 @@ export class ShadowSystem {
         this.layout = createShadowLayout(deps.maxInstances);
         const vertex = createShadowVertex(this.layout);
         const fragment = createShadowFragment();
-        const { code } = compileProgram([vertex, fragment]);
+        const { code } = this.runtime.compile([vertex, fragment]);
         const module = this.device.createShaderModule({ code, label: 'shadow-map' });
-        const bgl = createGpuBindGroupLayout(this.device, this.layout.toDescriptor());
+        const bgl = this.runtime.createBindGroupLayout(this.layout.toDescriptor());
         this.pipeline = this.device.createRenderPipeline({
             label: 'shadow-map',
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
@@ -168,9 +170,9 @@ export class ShadowSystem {
             });
             const skinnedLayout = createSkinnedShadowLayout(s.maxInstances, s.maxBones);
             const skinnedVertex = createSkinnedShadowVertex(skinnedLayout);
-            const { code: skinnedCode } = compileProgram([skinnedVertex, createShadowFragment()]);
+            const { code: skinnedCode } = this.runtime.compile([skinnedVertex, createShadowFragment()]);
             const skinnedModule = this.device.createShaderModule({ code: skinnedCode, label: 'shadow-skinned' });
-            const skinnedBgl = createGpuBindGroupLayout(this.device, skinnedLayout.toDescriptor());
+            const skinnedBgl = this.runtime.createBindGroupLayout(skinnedLayout.toDescriptor());
             this.skinnedPipeline = this.device.createRenderPipeline({
                 label: 'shadow-skinned',
                 layout: this.device.createPipelineLayout({ bindGroupLayouts: [skinnedBgl] }),

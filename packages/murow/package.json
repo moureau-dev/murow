@@ -145,6 +145,16 @@
       "import": "./dist/esm/renderer/managers/index.js",
       "require": "./dist/cjs/renderer/managers/index.js",
       "default": "./dist/esm/renderer/managers/index.js"
+    },
+    "./renderer/managers/runtime": {
+      "types": "./dist/types/renderer/managers/runtime/index.d.ts",
+      "import": "./dist/esm/renderer/managers/runtime/index.js",
+      "default": "./dist/esm/renderer/managers/runtime/index.js"
+    },
+    "./renderer/managers/runtime/*": {
+      "types": "./dist/types/renderer/managers/runtime/*.d.ts",
+      "import": "./dist/esm/renderer/managers/runtime/*.js",
+      "default": "./dist/esm/renderer/managers/runtime/*.js"
     }
   },
   "optionalDependencies": {

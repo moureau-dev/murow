@@ -1,7 +1,6 @@
+import type { RendererRuntime } from '../backend';
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
-import { compileProgram, createGpuBindGroupLayout } from '../backend';
-
 
 import { DynamicMesh, StaticMesh } from '../engine-core/types';
 import type { RendererCore } from '../core/renderer-core';
@@ -31,6 +30,7 @@ const PASS_FLOATS = 20;
 const FLOATS = MAX_SPOT_SHADOWS * 16 + MAX_SPOT_SHADOWS * 4 + 4;
 
 export interface SpotShadowSystemDeps {
+    runtime: RendererRuntime;
     core: RendererCore;
     maxInstances: number;
     /** Skinned sizing; enables skinned casters when provided. */
@@ -60,6 +60,7 @@ export interface SpotLightInput {
  * comparison is well-conditioned. Lit materials project into it and PCF-sample.
  */
 export class SpotShadowSystem {
+    private readonly runtime!: RendererRuntime;
     private readonly device: RawDevice;
     private readonly maxInstances: number;
     private readonly slotIndexBuffer: RawBuffer;
@@ -86,6 +87,7 @@ export class SpotShadowSystem {
     enabled = true;
 
     constructor(deps: SpotShadowSystemDeps, options: SpotShadowOptions = {}) {
+        this.runtime = deps.runtime;
         this.device = deps.core.device;
         this.maxInstances = deps.maxInstances;
         this.maxShadows = Math.max(1, Math.min(options.maxShadows ?? MAX_SPOT_SHADOWS, MAX_SPOT_SHADOWS));
@@ -105,9 +107,9 @@ export class SpotShadowSystem {
         this.layout = createSpotLayout(deps.maxInstances);
         const vertex = createSpotShadowVertex(this.layout);
         const fragment = createSpotShadowFragment(this.layout);
-        const { code } = compileProgram([vertex, fragment]);
+        const { code } = this.runtime.compile([vertex, fragment]);
         const module = this.device.createShaderModule({ code, label: 'spot-shadow' });
-        const bgl = createGpuBindGroupLayout(this.device, this.layout.toDescriptor());
+        const bgl = this.runtime.createBindGroupLayout(this.layout.toDescriptor());
         this.pipeline = this.device.createRenderPipeline({
             label: 'spot-shadow',
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
@@ -148,9 +150,9 @@ export class SpotShadowSystem {
             const skinnedLayout = createSkinnedLightLayout(SpotPassUniforms, s.maxInstances, s.maxBones);
             const sVertex = createSkinnedLightVertex(skinnedLayout);
             const sFragment = createLightDistanceFragment(skinnedLayout as never);
-            const { code: skinnedCode } = compileProgram([sVertex, sFragment]);
+            const { code: skinnedCode } = this.runtime.compile([sVertex, sFragment]);
             const skinnedModule = this.device.createShaderModule({ code: skinnedCode, label: 'spot-shadow-skinned' });
-            const skinnedBgl = createGpuBindGroupLayout(this.device, skinnedLayout.toDescriptor());
+            const skinnedBgl = this.runtime.createBindGroupLayout(skinnedLayout.toDescriptor());
             this.skinnedPipeline = this.device.createRenderPipeline({
                 label: 'spot-shadow-skinned',
                 layout: this.device.createPipelineLayout({ bindGroupLayouts: [skinnedBgl] }),

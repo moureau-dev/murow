@@ -3,7 +3,6 @@ import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
 import type { GpuStruct } from 'murow/gpu/schema';
 import { DynamicMesh, SkinnedStaticMesh } from '../engine-core/types';
 
-
 /**
  * Skinned layout for a light shadow pass: the same per-light uniform the
  * non-skinned pass uses, plus the skinning buffers. The pass struct is the

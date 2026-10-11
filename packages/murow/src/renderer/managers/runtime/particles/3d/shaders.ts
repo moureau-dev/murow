@@ -3,4 +3,3 @@ export const PARTICLE_3D_STRIDE = 21;
 /** f32 fields in the render frame uniform. */
 export const PARTICLE_3D_FRAME_FLOATS = 32;
 
-

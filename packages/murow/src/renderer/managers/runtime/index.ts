@@ -6,4 +6,3 @@ export * from './decals';
 export * from './particles/3d';
 export * from './camera/3d';
 export * from './models';
-export * from './compute';

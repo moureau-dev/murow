@@ -2,7 +2,6 @@ import { d, std } from 'murow/gpu';
 
 import type { MaterialSpec } from '../materials/specs';
 
-
 export interface DecalMaterialOptions {
     /** Atlas texture id from the AssetBucket. */
     atlas: string;

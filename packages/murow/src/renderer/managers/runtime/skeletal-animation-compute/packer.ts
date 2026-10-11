@@ -1,5 +1,4 @@
-import { getComputeProvider } from '../backend';
-
-export function packAnimationData(...args: any[]): any {
-    return getComputeProvider().packAnimationData(...args);
+import type { RendererRuntime } from '../backend';
+export function packAnimationData(runtime: RendererRuntime, ...args: any[]): any {
+    return runtime.compute.packAnimationData(...args);
 }

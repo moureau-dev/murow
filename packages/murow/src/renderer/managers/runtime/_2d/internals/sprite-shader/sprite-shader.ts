@@ -10,7 +10,6 @@ import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
 
 import { DynamicSprite, StaticSprite, SpriteUniforms } from '../../../engine-core/types';
 
-
 // --- Bind group layouts ---
 
 export function createSpriteLayout(maxSprites: number) {

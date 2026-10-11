@@ -1,4 +1,5 @@
-import { getShaderSource } from '../backend';
+import type { RendererRuntime } from '../backend';
+
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { placePart3D, type HitboxPart } from 'murow/core/hitbox';
 import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../engine-core/types';
@@ -87,6 +88,7 @@ const CAPACITY = 4096;
  * hitbox into `emit`; `flush` issues the per-entry draws.
  */
 export class HitboxDebugRenderer {
+    private runtime!: RendererRuntime;
     private device: RawDevice | null = null;
     private pipeline: RawRenderPipeline | null = null;
     private bindGroup: RawBindGroup | null = null;
@@ -103,7 +105,8 @@ export class HitboxDebugRenderer {
     private entries: { vbo: RawBuffer; vertexCount: number; offset: number }[] = [];
     private vp: Float32Array = new Float32Array(16);
 
-    init(device: RawDevice, format: RawTextureFormat): void {
+    init(runtime: RendererRuntime, device: RawDevice, format: RawTextureFormat): void {
+        this.runtime = runtime;
         this.device = device;
 
         const upload = (data: Float32Array): RawBuffer => {
@@ -145,7 +148,7 @@ export class HitboxDebugRenderer {
         });
 
         const shaderModule = device.createShaderModule({
-            code: getShaderSource('hitbox'),
+            code: this.runtime.shaderSource('hitbox'),
         });
 
         this.pipeline = device.createRenderPipeline({

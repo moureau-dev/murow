@@ -32,6 +32,7 @@ import { DEFAULT_CAPACITIES } from './runtime/defaults';
 /** Dependencies the managers need from the renderer. */
 export interface RendererManagersDeps {
     core: RendererCore;
+    runtime: import('./runtime/backend').RendererRuntime;
     logger: Logger;
     options: any;
     camera: CameraManager;
@@ -65,6 +66,7 @@ export class RendererManagers {
         const rendererOptions = this.deps.options as any;
         const maxLights = rendererOptions.maxLights ?? DEFAULT_CAPACITIES.lights;
         const shadowSystem = new ShadowSystem({
+            runtime: deps.runtime,
             core: deps.core,
             maxInstances: deps.maxInstances,
             skinned: {
@@ -74,6 +76,7 @@ export class RendererManagers {
         }, { resolution: (deps.options as any).shadowResolution ?? 2048 });
 
         const spotShadowSystem = new SpotShadowSystem({
+            runtime: deps.runtime,
             core: deps.core,
             maxInstances: deps.maxInstances,
             skinned: {
@@ -83,6 +86,7 @@ export class RendererManagers {
         }, { maxShadows: (deps.options as any).maxSpotShadows });
 
         const pointShadowSystem = new PointShadowSystem({
+            runtime: deps.runtime,
             core: deps.core,
             maxInstances: deps.maxInstances,
             skinned: {
@@ -106,6 +110,7 @@ export class RendererManagers {
         const maxParticles = rendererOptions.maxParticles ?? 4096;
         const lightSystem = new LightSystem(maxLights);
         const particleSystem = new ParticleSystem3D({
+            runtime: deps.runtime,
             root: deps.core.root,
             format: deps.core.format,
             maxParticles,
@@ -117,6 +122,7 @@ export class RendererManagers {
 
         const maxMaterials = rendererOptions.maxMaterials ?? DEFAULT_CAPACITIES.materials;
         const materialLibrary = new MaterialLibrary({
+            runtime: deps.runtime,
             root: deps.core.root,
             device: deps.core.device,
             pipelines: deps.core.pipelines,
@@ -166,6 +172,7 @@ export class RendererManagers {
         });
 
         const animation = new SkeletalRuntime({
+            runtime: deps.runtime,
             root: deps.core.root,
             device: deps.core.device,
             pipelines: deps.core.pipelines,

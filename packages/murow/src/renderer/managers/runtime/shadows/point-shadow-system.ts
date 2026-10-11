@@ -1,7 +1,6 @@
+import type { RendererRuntime } from '../backend';
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
-import { compileProgram, createGpuBindGroupLayout } from '../backend';
-
 
 import { DynamicMesh, StaticMesh } from '../engine-core/types';
 import type { RendererCore } from '../core/renderer-core';
@@ -29,6 +28,7 @@ const PointPassUniforms = d.struct({
 const PASS_FLOATS = 20;
 
 export interface PointShadowSystemDeps {
+    runtime: RendererRuntime;
     core: RendererCore;
     maxInstances: number;
     /** Skinned sizing; enables skinned casters when provided. */
@@ -64,6 +64,7 @@ const FACES: { f: [number, number, number]; r: [number, number, number] }[] = [
  * distance / far. Lit materials sample by light direction and compare distance.
  */
 export class PointShadowSystem {
+    private readonly runtime!: RendererRuntime;
     private readonly device: RawDevice;
     private readonly slotIndexBuffer: RawBuffer;
     private readonly sampler: RawSampler;
@@ -90,6 +91,7 @@ export class PointShadowSystem {
     enabled = false;
 
     constructor(deps: PointShadowSystemDeps, options: PointShadowOptions = {}) {
+        this.runtime = deps.runtime;
         this.device = deps.core.device;
         this.maxShadows = Math.max(1, Math.min(options.maxShadows ?? MAX_POINT_SHADOWS, MAX_POINT_SHADOWS));
         this.resolution = options.resolution ?? 512;
@@ -109,9 +111,9 @@ export class PointShadowSystem {
         this.layout = createPointLayout(deps.maxInstances);
         const vertex = createPointShadowVertex(this.layout);
         const fragment = createPointShadowFragment(this.layout);
-        const { code } = compileProgram([vertex, fragment]);
+        const { code } = this.runtime.compile([vertex, fragment]);
         const module = this.device.createShaderModule({ code, label: 'point-shadow' });
-        const bgl = createGpuBindGroupLayout(this.device, this.layout.toDescriptor());
+        const bgl = this.runtime.createBindGroupLayout(this.layout.toDescriptor());
         this.pipeline = this.device.createRenderPipeline({
             label: 'point-shadow',
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
@@ -152,9 +154,9 @@ export class PointShadowSystem {
             const skinnedLayout = createSkinnedLightLayout(PointPassUniforms, s.maxInstances, s.maxBones);
             const sVertex = createSkinnedLightVertex(skinnedLayout);
             const sFragment = createLightDistanceFragment(skinnedLayout as never);
-            const { code: skinnedCode } = compileProgram([sVertex, sFragment]);
+            const { code: skinnedCode } = this.runtime.compile([sVertex, sFragment]);
             const skinnedModule = this.device.createShaderModule({ code: skinnedCode, label: 'point-shadow-skinned' });
-            const skinnedBgl = createGpuBindGroupLayout(this.device, skinnedLayout.toDescriptor());
+            const skinnedBgl = this.runtime.createBindGroupLayout(skinnedLayout.toDescriptor());
             this.skinnedPipeline = this.device.createRenderPipeline({
                 label: 'point-shadow-skinned',
                 layout: this.device.createPipelineLayout({ bindGroupLayouts: [skinnedBgl] }),

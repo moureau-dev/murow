@@ -1,8 +1,9 @@
+import type { RendererRuntime } from '../../backend';
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import type { PrefabBucket3D, PackedAnimationData, ParsedGltf, SkeletalAnimation } from 'murow/renderer';
 import { createPackedAnimationData, packSkinAndAnimations } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../../engine-core/types';
-import type { ComputeKernel } from '../../compute/compute-builder';
+type ComputeKernel<T = any> = any;
 import type { Camera3D } from '../../cameras/camera-3d';
 import { buildAnimationKernel, uploadPackedToKernel, type AnimationKernelBudgets } from '../../skeletal-animation-compute/index';
 import { packAnimationData } from '../../skeletal-animation-compute/packer';
@@ -20,6 +21,7 @@ export interface SkinnedModelEntry {
 }
 
 export interface SkeletalRuntimeDeps {
+    runtime: RendererRuntime;
     root: { device: RawDevice };
     device: RawDevice;
     pipelines: MeshPipelines;
@@ -41,6 +43,7 @@ export interface SkeletalRuntimeDeps {
  * (or falls back to CPU), and owns the shared CPU bone-matrix buffer.
  */
 export class SkeletalRuntime {
+    private readonly runtime: RendererRuntime;
     /** CPU bone-matrix staging / rest-pose buffer, shared with the skinned store. */
     readonly boneMatrixData: Float32Array;
     /** Bumped whenever bone matrices are rewritten (some instance is animating). */
@@ -61,6 +64,7 @@ export class SkeletalRuntime {
     private clipResync: GltfClipResyncCoordinator | null = null;
 
     constructor(private readonly deps: SkeletalRuntimeDeps) {
+        this.runtime = deps.runtime;
         this.boneMatrixData = new Float32Array(deps.maxTotalBones * 16);
         this.updatedBoneOffsets = new Uint8Array(deps.maxTotalBones);
         this.gpuInstData = new Float32Array(deps.maxSkinnedInstances * 8);
@@ -129,7 +133,7 @@ export class SkeletalRuntime {
         if (this.needsRebuild && this.packedAnimData.clips.length > 0) {
             this.kernel?.destroy();
             const budgets = this.growBudgetsForPacked(this.packedAnimData, null);
-            const { kernel, packedBuffers } = buildAnimationKernel(
+            const { kernel, packedBuffers } = buildAnimationKernel(this.runtime, 
                 this.deps.root, this.packedAnimData, this.deps.maxSkinnedInstances, this.deps.maxTotalBones, budgets,
             );
             this.kernel = kernel;
@@ -334,7 +338,7 @@ export class SkeletalRuntime {
         packed: PackedAnimationData,
         previous: AnimationKernelBudgets | null,
     ): AnimationKernelBudgets {
-        const pb = packAnimationData(packed);
+        const pb = packAnimationData(this.runtime, packed);
         const grow = (cur: number, prev: number, floor: number) =>
             Math.max(cur * 2, prev, floor);
         return {
@@ -350,12 +354,12 @@ export class SkeletalRuntime {
         const budgets = this.budgets;
         if (!kernel || !budgets) return false;
 
-        const pb = packAnimationData(this.packedAnimData);
+        const pb = packAnimationData(this.runtime, this.packedAnimData);
         if (pb.skelI32.length  > budgets.skelI32Capacity)  return false;
         if (pb.animF32.length  > budgets.animF32Capacity)  return false;
         if (pb.totalMats       > budgets.matricesCapacity) return false;
 
-        uploadPackedToKernel(this.deps.root, kernel, pb);
+        uploadPackedToKernel(this.runtime, this.deps.root, kernel, pb);
         this.clipTableOffset = pb.clipTableOffset;
         this.channelTableOffset = pb.channelTableOffset;
         this.jointLookupOffset = pb.jointLookupOffset;

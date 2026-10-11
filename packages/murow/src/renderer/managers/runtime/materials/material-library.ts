@@ -1,6 +1,7 @@
+import { sizeOf } from 'murow/gpu/dsl';
+import type { RendererRuntime } from '../backend';
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
-import { compileProgram, createGpuBindGroupLayout, createRawBuffer, sizeOf } from '../backend';
 
 import { lightContribution, tonemap } from '../shaders/utils';
 
@@ -79,6 +80,7 @@ export interface CompiledMaterial {
 }
 
 export interface MaterialLibraryDeps {
+    runtime: RendererRuntime;
     root?: unknown;
     device: RawDevice;
     pipelines: MeshPipelines;
@@ -112,6 +114,7 @@ interface MaterialEntry {
 }
 
 export class MaterialLibrary {
+    private readonly runtime: RendererRuntime;
     private readonly slots: SlotMap;
     private readonly entries: (MaterialEntry | null)[];
     private readonly deps: MaterialLibraryDeps;
@@ -128,6 +131,7 @@ export class MaterialLibrary {
     readonly defaultMaterialId = 0;
 
     constructor(deps: MaterialLibraryDeps) {
+        this.runtime = deps.runtime;
         this.deps = deps;
         this.slots = new SlotMap(deps.maxMaterials);
         this.entries = new Array(deps.maxMaterials).fill(null);
@@ -243,7 +247,7 @@ export class MaterialLibrary {
 
     private createEngineMaterial(slot: number, spec: Extract<MaterialSpec, { type: 'standard' | 'unlit' | 'emissive' }>, state: ResolvedRenderState): MaterialEntry {
         const layout = createEngineMaterialLayout();
-        const buffer = createRawBuffer(this.deps.device, EngineMaterialUniforms, 'uniform');
+        const buffer = this.runtime.createRawBuffer(EngineMaterialUniforms, 'uniform');
         const color = spec.color ?? [1, 1, 1];
         const uvScale = spec.uvScale ?? [1, 1];
         const uvOffset = spec.uvOffset ?? [0, 0];
@@ -312,7 +316,7 @@ export class MaterialLibrary {
 
         const { vertex, fragment } = this.compileDeclarative(spec, this.deps.meshLayout, layout, textureNames);
 
-        const buffer = createRawBuffer(this.deps.device, Struct, 'uniform');
+        const buffer = this.runtime.createRawBuffer(Struct, 'uniform');
         const keys = Object.keys(schema);
         const mirror: Record<string, unknown> = {};
         for (let i = 0; i < keys.length; i++) {
@@ -487,7 +491,7 @@ export class MaterialLibrary {
         entries.push({ binding: binding++, resource: this.deps.pointShadow.mapTexture });
         entries.push({ binding: binding++, resource: this.deps.pointShadow.mapSampler });
         return this.deps.device.createBindGroup({
-            layout: createGpuBindGroupLayout(this.deps.device, layout.toDescriptor()),
+            layout: this.runtime.createBindGroupLayout(layout.toDescriptor()),
             entries,
         });
     }

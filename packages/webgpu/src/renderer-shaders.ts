@@ -1,5 +1,3 @@
-import { configureShaderSources } from 'murow/renderer/managers';
-
 export const CAMERA_EFFECT_WGSL = `
 struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 
@@ -251,5 +249,3 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(tinted.rgb, tinted.a * in.opacity);
 }
 `;
-
-configureShaderSources({ cameraEffect: CAMERA_EFFECT_WGSL, hitbox: HITBOX_WGSL, sprite2d: SPRITE_2D_WGSL });

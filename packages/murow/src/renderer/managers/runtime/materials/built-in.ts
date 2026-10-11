@@ -49,7 +49,6 @@ export function createEngineMaterialLayout() {
 
 export type EngineMaterialLayout = ReturnType<typeof createEngineMaterialLayout>;
 
-
 type FragInput = {
     vNormal: { x: number; y: number; z: number };
     vColor: { x: number; y: number; z: number };

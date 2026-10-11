@@ -12,7 +12,6 @@ import { lightContribution, tonemap } from '../shaders/utils';
 // Stable local names: shader bodies are parsed from their source, so bundlers
 // must not rename `d`/`std` inside them.
 
-
 /** Max point/spot lights the mesh shaders' storage buffer holds. */
 export const MAX_LIGHTS = 64;
 

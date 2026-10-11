@@ -1,7 +1,7 @@
+import { sizeOf } from 'murow/gpu/dsl';
+import type { RendererRuntime } from '../backend';
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
-import { compileProgram, createGpuBindGroupLayout, createRawBuffer, sizeOf, getShaderSource } from '../backend';
-
 
 type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 
@@ -49,6 +49,7 @@ interface CompiledCustomEffect {
  * copied from the scene on the first frame and refreshed by the blur pass.
  */
 export interface CameraEffectStackOptions {
+    runtime: RendererRuntime;
     /** TypeGPU root, used to compile custom effects. */
     root: { device: RawDevice };
     /** The canvas color format that effect passes target. */
@@ -58,6 +59,7 @@ export interface CameraEffectStackOptions {
 }
 
 export class CameraEffectStack {
+    private readonly runtime!: RendererRuntime;
 
     private readonly device: RawDevice;
     private readonly format: RawTextureFormat;
@@ -106,7 +108,8 @@ export class CameraEffectStack {
      * custom effects; `format` is the target canvas color format; `maxEffects`
      * sizes the uniform buffer, per-effect slots, and compiled-effect table.
      */
-    constructor({ root, format, maxEffects = 20 }: CameraEffectStackOptions) {
+    constructor({ root, format, maxEffects = 20, runtime }: CameraEffectStackOptions) {
+        this.runtime = runtime;
         this.device = root.device;
         this.format = format;
         this.maxEffects = maxEffects;
@@ -134,7 +137,7 @@ export class CameraEffectStack {
         this.dummyTex = this.device.createTexture({ size: [1, 1, 1], format: 'rgba8unorm', usage: RawTextureUsage.TEXTURE_BINDING | RawTextureUsage.COPY_DST });
         this.device.queue.writeTexture({ texture: this.dummyTex }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
         this.dummyView = this.dummyTex.createView();
-        const module = this.device.createShaderModule({ code: getShaderSource('cameraEffect'), label: 'camera-effects' });
+        const module = this.device.createShaderModule({ code: this.runtime.shaderSource('cameraEffect'), label: 'camera-effects' });
         this.pipeline = this.device.createRenderPipeline({
             label: 'camera-effects',
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.layout] }),
@@ -390,16 +393,16 @@ export class CameraEffectStack {
             fragmentFn as any,
         );
         if (!this.fullscreenVertex) this.fullscreenVertex = this.createFullscreenVertex();
-        const { code } = compileProgram([this.fullscreenVertex as any, fragment as any]);
+        const { code } = this.runtime.compile([this.fullscreenVertex as any, fragment as any]);
         const module = this.device.createShaderModule({ code, label: 'camera-effect-custom' });
         const pipeline = this.device.createRenderPipeline({
             label: 'camera-effect-custom',
-            layout: this.device.createPipelineLayout({ bindGroupLayouts: [createGpuBindGroupLayout(this.device, layout.toDescriptor())] }),
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.runtime.createBindGroupLayout(layout.toDescriptor())] }),
             vertex: { module },
             fragment: { module, targets: [{ format: this.format }] },
             primitive: { topology: 'triangle-list' },
         });
-        const buffer = createRawBuffer(this.device, Struct, 'uniform');
+        const buffer = this.runtime.createRawBuffer(Struct, 'uniform');
         const keys = Object.keys(schema);
         const mirror: Record<string, unknown> = {};
         const compiled: CompiledCustomEffect = {
@@ -423,7 +426,7 @@ export class CameraEffectStack {
 
     private rebindCustom(compiled: CompiledCustomEffect): void {
         if (!this.viewA || !this.viewB || !this.historyView) return;
-        const rawLayout = createGpuBindGroupLayout(this.device, compiled.layout.toDescriptor());
+        const rawLayout = this.runtime.createBindGroupLayout(compiled.layout.toDescriptor());
         const rawMaterial = compiled.buffer;
         const bind = (view: RawTextureView) => this.device.createBindGroup({
             layout: rawLayout,
