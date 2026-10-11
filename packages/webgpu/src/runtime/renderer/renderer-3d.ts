@@ -1,4 +1,3 @@
-import type { RawCommandEncoder, RawRenderPassEncoder } from 'murow/gpu';
 /**
  * WebGPU3DRenderer — instanced 3D mesh renderer backed by TypeGPU.
  *
@@ -8,8 +7,8 @@ import type { RawCommandEncoder, RawRenderPassEncoder } from 'murow/gpu';
  * - GPU index buffer for sparse instancing
  * - Depth testing + back-face culling
  */
-type GpuDeviceRef = { device: GPUDevice };
-type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
+
+import type { RawCommandEncoder, RawRenderPassEncoder } from 'murow/gpu';
 import { Base3DRenderer } from 'murow/renderer';
 import { runtime } from '../runtime';
 import { MESH_UNIFORM_LIGHT_OFFSET } from 'murow/renderer/managers/runtime';
@@ -17,24 +16,14 @@ import { Logger } from 'murow/core';
 import {
     type AssetBucket,
     type PrefabBucket3D,
-    type PlayOptions,
 } from 'murow/renderer';
 import {
     InstanceManager,
-    InstanceStore,
-    SkinnedInstanceStore,
     MaterialManager,
-    MaterialLibrary,
-    type MaterialSpec,
     LightManager,
-    LightSystem,
     ShadowManager,
-    ShadowSystem,
-    SpotShadowSystem,
-    PointShadowSystem,
     DecalManager,
     ParticleManager,
-    ParticleSystem3D,
     CameraManager,
     ModelsManager,
 } from 'murow/renderer/managers/runtime';
@@ -42,29 +31,18 @@ import { RendererManagers } from 'murow/renderer/managers';
 import type { RendererRuntime } from 'murow/renderer/managers';
 import { CameraEffectStack } from 'murow/renderer/managers/runtime';
 import {
-    TextureRegistry,
     ResizeController,
-    RaycastController,
     WebGPURaycast3D,
     MeshPipelines,
     SkeletalRuntime,
-    ModelLibrary,
     SkinCull,
 } from 'murow/renderer/managers/runtime';
 import { RendererCore, SceneUniforms } from 'murow/renderer/managers/runtime';
 import { MainPass } from 'murow/renderer/managers/runtime';
 import { HitboxDebugRenderer } from 'murow/renderer/managers/runtime';
-import { MAX_LIGHTS } from 'murow/renderer/managers/runtime';
 import { DEFAULT_CAPACITIES } from 'murow/renderer/managers/runtime';
 import type {
     Interpolator,
-    ModelData,
-    ModelHandle,
-    GltfModel,
-    MeshInstanceHandle,
-    InstanceHandle,
-    LightHandle,
-    MeshInstanceOptions,
     WebGPU3DRendererOptions,
 } from 'murow/renderer/managers/runtime';
 

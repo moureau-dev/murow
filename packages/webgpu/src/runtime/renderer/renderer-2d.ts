@@ -1,4 +1,3 @@
-import type { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBuffer, RawColorTargetState, RawDevice, RawRenderPipeline, RawTextureFormat } from 'murow/gpu';
 /**
  * WebGPU2DRenderer — instanced 2D sprite renderer backed by TypeGPU.
  *
@@ -12,6 +11,8 @@ import type { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBuffer, Ra
  * (`renderer.sprites`, `renderer.sheets`, `renderer.geometry`,
  * `renderer.compute`), and the camera is `renderer.camera`.
  */
+
+import type { RawDevice, RawTextureFormat } from 'murow/gpu';
 import { d } from '../../gpu';
 import { runtime } from '../runtime';
 import type { RendererRuntime } from 'murow/renderer/managers';
