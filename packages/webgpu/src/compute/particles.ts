@@ -7,8 +7,8 @@
  */
 import type { ParticleSimulation, Particles3D } from 'murow/renderer/managers/runtime';
 import { Particle3D, ComputeFrame, DrawArgs } from 'murow/renderer/managers/runtime';
-import { d, std } from './gpu';
-import { ComputeBuilder } from './compute/compute-builder';
+import { d, std } from '../gpu';
+import { ComputeBuilder } from './compute-builder';
 
 /** Build a `Particles3D` port backed by WebGPU compute kernels. */
 export function createParticles3d(): Particles3D {

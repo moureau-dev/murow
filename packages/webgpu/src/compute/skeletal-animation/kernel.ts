@@ -10,7 +10,7 @@
  */
 import { d, std } from '../../gpu';
 
-import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
+import { ComputeBuilder, type ComputeKernel } from '../compute-builder';
 import { AnimComputeUniforms, InstanceAnimStateGPU } from 'murow/renderer/managers/runtime';
 type GpuDeviceRef = { device: GPUDevice };
 import { packAnimationData, type PackedBuffers } from './packer';

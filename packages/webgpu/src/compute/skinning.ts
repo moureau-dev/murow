@@ -6,8 +6,8 @@
  * with a CPU or vertex path.
  */
 import type { AnimationKernelBudgets, PackedAnimationBuffers, Skinning } from 'murow/renderer/managers/runtime';
-import { buildAnimationKernel, uploadPackedToKernel } from './3d/skeletal-animation-compute/kernel';
-import { packAnimationData, type PackedBuffers } from './3d/skeletal-animation-compute/packer';
+import { buildAnimationKernel, uploadPackedToKernel } from './skeletal-animation/kernel';
+import { packAnimationData, type PackedBuffers } from './skeletal-animation/packer';
 
 function toPortBuffers(pb: PackedBuffers): PackedAnimationBuffers {
     return {
