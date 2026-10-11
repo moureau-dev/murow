@@ -262,7 +262,7 @@ export function buildAnimationKernel(
                                 const pomf = 1.0 - pf;
                                 pqx = pomf*pax + pf*pbx; pqy = pomf*pay + pf*pby; pqz = pomf*paz + pf*pbz; pqw = pomf*paw + pf*pbw;
                                 const plen = std.sqrt(pqx*pqx + pqy*pqy + pqz*pqz + pqw*pqw);
-                                if (plen > 0.0) { const pinv = 1.0/plen; pqx = pqx*pinv; pqy = pqy*pinv; pqz = pqz*pinv; pqw = pqw*pinv; }
+                                if (std.gt(plen, 0.0)) { const pinv = 1.0/plen; pqx = pqx*pinv; pqy = pqy*pinv; pqz = pqz*pinv; pqw = pqw*pinv; }
                             } else {
                                 psx = std.mix(animF32[poffA], animF32[poffB], pf);
                                 psy = std.mix(animF32[poffA+1], animF32[poffB+1], pf);
