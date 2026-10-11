@@ -10,12 +10,12 @@ import { compileProgram } from '../gpu/backend';
 import { createGpuBindGroupLayout, createRawBuffer } from '../gpu/device';
 import { createComputeSkinning } from '../compute/skinning';
 import { createParticles3d } from '../compute/particles';
-import { CAMERA_EFFECT_WGSL, HITBOX_WGSL, SPRITE_2D_WGSL } from '../renderer-shaders';
+import { WGSL } from '../shaders';
 
 const SHADER_SOURCES: Record<string, string> = {
-    cameraEffect: CAMERA_EFFECT_WGSL,
-    hitbox: HITBOX_WGSL,
-    sprite2d: SPRITE_2D_WGSL,
+    cameraEffect: WGSL.cameraEffect,
+    hitbox: WGSL.hitbox,
+    sprite2d: WGSL.sprite2d,
 };
 
 /** Build the WebGPU runtime the renderer drives. */
@@ -60,4 +60,3 @@ export function runtime(): RendererRuntime {
     };
     return runtime;
 }
-
