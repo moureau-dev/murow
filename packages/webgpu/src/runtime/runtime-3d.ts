@@ -349,6 +349,20 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     }
 
 
+    /** Spawn a mesh instance. Sugar over `instances.add`. */
+    addInstance(options: any): any { return this.instances.add(options); }
+
+    /** Compile a material from a spec. Sugar over `materials.create`. */
+    createMaterial(spec: any): any { return this.materials.create(spec); }
+
+    /** Set the global ambient term. Sugar over `lights.ambient`. */
+    setAmbient(color: readonly [number, number, number]): void { this.lights.ambient(color); }
+
+    /** Set the directional ("sun") light. Sugar over `lights.sun`. */
+    setDirectionalLight(direction: readonly [number, number, number], color: readonly [number, number, number] = [1, 1, 1], intensity = 1): void {
+        this.lights.sun(direction, color, intensity);
+    }
+
     storePreviousState(): void {
         for (let i = 0; i < this.interpolators.length; i++) {
             this.interpolators[i]!.storePrevious();

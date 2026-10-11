@@ -668,8 +668,12 @@ class Parser {
                     return this.member({ __namespace: 'std' }, token.value);
                 }
             }
+            const exposedMaterial = this.material[token.value];
+            if (exposedMaterial !== undefined) return exposedMaterial;
             const external = this.options.externals?.[token.value];
             if (external !== undefined) return external;
+            const bound = this.options.bindings?.[token.value];
+            if (bound !== undefined) return bound;
             const recovered = this.recoverExternal(token.value);
             if (recovered !== undefined) return recovered;
             throw this.error(`unknown identifier '${token.value}'`, token);
@@ -845,9 +849,7 @@ class Parser {
     }
     private consumeSemicolon(): void { if (this.peekPunc(';')) this.next(); }
     private error(message: string, token?: Token): Error {
-        const idx = token ? this.tokens.indexOf(token) : this.pos;
-        const around = this.tokens.slice(Math.max(0, idx - 30), idx + 20).map((t) => (t === token ? `>>${t.value}<<` : t.value)).join(' ');
-        return new Error(`${message}${token ? ` (at ${token.start})` : ''} :: ${around}`);
+        return new Error(`${message}${token ? ` (at ${token.start})` : ''}`);
     }
 }
 

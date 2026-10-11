@@ -4,13 +4,13 @@ import {
     createLights,
     createMaterial,
     lights,
-    lightContribution,
+    lightContributionExternal as lightContribution,
     material,
-    noise,
+    noiseExternal as noise,
     scene,
-    snoise,
+    snoiseExternal as snoise,
     textures,
-    tonemap,
+    tonemapExternal as tonemap,
 } from './externals';
 import { StandardBindings } from '../environment/bindings';
 import { EngineMaterialUniforms, Light, MeshUniforms } from '../environment/structs';

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { emitEntry } from './codegen/emit';
 import { TestWgslBackend } from './codegen/test-syntax';
 import { transformSource } from './compiler/transform';
-import { noise, scene, textures } from './dsl/externals';
+import { noiseExternal as noise, scene, textures } from './dsl/externals';
 import { shader } from './dsl/entry';
 import { d } from './dsl/data';
 import { f32 as f32Type, vec } from './ir/types';
