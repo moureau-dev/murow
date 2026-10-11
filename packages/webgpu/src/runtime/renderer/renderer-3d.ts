@@ -11,7 +11,7 @@ import type { RawCommandEncoder, RawRenderPassEncoder } from 'murow/gpu';
 type GpuDeviceRef = { device: GPUDevice };
 type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 import { Base3DRenderer } from 'murow/renderer';
-import { webgpuRuntime } from '../webgpu-runtime';
+import { runtime } from '../runtime';
 import { MESH_UNIFORM_LIGHT_OFFSET } from 'murow/renderer/managers/runtime';
 import { Logger } from 'murow/core';
 import {
@@ -195,7 +195,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         // (128 MB max storage buffer); for skinned scenes the bone-matrix
         // buffer alone can exceed that at a few thousand instances. We pass
         // through the adapter's actual caps so users get the GPU's real budget.
-        this.runtime = webgpuRuntime();
+        this.runtime = runtime();
         const presentation = await this.runtime.createPresentation(this.canvas);
         this.core.root = { device: presentation.device } as never;
         this.core.device = presentation.device;

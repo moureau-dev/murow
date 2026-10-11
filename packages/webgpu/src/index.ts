@@ -12,4 +12,4 @@ export { d, std } from './gpu';
 
 // The WebGPU renderer (composes the runtime managers).
 export * from './runtime';
-export { webgpuRuntime } from './webgpu-runtime';
+export { runtime } from './runtime/runtime';

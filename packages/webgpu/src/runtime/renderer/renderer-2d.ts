@@ -12,8 +12,8 @@ import type { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBuffer, Ra
  * (`renderer.sprites`, `renderer.sheets`, `renderer.geometry`,
  * `renderer.compute`), and the camera is `renderer.camera`.
  */
-import { d } from '../gpu';
-import { webgpuRuntime } from '../webgpu-runtime';
+import { d } from '../../gpu';
+import { runtime } from '../runtime';
 import type { RendererRuntime } from 'murow/renderer/managers';
 import { Renderer2DCore, CameraEffectStack, DynamicSprite, StaticSprite, SpriteUniforms, createSpriteLayout, createTextureLayout, createSpriteVertex, createSpriteFragment, WebGPURaycast2D, RaycastController2D, CameraManager2D, SpriteManager, SpritesheetManager, GeometryManager, setPrefab2DHandle } from 'murow/renderer/managers/runtime';
 import { BaseRenderer } from 'murow/renderer';
@@ -113,7 +113,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     }
 
     async init(): Promise<void> {
-        this.runtime = webgpuRuntime();
+        this.runtime = runtime();
         const presentation = await this.runtime.createPresentation(this.canvas);
         this.core.root = { device: presentation.device } as never;
         this.core.device = presentation.device;

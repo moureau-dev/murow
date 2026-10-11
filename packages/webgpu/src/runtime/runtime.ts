@@ -6,11 +6,11 @@
  * resource factories + compute) and hands it in. No globals.
  */
 import type { Presentation, RendererRuntime } from 'murow/renderer/managers';
-import { compileProgram } from './gpu/backend';
-import { createGpuBindGroupLayout, createRawBuffer } from './gpu/device';
-import { createComputeSkinning } from './compute/skinning';
-import { createParticles3d } from './compute/particles';
-import { CAMERA_EFFECT_WGSL, HITBOX_WGSL, SPRITE_2D_WGSL } from './renderer-shaders';
+import { compileProgram } from '../gpu/backend';
+import { createGpuBindGroupLayout, createRawBuffer } from '../gpu/device';
+import { createComputeSkinning } from '../compute/skinning';
+import { createParticles3d } from '../compute/particles';
+import { CAMERA_EFFECT_WGSL, HITBOX_WGSL, SPRITE_2D_WGSL } from '../renderer-shaders';
 
 const SHADER_SOURCES: Record<string, string> = {
     cameraEffect: CAMERA_EFFECT_WGSL,
@@ -19,7 +19,7 @@ const SHADER_SOURCES: Record<string, string> = {
 };
 
 /** Build the WebGPU runtime the renderer drives. */
-export function webgpuRuntime(): RendererRuntime {
+export function runtime(): RendererRuntime {
     const runtime: RendererRuntime = {
         presentation: undefined as unknown as Presentation,
 

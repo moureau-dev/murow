@@ -1,2 +1,2 @@
-export * from './runtime-3d';
-export * from './runtime-2d';
+export * from './renderer/renderer-3d';
+export * from './renderer/renderer-2d';
