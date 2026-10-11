@@ -33,7 +33,6 @@ import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
 import type { BuiltInGeometry, GeometryData } from './built-in';
 import { resolveBuiltInGeometry } from './built-in';
 import { SlotMap } from 'murow/core/slot-map';
-type ComputeKernel<T = any> = any;
 
 type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 
@@ -701,7 +700,7 @@ export class GeometryBuilder<
     private _vertexFactory: ((ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => Function) | null = null;
     private _fragmentFactory: Function | null = null;
     private _declarativeShaders: DeclarativeShaders<TDynamic, TStatic, TUniforms> | null = null;
-    private _computeSource: { kernel: ComputeKernel<Record<string, unknown>>; bufferName: string } | null = null;
+    private _computeSource: RawBuffer | null = null;
     private _dataLayout: GeometryDataLayout<TDynamic, TStatic, TUniforms> | null = null;
 
     private _canvas: HTMLCanvasElement;
@@ -740,24 +739,11 @@ export class GeometryBuilder<
     }
 
     /**
-     * Bind a compute kernel's buffer as this geometry's dynamic instance data.
-     * Zero-copy: the render shader reads directly from the compute buffer.
-     *
-     * ```ts
-     * const compute = renderer.compute.create('physics', { workgroupSize: 256 })
-     *     .buffers({ particles: { storage: d.arrayOf(ParticleStruct, MAX), readwrite: true } })
-     *     .shader(...)
-     *     .build();
-     *
-     * const render = renderer.geometry.create('vis', { maxInstances: MAX, geometry: 'quad' })
-     *     .fromCompute(compute, 'particles')
-     *     .uniforms({ resolution: d.vec2f })
-     *     .shaders({ ... })
-     *     .build();
-     * ```
+     * Bind an externally produced storage buffer as this geometry's dynamic
+     * instance data. Zero-copy: the render shader reads it directly.
      */
-    fromCompute(kernel: ComputeKernel<Record<string, unknown>>, bufferName: string): this {
-        this._computeSource = { kernel, bufferName };
+    fromBuffer(buffer: RawBuffer): this {
+        this._computeSource = buffer;
         return this;
     }
 
@@ -983,11 +969,10 @@ export class GeometryBuilder<
             ? buildStructFromLayout(parsedUniformDefs)
             : d.struct({ _pad: d.f32 });
 
-        // Buffers — if fromCompute() was called, reuse the compute buffer as dynamic data
+        // Buffers — if fromBuffer() was called, reuse the external buffer as dynamic data
         const device = root.device;
         const dynamicBuffer = this._computeSource
-            ? this._computeSource.kernel.getBuffer(this._computeSource.bufferName)
-            : this.runtime.createRawBuffer(d.arrayOf(DynStruct, maxInstances), 'storage');
+            ?? this.runtime.createRawBuffer(d.arrayOf(DynStruct, maxInstances), 'storage');
         const staticBuffer = this.runtime.createRawBuffer(d.arrayOf(StatStruct, maxInstances), 'storage');
         const uniformBuffer = this.runtime.createRawBuffer(UniformStruct, 'uniform');
 
