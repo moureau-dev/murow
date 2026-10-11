@@ -1,3 +1,4 @@
+import type { RawCommandEncoder, RawRenderPassEncoder } from 'murow/gpu';
 /**
  * WebGPU3DRenderer — instanced 3D mesh renderer backed by TypeGPU.
  *
@@ -10,7 +11,8 @@
 type GpuDeviceRef = { device: GPUDevice };
 type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 import { Base3DRenderer } from 'murow/renderer';
-import { MESH_UNIFORM_LIGHT_OFFSET } from '../../core/types';
+import { webgpuRuntime } from '../webgpu-runtime';
+import { MESH_UNIFORM_LIGHT_OFFSET } from 'murow/renderer/managers/runtime';
 import { Logger } from 'murow/core';
 import {
     type AssetBucket,
@@ -35,9 +37,10 @@ import {
     ParticleSystem3D,
     CameraManager,
     ModelsManager,
-    ComputeManager,
-} from './managers';
-import { CameraEffectStack } from '../../camera-effects';
+} from 'murow/renderer/managers/runtime';
+import { RendererManagers } from 'murow/renderer/managers';
+import type { RendererRuntime } from 'murow/renderer/managers';
+import { CameraEffectStack } from 'murow/renderer/managers/runtime';
 import {
     TextureRegistry,
     ResizeController,
@@ -47,12 +50,12 @@ import {
     SkeletalRuntime,
     ModelLibrary,
     SkinCull,
-} from './internals';
-import { RendererCore, SceneUniforms } from './core';
-import { MainPass } from './internals';
-import { HitboxDebugRenderer } from '../hitbox';
-import { MAX_LIGHTS } from '../shader';
-import { DEFAULT_CAPACITIES } from './defaults';
+} from 'murow/renderer/managers/runtime';
+import { RendererCore, SceneUniforms } from 'murow/renderer/managers/runtime';
+import { MainPass } from 'murow/renderer/managers/runtime';
+import { HitboxDebugRenderer } from 'murow/renderer/managers/runtime';
+import { MAX_LIGHTS } from 'murow/renderer/managers/runtime';
+import { DEFAULT_CAPACITIES } from 'murow/renderer/managers/runtime';
 import type {
     Interpolator,
     ModelData,
@@ -63,7 +66,7 @@ import type {
     LightHandle,
     MeshInstanceOptions,
     WebGPU3DRendererOptions,
-} from './types';
+} from '../3d/renderer/types';
 
 /** Compute auto-sizing stats from a loaded prefab bucket. */
 function computeBucketStats(bucket: PrefabBucket3D): { maxSkinnedParts: number; maxJointCount: number } {
@@ -146,7 +149,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     /** Mesh creation and loading facade. */
     models!: ModelsManager;
     /** GPU compute facade. */
-    compute!: ComputeManager;
+    compute!: any;
 
     private readonly _assets: AssetBucket<'3d', any, any> | null;
     private readonly _prefabs: PrefabBucket3D | null;
@@ -155,6 +158,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     private hitboxDebug = new HitboxDebugRenderer();
     private mainPass!: MainPass;
+    private runtime!: RendererRuntime;
 
     constructor(canvas: HTMLCanvasElement, options: WebGPU3DRendererOptions<A>) {
         // Resolve maxInstances from the bucket before delegating to super:
@@ -193,23 +197,14 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         // (128 MB max storage buffer); for skinned scenes the bone-matrix
         // buffer alone can exceed that at a few thousand instances. We pass
         // through the adapter's actual caps so users get the GPU's real budget.
-        const adapter = await navigator.gpu.requestAdapter();
-        if (!adapter) throw new Error('WebGPU3DRenderer: no GPU adapter available');
-        const a = adapter.limits;
-        const requiredLimits: Record<string, number> = {
-            maxBufferSize: a.maxBufferSize,
-            maxStorageBufferBindingSize: a.maxStorageBufferBindingSize,
-            maxStorageBuffersPerShaderStage: a.maxStorageBuffersPerShaderStage,
-            maxComputeWorkgroupStorageSize: a.maxComputeWorkgroupStorageSize,
-            maxComputeInvocationsPerWorkgroup: a.maxComputeInvocationsPerWorkgroup,
-        };
-        const device = await adapter.requestDevice({ requiredLimits });
-        this.core.root = { device } as never;
-        this.core.device = device;
-        this.compute = new ComputeManager(this.core.device);
-
-        this.core.context = this.canvas.getContext('webgpu')!;
-        this.core.format = navigator.gpu.getPreferredCanvasFormat();
+        this.runtime = webgpuRuntime();
+        const presentation = await this.runtime.createPresentation(this.canvas);
+        this.core.root = { device: presentation.device } as never;
+        this.core.device = presentation.device;
+        this.compute = new (this.runtime.compute.ComputeManager)(this.core.device);
+        this.core.context = presentation.context;
+        this.core.format = presentation.format;
+        presentation.configure({ alphaMode: 'opaque' });
         this.core.context.configure({
             device: this.core.device,
             format: this.core.format,
@@ -224,6 +219,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const rendererOptions = this.options as WebGPU3DRendererOptions;
         const maxLights = rendererOptions.maxLights ?? DEFAULT_CAPACITIES.lights;
         this.core.pipelines.build({
+            runtime: this.runtime,
             root: this.core.root,
             device: this.core.device,
             format: this.core.format,
@@ -236,186 +232,23 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         });
         this.core.scene = new SceneUniforms(this.core.device, this.core.pipelines.rawUniformBuffer, this.core.uniformData);
 
-        this.cameraEffects = new CameraEffectStack({ root: this.core.root, format: this.core.format, maxEffects: this.maxCameraEffects });
+        this.cameraEffects = new CameraEffectStack({ root: this.core.root, format: this.core.format, maxEffects: this.maxCameraEffects, runtime: this.runtime });
         this.cameraEffects.setDepth(this.core.pipelines.depthTexture.createView(), this.core.pipelines.depthSampler, this.camera.near, this.camera.far);
 
-        const shadowSystem = new ShadowSystem({
-            core: this.core,
-            maxInstances: this.maxInstances,
-            skinned: {
-                maxInstances: this.maxSkinnedInstances,
-                maxBones: this.maxTotalBones,
-            },
-        }, { resolution: (this.options as WebGPU3DRendererOptions).shadowResolution ?? 2048 });
-
-        const spotShadowSystem = new SpotShadowSystem({
-            core: this.core,
-            maxInstances: this.maxInstances,
-            skinned: {
-                maxInstances: this.maxSkinnedInstances,
-                maxBones: this.maxTotalBones,
-            },
-        }, { maxShadows: (this.options as WebGPU3DRendererOptions).maxSpotShadows });
-
-        const pointShadowSystem = new PointShadowSystem({
-            core: this.core,
-            maxInstances: this.maxInstances,
-            skinned: {
-                maxInstances: this.maxSkinnedInstances,
-                maxBones: this.maxTotalBones,
-            },
-        }, {
-            maxShadows: (this.options as WebGPU3DRendererOptions).maxPointShadows,
-            resolution: (this.options as WebGPU3DRendererOptions).pointShadowResolution,
+        const managers = new RendererManagers({
+            runtime: this.runtime, core: this.core, logger: this.logger, options: this.options,
+            camera: this.camera, skinCull: this.skinCull, maxInstances: this.maxInstances,
+            maxSkinnedInstances: this.maxSkinnedInstances, maxTotalBones: this.maxTotalBones,
+            canvas: this.canvas, assets: this._assets, prefabs: this._prefabs,
+            elapsed: () => this.elapsed, nextDecalSeq: () => this.decalMaterialSeq++,
         });
+        this.animation = managers.animation; this.materials = managers.materials; this.lights = managers.lights;
+        this.particles = managers.particles; this.models = managers.models; this.instances = managers.instances;
+        this.shadows = managers.shadows; this.decals = managers.decals; this.mainPass = managers.mainPass;
+        this.raycast = managers.raycast; this.interpolators = managers.interpolators as never;
+        if (this._prefabs) { await this.models.upload(this._assets!); }
 
-        this.core.textures = new TextureRegistry(this.core.device, this.core.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
-        this.core.textures.initWhiteFallback();
-        if (this._assets) {
-            // The bucket accessor proxy binds methods per access; capture it once.
-            const findTexture = this._assets.textures.find;
-            this.core.textures.setResolver((id) => findTexture(id));
-        }
-
-        const maxParticleEmitters = rendererOptions.maxParticleEmitters ?? 64;
-        const maxParticles = rendererOptions.maxParticles ?? 4096;
-        const lightSystem = new LightSystem(maxLights);
-        const particleSystem = new ParticleSystem3D({
-            root: this.core.root,
-            format: this.core.format,
-            maxParticles,
-            maxMaterials: rendererOptions.maxParticleMaterials ?? 16,
-            maxEmitters: maxParticleEmitters,
-            resolveTexture: (id) => this.core.textures.get(id),
-            logger: this.logger,
-        });
-
-        const maxMaterials = rendererOptions.maxMaterials ?? DEFAULT_CAPACITIES.materials;
-        const materialLibrary = new MaterialLibrary({
-            root: this.core.root,
-            device: this.core.device,
-            pipelines: this.core.pipelines,
-            textures: this.core.textures,
-            meshLayout: this.core.pipelines.meshLayout,
-            skinnedLayout: this.core.pipelines.skinnedMeshLayout,
-            shadow: shadowSystem,
-            spotShadow: spotShadowSystem,
-            pointShadow: pointShadowSystem,
-            maxMaterials,
-        });
-        // Changing `renderer.shadows.resolution` rebinds every material.
-        shadowSystem.setResolutionHook(() => materialLibrary.rebuildBindGroups());
-        this.core.materialLibrary = materialLibrary;
-
-        // Instance stores are created here so their material refcounting can
-        // reach the library; the animation runtime reads the skinned store.
-        const retainMaterial = (materialId: number) => materialLibrary.retain(materialId);
-        const releaseMaterial = (materialId: number) => materialLibrary.release(materialId);
-        const instanceStore = new InstanceStore({
-            maxInstances: this.maxInstances,
-            getTextureBindGroup: (id) => this.core.textures.get(id)?.bindGroup,
-            retainMaterial,
-            releaseMaterial,
-        });
-        const skinnedStore = new SkinnedInstanceStore({
-            maxSkinnedInstances: this.maxSkinnedInstances,
-            maxTotalBones: this.maxTotalBones,
-            maxSkins: this._prefabs ? this._prefabs.size : 64,
-            uploadRestPose: (skinModel, boneOffset, jointCount) => this.animation.writeRestPose(skinModel, boneOffset, jointCount),
-            getTextureBindGroup: (id) => this.core.textures.get(id)?.bindGroup,
-            retainMaterial,
-            releaseMaterial,
-        });
-
-        this.materials = new MaterialManager({
-            capacity: maxMaterials,
-            logger: this.logger,
-            library: materialLibrary,
-            reassignUsers: (materialId) => this.instances?.reassignMaterial(materialId),
-        });
-        this.lights = new LightManager({ capacity: maxLights, logger: this.logger, system: lightSystem });
-        this.particles = new ParticleManager({
-            capacity: { maxEmitters: maxParticleEmitters, maxParticles },
-            logger: this.logger,
-            system: particleSystem,
-        });
-
-        this.animation = new SkeletalRuntime({
-            root: this.core.root,
-            device: this.core.device,
-            pipelines: this.core.pipelines,
-            skinned: skinnedStore,
-            camera: this.camera,
-            skinCull: this.skinCull,
-            maxSkinnedInstances: this.maxSkinnedInstances,
-            maxTotalBones: this.maxTotalBones,
-            maxSkins: this._prefabs ? this._prefabs.size : 64,
-            getModel: (id) => this.core.models.get(id),
-            getSkinModel: (i) => this.core.models.skinnedModel(i),
-            skinnedModelCount: () => this.core.models.skinnedModelCount(),
-        });
-
-        this.core.models = new ModelLibrary({
-            device: this.core.device,
-            pipelines: this.core.pipelines,
-            textures: this.core.textures,
-            onSkinLoaded: (skinData, animClips) => this.animation.addSkin(skinData, animClips),
-        });
-        this.models = new ModelsManager(this.core, this.animation);
-
-        if (this._prefabs) {
-            await this.models.upload(this._assets!);
-        }
-
-        this.instances = new InstanceManager({
-            capacity: this.maxInstances,
-            poolSize: this.maxInstances + this.maxSkinnedInstances,
-            logger: this.logger,
-            store: instanceStore,
-            skinned: skinnedStore,
-            models: this.core.models,
-            prefabs: this._prefabs,
-            getSkinModel: (index) => this.core.models.skinnedModel(index),
-            materialName: (id) => materialLibrary.nameOf(id),
-        });
-        this.raycast = new WebGPURaycast3D(new RaycastController({
-            camera: this.camera,
-            eachInstance: this.instances.eachInstance.bind(this.instances),
-            resolveHitbox: this.instances.resolveHitbox.bind(this.instances),
-        }), this.canvas);
-        this.shadows = new ShadowManager({
-            directional: shadowSystem,
-            spot: spotShadowSystem,
-            point: pointShadowSystem,
-            instances: this.instances,
-            materials: this.materials,
-            lights: this.lights,
-            camera: this.camera,
-            core: this.core,
-            motionVersion: () => this.instances.store.dynamicVersion + this.instances.skinnedStore.dynamicVersion + this.animation.version,
-        });
-        this.decals = new DecalManager({
-            capacity: rendererOptions.maxDecals ?? 16,
-            logger: this.logger,
-            createMaterial: (spec) => this.materials.create({
-                ...spec,
-                name: spec.name ?? `__decal_${this.decalMaterialSeq++}`,
-            }) as never,
-            addDecalInstance: (prefab, material) => this.instances!.add({
-                prefab,
-                position: [0, -10000, 0],
-                scale: 0.001,
-                material,
-            }) as never,
-            elapsedSeconds: () => this.elapsed,
-        });
-
-        // Snapshot order is irrelevant; the three snapshots are independent.
-        this.interpolators = [this.camera, this.instances, this.lights];
-
-        this.mainPass = new MainPass(this.core, this.instances, this.materials);
-
-        this.hitboxDebug.init(this.core.device, this.core.format);
+        this.hitboxDebug.init(this.runtime, this.core.device, this.core.format);
         this.resize = new ResizeController(
             this.canvas,
             (w, h, cssW, cssH) => this.applyResize(w, h, cssW, cssH),
@@ -437,7 +270,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             this.canvas.height = h;
             this.core.context.configure({
                 device: this.core.device,
-                format: navigator.gpu.getPreferredCanvasFormat(),
+                format: this.core.format,
                 alphaMode: 'opaque',
             });
         }
@@ -642,7 +475,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     }
 
     /** Delegate each shadow pass to its manager (caster gather plus encode). */
-    private renderShadowPasses(encoder: GPUCommandEncoder): void {
+    private renderShadowPasses(encoder: RawCommandEncoder): void {
         this.shadows.directional.render(encoder);
         this.shadows.spot.render(encoder);
         this.shadows.point.render(encoder);
@@ -667,7 +500,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     }
 
     /** Draw the batched non-skinned and skinned meshes, then debug hitboxes. */
-    private renderMainPass(pass: GPURenderPassEncoder, vpMatrix: Float32Array): void {
+    private renderMainPass(pass: RawRenderPassEncoder, vpMatrix: Float32Array): void {
         this.mainPass.record(pass);
         if (this.debug.hitboxes && this._prefabs) {
             this.hitboxDebug.drawInstances(pass, vpMatrix, this.instances, this.raycast.state);
@@ -675,15 +508,15 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     }
 
     /** Draw the particle systems into the current pass. */
-    private renderParticles(pass: GPURenderPassEncoder, vpMatrix: Float32Array): void {
+    private renderParticles(pass: RawRenderPassEncoder, vpMatrix: Float32Array): void {
         cameraBasis(this.camera.position, this.camera.target, this.camera.up, this._camRight, this._camUp);
         this.particles.draw(pass, vpMatrix, this._camRight, this._camUp);
     }
 
     /** Apply the enabled camera effects into the swapchain. */
-    private renderPost(encoder: GPUCommandEncoder, swapchainView: GPUTextureView, enabledEffects: number): void {
+    private renderPost(encoder: RawCommandEncoder, swapchainView: GPUTextureView, enabledEffects: number): void {
         if (enabledEffects > 0) {
-            this.cameraEffects.apply(encoder, swapchainView, this.camera.effects, this.elapsed, this._width, this._height);
+            this.cameraEffects.apply(encoder, swapchainView as never, this.camera.effects, this.elapsed, this._width, this._height);
         }
     }
 

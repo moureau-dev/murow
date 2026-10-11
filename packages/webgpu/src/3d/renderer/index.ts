@@ -1,4 +1,4 @@
-export { WebGPU3DRenderer } from './renderer';
+export { WebGPU3DRenderer } from '../../runtime/runtime-3d';
 export type { Interpolator } from './types';
 export type { Handles } from './handles';
 export * from './managers/materials';

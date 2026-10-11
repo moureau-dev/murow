@@ -34,7 +34,7 @@ export { AnimationController } from './2d/renderer/internals/animation';
 export type { AnimationClip, AnimationState, AnimationClipConfig } from './2d/renderer/internals/animation';
 
 // 3D Renderer
-export { WebGPU3DRenderer } from './3d/renderer';
+export { WebGPU3DRenderer } from './runtime';
 export type {
     ModelData,
     ModelHandle,
