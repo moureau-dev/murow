@@ -13,7 +13,3 @@ export { d, std } from './gpu';
 // The WebGPU renderer (composes the runtime managers).
 export * from './runtime';
 export { webgpuRuntime } from './webgpu-runtime';
-
-// WebGPU-only: compute.
-export { ComputeBuilder, type ComputeKernel } from './compute/compute-builder';
-export type { ComputeOptions, ComputeBufferDef, ComputeInput } from './compute/compute-builder';
