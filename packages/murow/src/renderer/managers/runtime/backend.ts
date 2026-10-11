@@ -1,3 +1,4 @@
+import type { RawCommandEncoder } from 'murow/gpu';
 /**
  * Renderer runtime ports (dependency-injected).
  *
@@ -59,10 +60,29 @@ export interface Skinning {
     destroy(): void;
 }
 
-/** Compute is backend-specific; a backend supplies an implementation. */
-export interface ComputeProvider {
-    ComputeBuilder: new (...args: any[]) => any;
-    ComputeManager: new (...args: any[]) => any;
+/** A particle simulation driven by the renderer's particle manager. */
+export interface ParticleSimulation {
+    encodeSpawn(encoder: RawCommandEncoder, count: number): void;
+    encodeIntegrate(encoder: RawCommandEncoder, count: number): void;
+    encodeCompact(encoder: RawCommandEncoder, count: number): void;
+    encodeArgs(encoder: RawCommandEncoder, maxMaterials: number): void;
+    destroy(): void;
+}
+
+/** GPU particle backend port (compute on WebGPU, CPU/vertex elsewhere). */
+export interface Particles3D {
+    createSimulation(options: {
+        root: { device: RawDevice };
+        max: number;
+        maxSpawns: number;
+        maxMaterials: number;
+        pool: RawBuffer;
+        spawns: RawBuffer;
+        frame: RawBuffer;
+        counts: RawBuffer;
+        indices: RawBuffer;
+        args: RawBuffer;
+    }): ParticleSimulation;
 }
 
 /** The present target a renderer draws to. Backend-specific (canvas/surface). */
@@ -88,10 +108,10 @@ export interface RendererRuntime {
     createBindGroupLayout(descriptor: unknown): RawBindGroupLayout;
     /** Named shader helper source (WGSL/GLSL/…). */
     shaderSource(name: string): string;
-    /** Backend-specific compute implementation (particle simulation, etc.). */
-    readonly compute: ComputeProvider;
     /** Skeletal-animation simulation port. */
     readonly skinning: Skinning;
+    /** GPU particle simulation port. */
+    readonly particles: Particles3D;
 }
 
 export { sizeOf } from 'murow/gpu/dsl';

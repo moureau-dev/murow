@@ -71,8 +71,6 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     sheets!: SpritesheetManager;
     /** Custom geometry facade. */
     geometry!: GeometryManager;
-    /** GPU compute facade. */
-    compute!: any;
     /** 2D picking facade. */
     raycast!: WebGPURaycast2D;
 
@@ -191,7 +189,6 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
             prefabs: this._prefabs,
         });
         this.geometry = new GeometryManager(this.core, this.runtime, this.canvas, () => this._clearColor);
-        this.compute = new this.runtime.compute.ComputeManager(this.core.device);
         this.cameraEffects = new CameraEffectStack({
             runtime: this.runtime,
             root: this.core.root,

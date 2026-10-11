@@ -1,9 +1,8 @@
-import type { RendererRuntime } from '../../backend';
+import type { RendererRuntime, ParticleSimulation } from '../../backend';
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
 
-type ComputeKernel<T = any> = any;
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotMap } from 'murow/core/slot-map';
 import { Logger } from 'murow/core';
@@ -11,7 +10,7 @@ import { Frustum } from '../../internals/frustum';
 import { PARTICLE_3D_STRIDE, PARTICLE_3D_FRAME_FLOATS } from './shaders';
 
 /** Per-particle GPU record. Must match the raw WGSL `Particle` layout exactly. */
-const Particle3D = d.struct({
+export const Particle3D = d.struct({
     px: d.f32, py: d.f32, pz: d.f32,
     vx: d.f32, vy: d.f32, vz: d.f32,
     age: d.f32, life: d.f32, size: d.f32,
@@ -25,7 +24,7 @@ const Particle3D = d.struct({
 });
 
 /** Frame data shared by the spawn + integrate compute kernels. */
-const ComputeFrame = d.struct({
+export const ComputeFrame = d.struct({
     /** x = dt, y = time, z = drag, w = unused. */
     params: d.vec4f,
     /** x = ring head, y = spawn count, z = unused, w = ring mask (power-of-two - 1). */
@@ -33,7 +32,7 @@ const ComputeFrame = d.struct({
 });
 
 /** Render-time frame data, read by the billboard vertex shader. */
-const FrameUniforms = d.struct({
+export const FrameUniforms = d.struct({
     viewProj: d.mat4x4f,
     right: d.vec4f,
     up: d.vec4f,
@@ -42,7 +41,7 @@ const FrameUniforms = d.struct({
 });
 
 /** Per-material constants: which id this draw owns, and whether it uses a texture. */
-const MaterialUniforms = d.struct({
+export const MaterialUniforms = d.struct({
     matId: d.f32,
     useTexture: d.f32,
     /** Base into the compacted index list for this material (id * maxSlots). */
@@ -55,7 +54,7 @@ const MaterialUniforms = d.struct({
 });
 
 /** Indirect draw arguments written by the compaction pass. */
-const DrawArgs = d.struct({
+export const DrawArgs = d.struct({
     vertexCount: d.u32,
     instanceCount: d.u32,
     firstVertex: d.u32,
@@ -192,10 +191,7 @@ export class ParticleSystem3D {
     private readonly spawns: RawBuffer;
     private readonly computeFrame: RawBuffer;
     private readonly renderFrame: RawBuffer;
-    private readonly spawnKernel: ComputeKernel<any>;
-    private readonly integrateKernel: ComputeKernel<any>;
-    private readonly compactKernel: ComputeKernel<any>;
-    private readonly argsKernel: ComputeKernel<any>;
+    private readonly sim: ParticleSimulation;
     private readonly counts: RawBuffer;
     private readonly indices: RawBuffer;
     private readonly args: RawBuffer;
@@ -257,80 +253,6 @@ export class ParticleSystem3D {
         const pool = this.pool;
         const frame = this.computeFrame;
 
-        this.spawnKernel = new this.runtime.compute.ComputeBuilder('particles-spawn', { workgroupSize: 64 }, root)
-            .buffers({
-                particles: { storage: d.arrayOf(Particle3D, this.max), readwrite: true, external: pool },
-                spawnRecords: { storage: d.arrayOf(Particle3D, this.maxSpawns), external: spawns },
-                frame: { uniform: ComputeFrame, external: frame },
-            })
-            .shader(({ globalId }, { buffers }) => {
-                'use gpu';
-                const { particles, spawnRecords } = buffers;
-                const frame = buffers.frame as any;
-                const i = globalId.x;
-                if (i >= frame.counts.y) { return; }
-                // @ts-ignore — TGSL uniform struct access
-                const slot = (frame.counts.x + i) & frame.counts.w;
-                const src = spawnRecords[i];
-                particles[slot].px = src.px;
-                particles[slot].py = src.py;
-                particles[slot].pz = src.pz;
-                particles[slot].vx = src.vx;
-                particles[slot].vy = src.vy;
-                particles[slot].vz = src.vz;
-                particles[slot].age = src.age;
-                particles[slot].life = src.life;
-                particles[slot].size = src.size;
-                particles[slot].r = src.r;
-                particles[slot].g = src.g;
-                particles[slot].b = src.b;
-                particles[slot].a = src.a;
-                particles[slot].gx = src.gx;
-                particles[slot].gy = src.gy;
-                particles[slot].gz = src.gz;
-                particles[slot].mat = src.mat;
-                particles[slot].grow = src.grow;
-                particles[slot].rot = src.rot;
-                particles[slot].spin = src.spin;
-                particles[slot].turb = src.turb;
-            })
-            .build();
-
-        this.integrateKernel = new this.runtime.compute.ComputeBuilder('particles-integrate', { workgroupSize: 64 }, root)
-            .buffers({
-                particles: { storage: d.arrayOf(Particle3D, this.max), readwrite: true, external: pool },
-                frame: { uniform: ComputeFrame, external: frame },
-            })
-            .shader(({ globalId }, { buffers }) => {
-                'use gpu';
-                const { particles, frame } = buffers;
-                const i = globalId.x;
-                const p = particles[i];
-                if (p.life <= 0.0) { return; }
-                // @ts-ignore — TGSL uniform struct access
-                const dt = frame.params.x;
-                // @ts-ignore — TGSL uniform struct access
-                const drag = frame.params.z;
-                // @ts-ignore — TGSL uniform struct access
-                const time = frame.params.y;
-                const tv = p.turb * dt;
-                const vx = (p.vx + p.gx * dt) * drag + std.sin(p.py * 2.1 + time * 0.9) * tv;
-                const vy = (p.vy + p.gy * dt) * drag + std.sin(p.pz * 2.3 - time * 0.7) * tv;
-                const vz = (p.vz + p.gz * dt) * drag + std.sin(p.px * 2.0 + time * 1.1) * tv;
-                const age = p.age + dt;
-                particles[i].px = p.px + vx * dt;
-                particles[i].py = p.py + vy * dt;
-                particles[i].pz = p.pz + vz * dt;
-                particles[i].vx = vx;
-                particles[i].vy = vy;
-                particles[i].vz = vz;
-                particles[i].age = age;
-                if (age >= p.life) { particles[i].life = -1.0; }
-            })
-            .build();
-
-        // Per-material compaction: atomic counters + a compacted index list, then
-        // an indirect-args buffer, so each material draws only its live particles.
         this.counts = this.runtime.createRawBuffer(d.arrayOf(d.atomic(d.u32), this.maxMaterials), 'storage');
         this.indices = this.runtime.createRawBuffer(d.arrayOf(d.u32, this.maxMaterials * this.max), 'storage');
         this.args = this.runtime.createRawBuffer(d.arrayOf(DrawArgs, this.maxMaterials), ['storage', 'indirect']);
@@ -338,46 +260,14 @@ export class ParticleSystem3D {
         const indices = this.indices;
         const args = this.args;
 
-        this.compactKernel = new this.runtime.compute.ComputeBuilder('particles-compact', { workgroupSize: 64 }, root)
-            .buffers({
-                particles: { storage: d.arrayOf(Particle3D, this.max), external: pool },
-                counts: { storage: d.arrayOf(d.atomic(d.u32), this.maxMaterials), readwrite: true, external: counts },
-                indices: { storage: d.arrayOf(d.u32, this.maxMaterials * this.max), readwrite: true, external: indices },
-                frame: { uniform: ComputeFrame, external: frame },
-            })
-            .shader(({ globalId }, { buffers }) => {
-                'use gpu';
-                const { particles, counts, indices, frame } = buffers;
-                const i = globalId.x;
-                const p = particles[i];
-                if (p.life <= 0.0) { return; }
-                // @ts-ignore — TGSL uniform struct access
-                const mat = d.u32(p.mat);
-                // @ts-ignore — atomic on a storage array element
-                const slot = std.atomicAdd(counts[mat], d.u32(1));
-                // @ts-ignore — TGSL uniform struct access
-                indices[mat * frame.counts.z + slot] = i;
-            })
-            .build();
-
-        this.argsKernel = new this.runtime.compute.ComputeBuilder('particles-args', { workgroupSize: this.maxMaterials }, root)
-            .buffers({
-                counts: { storage: d.arrayOf(d.atomic(d.u32), this.maxMaterials), readwrite: true, external: counts },
-                args: { storage: d.arrayOf(DrawArgs, this.maxMaterials), readwrite: true, external: args },
-                frame: { uniform: ComputeFrame, external: frame },
-            })
-            .shader(({ globalId }, { buffers }) => {
-                'use gpu';
-                const { counts, args, frame } = buffers;
-                const m = globalId.x;
-                // @ts-ignore — atomic on a storage array element
-                args[m].vertexCount = d.u32(4);
-                // @ts-ignore — atomic on a storage array element
-                args[m].instanceCount = std.atomicLoad(counts[m]);
-                args[m].firstVertex = d.u32(0);
-                args[m].firstInstance = d.u32(0);
-            })
-            .build();
+        this.sim = this.runtime.particles.createSimulation({
+            root,
+            max: this.max,
+            maxSpawns: this.maxSpawns,
+            maxMaterials: this.maxMaterials,
+            pool, spawns, frame,
+            counts, indices, args,
+        });
 
         // 1x1 white fallback.
         this.whiteTexture = this.device.createTexture({
@@ -616,10 +506,7 @@ export class ParticleSystem3D {
         this.counts.destroy();
         this.indices.destroy();
         this.args.destroy();
-        this.spawnKernel.destroy();
-        this.integrateKernel.destroy();
-        this.compactKernel.destroy();
-        this.argsKernel.destroy();
+        this.sim.destroy();
         this.whiteTexture.destroy();
     }
 
@@ -729,10 +616,10 @@ export class ParticleSystem3D {
         this.device.queue.writeBuffer(this.counts, 0, this.countsZero);
 
         const encoder = this.device.createCommandEncoder();
-        if (spawnCount > 0) this.spawnKernel.encode(encoder, spawnCount);
-        this.integrateKernel.encode(encoder, this.max);
-        this.compactKernel.encode(encoder, this.max);
-        this.argsKernel.encode(encoder, this.maxMaterials);
+        if (spawnCount > 0) this.sim.encodeSpawn(encoder, spawnCount);
+        this.sim.encodeIntegrate(encoder, this.max);
+        this.sim.encodeCompact(encoder, this.max);
+        this.sim.encodeArgs(encoder, this.maxMaterials);
         this.device.queue.submit([encoder.finish()]);
 
         this.head = (this.head + spawnCount) & this.mask;

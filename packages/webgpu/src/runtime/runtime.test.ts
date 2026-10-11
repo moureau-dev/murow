@@ -9,6 +9,7 @@ describe('webgpu runtime', () => {
         expect(typeof runtime.createBindGroupLayout).toBe('function');
         expect(typeof runtime.shaderSource).toBe('function');
         expect(typeof runtime.createPresentation).toBe('function');
-        expect(typeof runtime.compute.ComputeBuilder).toBe('function');
+        expect(typeof runtime.skinning.build).toBe('function');
+        expect(typeof runtime.particles.createSimulation).toBe('function');
     });
 });

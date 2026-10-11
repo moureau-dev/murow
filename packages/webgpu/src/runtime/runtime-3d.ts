@@ -148,8 +148,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     particles!: ParticleManager;
     /** Mesh creation and loading facade. */
     models!: ModelsManager;
-    /** GPU compute facade. */
-    compute!: any;
 
     private readonly _assets: AssetBucket<'3d', any, any> | null;
     private readonly _prefabs: PrefabBucket3D | null;
@@ -201,7 +199,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const presentation = await this.runtime.createPresentation(this.canvas);
         this.core.root = { device: presentation.device } as never;
         this.core.device = presentation.device;
-        this.compute = new (this.runtime.compute.ComputeManager)(this.core.device);
         this.core.context = presentation.context;
         this.core.format = presentation.format;
         presentation.configure({ alphaMode: 'opaque' });

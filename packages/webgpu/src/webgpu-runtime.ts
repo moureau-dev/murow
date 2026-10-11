@@ -8,9 +8,8 @@
 import type { Presentation, RendererRuntime } from 'murow/renderer/managers';
 import { compileProgram } from './gpu/backend';
 import { createGpuBindGroupLayout, createRawBuffer } from './gpu/device';
-import { ComputeBuilder } from './compute/compute-builder';
-import { ComputeManager } from './compute/compute-manager';
 import { createComputeSkinning } from './compute-skinning';
+import { createParticles3d } from './compute-particles';
 import { CAMERA_EFFECT_WGSL, HITBOX_WGSL, SPRITE_2D_WGSL } from './renderer-shaders';
 
 const SHADER_SOURCES: Record<string, string> = {
@@ -56,11 +55,8 @@ export function webgpuRuntime(): RendererRuntime {
         createBindGroupLayout: (descriptor) => createGpuBindGroupLayout(runtime.presentation.device as never, descriptor as never) as never,
         shaderSource: (name) => SHADER_SOURCES[name] ?? '',
 
-        compute: {
-            ComputeBuilder: ComputeBuilder as never,
-            ComputeManager: ComputeManager as never,
-        },
         skinning: createComputeSkinning(),
+        particles: createParticles3d(),
     };
     return runtime;
 }
