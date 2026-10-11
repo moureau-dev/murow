@@ -1,17 +1,60 @@
-import { describe, expect, test } from 'bun:test';
-import { MAX_MATERIALS_PER_INSTANCE, DYN_PREV_PX, DYN_CURR_PX, STAT_SX, STAT_MATERIAL_ID } from './offsets';
+import { test, expect, describe } from 'bun:test';
+import { d } from 'murow/gpu';
+import { StaticMesh, STATIC_MESH_FLOATS } from '../engine-core/types';
+import {
+    STAT_SX,
+    STAT_SY,
+    STAT_SZ,
+    STAT_CR,
+    STAT_CG,
+    STAT_CB,
+    STAT_MATERIAL_ID,
+    STAT_CUSTOM0,
+    STAT_CUSTOM1,
+} from './offsets';
 
-describe('instance offsets', () => {
-    test('dynamic prev/curr are distinct slots', () => {
-        expect(DYN_PREV_PX).not.toBe(DYN_CURR_PX);
+const fields = ((StaticMesh as any).fields as Array<{ name: string }>).map((field) => field.name);
+
+describe('StaticMesh GPU layout', () => {
+    test('packed f32 count matches statically declared float count', () => {
+        expect(d.sizeOf(StaticMesh)).toBe(STATIC_MESH_FLOATS * 4);
     });
 
-    test('static slots are ordered and bounded', () => {
-        expect(STAT_SX).toBe(0);
-        expect(STAT_MATERIAL_ID).toBeGreaterThan(STAT_SX);
+    test('struct has exactly STATIC_MESH_FLOATS fields', () => {
+        expect(fields.length).toBe(STATIC_MESH_FLOATS);
     });
 
-    test('material capacity is positive', () => {
-        expect(MAX_MATERIALS_PER_INSTANCE).toBeGreaterThan(0);
+    test('offset constants match the struct field order', () => {
+        expect([
+            STAT_SX,
+            STAT_SY,
+            STAT_SZ,
+            STAT_CR,
+            STAT_CG,
+            STAT_CB,
+            STAT_MATERIAL_ID,
+            STAT_CUSTOM0,
+            STAT_CUSTOM1,
+        ]).toEqual(fields.map((_, i) => i));
+    });
+
+    test('field names are in the expected slot order', () => {
+        expect(fields).toEqual([
+            'scaleX',
+            'scaleY',
+            'scaleZ',
+            'colorR',
+            'colorG',
+            'colorB',
+            'materialId',
+            'custom0',
+            'custom1',
+        ]);
+    });
+
+    test('materialId and custom slots use their fixed offsets', () => {
+        expect(STAT_MATERIAL_ID).toBe(6);
+        expect(STAT_CUSTOM0).toBe(7);
+        expect(STAT_CUSTOM1).toBe(8);
     });
 });
