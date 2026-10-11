@@ -1,8 +1,10 @@
-import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, d, std } from '../../../../gpu';
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
+import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
+import { compileProgram, createGpuBindGroupLayout } from '../backend';
 
 
-import { DynamicMesh, StaticMesh } from '../../../../core/types';
-import type { RendererCore } from '../../core/renderer-core';
+import { DynamicMesh, StaticMesh } from '../engine-core/types';
+import type { RendererCore } from '../core/renderer-core';
 import type { ShadowDrawBatch, ShadowModelLike } from './shadow-system';
 import { createSkinnedLightLayout, createSkinnedLightVertex, createLightDistanceFragment } from './light-shadow-shaders';
 
@@ -58,25 +60,25 @@ export interface SpotLightInput {
  * comparison is well-conditioned. Lit materials project into it and PCF-sample.
  */
 export class SpotShadowSystem {
-    private readonly device: GPUDevice;
+    private readonly device: RawDevice;
     private readonly maxInstances: number;
-    private readonly slotIndexBuffer: GPUBuffer;
-    private readonly sampler: GPUSampler;
-    private readonly uniformBuffer: GPUBuffer;
+    private readonly slotIndexBuffer: RawBuffer;
+    private readonly sampler: RawSampler;
+    private readonly uniformBuffer: RawBuffer;
     private readonly uniformData = new Float32Array(FLOATS);
     private readonly layout: ReturnType<typeof createSpotLayout>;
-    private readonly pipeline: GPURenderPipeline;
-    private readonly passBuffers: GPUBuffer[] = [];
-    private readonly passBindGroups: GPUBindGroup[] = [];
-    private readonly skinnedSlotIndexBuffer: GPUBuffer | null;
-    private readonly skinnedPipeline: GPURenderPipeline | null;
-    private readonly skinnedBindGroups: GPUBindGroup[] = [];
+    private readonly pipeline: RawRenderPipeline;
+    private readonly passBuffers: RawBuffer[] = [];
+    private readonly passBindGroups: RawBindGroup[] = [];
+    private readonly skinnedSlotIndexBuffer: RawBuffer | null;
+    private readonly skinnedPipeline: RawRenderPipeline | null;
+    private readonly skinnedBindGroups: RawBindGroup[] = [];
     private readonly passData = new Float32Array(PASS_FLOATS);
-    private readonly layerViews: GPUTextureView[] = [];
-    private readonly depthLayerViews: GPUTextureView[] = [];
-    private map: GPUTexture;
-    private depth: GPUTexture;
-    private readonly mapView: GPUTextureView;
+    private readonly layerViews: RawTextureView[] = [];
+    private readonly depthLayerViews: RawTextureView[] = [];
+    private map: RawTexture;
+    private depth: RawTexture;
+    private readonly mapView: RawTextureView;
 
     readonly maxShadows: number;
     resolution = 1024;
@@ -89,7 +91,7 @@ export class SpotShadowSystem {
         this.maxShadows = Math.max(1, Math.min(options.maxShadows ?? MAX_SPOT_SHADOWS, MAX_SPOT_SHADOWS));
         this.slotIndexBuffer = this.device.createBuffer({
             size: Math.max(4, deps.maxInstances * 4),
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            usage: RawBufferUsage.STORAGE | RawBufferUsage.COPY_DST,
         });
         this.sampler = this.device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
 
@@ -98,7 +100,7 @@ export class SpotShadowSystem {
         this.depth = targets.depth;
         this.mapView = targets.mapView;
 
-        this.uniformBuffer = this.device.createBuffer({ size: FLOATS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        this.uniformBuffer = this.device.createBuffer({ size: FLOATS * 4, usage: RawBufferUsage.UNIFORM | RawBufferUsage.COPY_DST });
 
         this.layout = createSpotLayout(deps.maxInstances);
         const vertex = createSpotShadowVertex(this.layout);
@@ -127,7 +129,7 @@ export class SpotShadowSystem {
         });
 
         for (let i = 0; i < this.maxShadows; i++) {
-            const buf = this.device.createBuffer({ size: PASS_FLOATS * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+            const buf = this.device.createBuffer({ size: PASS_FLOATS * 4, usage: RawBufferUsage.UNIFORM | RawBufferUsage.COPY_DST });
             this.passBuffers.push(buf);
             this.passBindGroups.push(this.device.createBindGroup({
                 layout: bgl,
@@ -142,7 +144,7 @@ export class SpotShadowSystem {
 
         if (deps.skinned) {
             const s = deps.skinned;
-            this.skinnedSlotIndexBuffer = this.device.createBuffer({ size: Math.max(4, s.maxInstances * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+            this.skinnedSlotIndexBuffer = this.device.createBuffer({ size: Math.max(4, s.maxInstances * 4), usage: RawBufferUsage.STORAGE | RawBufferUsage.COPY_DST });
             const skinnedLayout = createSkinnedLightLayout(SpotPassUniforms, s.maxInstances, s.maxBones);
             const sVertex = createSkinnedLightVertex(skinnedLayout);
             const sFragment = createLightDistanceFragment(skinnedLayout as never);
@@ -175,9 +177,9 @@ export class SpotShadowSystem {
         }
     }
 
-    get mapTexture(): GPUTextureView { return this.mapView; }
-    get mapSampler(): GPUSampler { return this.sampler; }
-    get uniforms(): GPUBuffer { return this.uniformBuffer; }
+    get mapTexture(): RawTextureView { return this.mapView; }
+    get mapSampler(): RawSampler { return this.sampler; }
+    get uniforms(): RawBuffer { return this.uniformBuffer; }
 
     setSlots(slots: Uint32Array<ArrayBuffer>, count: number): void {
         if (count > 0) this.device.queue.writeBuffer(this.slotIndexBuffer, 0, slots, 0, count);
@@ -187,7 +189,7 @@ export class SpotShadowSystem {
         if (count > 0 && this.skinnedSlotIndexBuffer) this.device.queue.writeBuffer(this.skinnedSlotIndexBuffer, 0, slots, 0, count);
     }
 
-    render(encoder: GPUCommandEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined, spots: readonly SpotLightInput[], skinnedBatches: ShadowDrawBatch[] = []): void {
+    render(encoder: RawCommandEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined, spots: readonly SpotLightInput[], skinnedBatches: ShadowDrawBatch[] = []): void {
         const count = this.enabled ? Math.min(spots.length, this.maxShadows) : 0;
         const m = this.uniformData;
         for (let i = 0; i < count; i++) {
@@ -208,7 +210,7 @@ export class SpotShadowSystem {
             });
             pass.setPipeline(this.pipeline);
             pass.setBindGroup(0, this.passBindGroups[i]!);
-            let current: GPUBuffer | null = null;
+            let current: RawBuffer | null = null;
             for (const batch of batches) {
                 const model = getModel(batch.modelId);
                 if (!model) continue;
@@ -223,7 +225,7 @@ export class SpotShadowSystem {
             if (skinnedBatches.length > 0 && this.skinnedPipeline && this.skinnedBindGroups[i]) {
                 pass.setPipeline(this.skinnedPipeline);
                 pass.setBindGroup(0, this.skinnedBindGroups[i]!);
-                let sCurrent: GPUBuffer | null = null;
+                let sCurrent: RawBuffer | null = null;
                 for (const batch of skinnedBatches) {
                     const model = getModel(batch.modelId);
                     if (!model) continue;
@@ -254,9 +256,9 @@ export class SpotShadowSystem {
         for (const b of this.passBuffers) b.destroy();
     }
 
-    private createTargets(res: number): { map: GPUTexture; mapView: GPUTextureView; depth: GPUTexture } {
-        const map = this.device.createTexture({ size: [res, res, this.maxShadows], format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
-        const depth = this.device.createTexture({ size: [res, res, this.maxShadows], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    private createTargets(res: number): { map: RawTexture; mapView: RawTextureView; depth: RawTexture } {
+        const map = this.device.createTexture({ size: [res, res, this.maxShadows], format: 'rgba16float', usage: RawTextureUsage.RENDER_ATTACHMENT | RawTextureUsage.TEXTURE_BINDING });
+        const depth = this.device.createTexture({ size: [res, res, this.maxShadows], format: 'depth32float', usage: RawTextureUsage.RENDER_ATTACHMENT });
         this.layerViews.length = 0;
         this.depthLayerViews.length = 0;
         for (let i = 0; i < this.maxShadows; i++) {

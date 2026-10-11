@@ -1,4 +1,4 @@
-import type { Handles } from '../../handles';
+import type { Handles } from '../handles';
 
 /**
  * Placeholder material view on raw store handles. The `InstanceManager`

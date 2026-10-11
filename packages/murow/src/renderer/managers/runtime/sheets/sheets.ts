@@ -1,3 +1,4 @@
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { GenerationAllocator } from 'murow/core/collection';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type {
@@ -6,9 +7,9 @@ import type {
     SpritesheetSource,
 } from 'murow/renderer';
 import { parseSpritesheet } from 'murow/renderer';
-import { Spritesheet, createTextureFromBitmap } from '../../../../spritesheet/spritesheet';
-import type { Renderer2DCore } from '../../core';
-import type { SheetId } from '../../ids';
+import { Spritesheet, createTextureFromBitmap } from '../spritesheet/spritesheet';
+import type { Renderer2DCore } from '../_2d/core';
+import type { SheetId } from '../_2d/ids';
 
 /**
  * SpritesheetManager uploads parsed spritesheets and owns their GPU bind groups.
@@ -18,7 +19,7 @@ import type { SheetId } from '../../ids';
 export class SpritesheetManager {
     private readonly allocator = new GenerationAllocator(SparseBatcher.MAX_SHEETS);
     private readonly sheets: (Spritesheet | null)[] = new Array(SparseBatcher.MAX_SHEETS).fill(null);
-    private readonly bindGroups: (GPUBindGroup | null)[] = new Array(SparseBatcher.MAX_SHEETS).fill(null);
+    private readonly bindGroups: (RawBindGroup | null)[] = new Array(SparseBatcher.MAX_SHEETS).fill(null);
 
     constructor(private readonly core: Renderer2DCore) {}
 
@@ -70,7 +71,7 @@ export class SpritesheetManager {
      * The texture bind group for a sheet id, or `null`.
      * @internal Used by the sprite pass.
      */
-    bindGroup(id: number): GPUBindGroup | null {
+    bindGroup(id: number): RawBindGroup | null {
         if (!this.allocator.isLive(id)) return null;
         return this.bindGroups[this.allocator.slotOf(id)] ?? null;
     }

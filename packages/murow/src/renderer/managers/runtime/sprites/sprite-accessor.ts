@@ -25,10 +25,10 @@ import {
     STATIC_OFFSET_UV_MAX_Y,
     STATIC_OFFSET_UV_MIN_X,
     STATIC_OFFSET_UV_MIN_Y,
-} from "../../../../core/constants";
+} from "../engine-core/constants";
 import type { SpriteHandle } from "murow/renderer";
-import type { HandleBase } from "../../../../handle-base";
-import type { SpriteId } from "../../ids";
+import type { HandleBase } from "../handle-base";
+import type { SpriteId } from "../_2d/ids";
 
 export class SpriteAccessor implements SpriteHandle, HandleBase<SpriteId> {
     private dynamicData: Float32Array;

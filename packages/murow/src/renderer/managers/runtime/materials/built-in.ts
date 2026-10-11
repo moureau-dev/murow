@@ -1,9 +1,9 @@
-import { GpuBindGroupLayout, GpuShader, d, std } from '../../../../gpu';
+import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
 
-import { lightContribution, tonemap } from '../../../../shaders/utils';
+import { lightContribution, tonemap } from '../shaders/utils';
 import { call, f32 as f32Type, vec as vecType } from 'murow/gpu/ir';
 import { ShaderValue, toExpr, type ShaderInput } from 'murow/gpu/dsl';
-import { createTexturedMeshVertex, type MeshDataLayout } from '../../../shader';
+import { createTexturedMeshVertex, type MeshDataLayout } from '../shader';
 
 import { ShadowUniforms } from '../shadows';
 import { SpotShadowUniforms } from '../shadows/spot-shadow-system';

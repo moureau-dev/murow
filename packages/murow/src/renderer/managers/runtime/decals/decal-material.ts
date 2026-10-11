@@ -1,4 +1,4 @@
-import { d, std } from '../../../../gpu';
+import { d, std } from 'murow/gpu';
 
 import type { MaterialSpec } from '../materials/specs';
 

@@ -11,9 +11,9 @@ import type {
     SpherePrefab,
     TexturePrefab,
 } from 'murow/renderer';
-import type { GltfModel, ModelData, ModelHandle } from '../../types';
-import type { ModelLibrary } from '../../internals/model-library';
-import type { RendererCore } from '../../core/renderer-core';
+import type { GltfModel, ModelData, ModelHandle } from '../types';
+import type { ModelLibrary } from '../internals/model-library';
+import type { RendererCore } from '../core/renderer-core';
 import { setPrefabHandle } from '../instances/prefab-handle';
 
 /**

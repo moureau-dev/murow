@@ -1,14 +1,15 @@
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import type { ShadowSystem, ShadowDrawBatch } from './shadow-system';
 import type { SpotShadowSystem } from './spot-shadow-system';
 import type { PointShadowSystem } from './point-shadow-system';
 import type { InstanceManager } from '../instances';
 import type { MaterialManager } from '../materials';
 import type { LightManager } from '../lights';
-import type { CameraManager } from '../camera';
-import type { RendererCore } from '../../core/renderer-core';
-import { Frustum } from '../../internals/frustum';
+import type { CameraManager } from '../camera/3d';
+import type { RendererCore } from '../core/renderer-core';
+import { Frustum } from '../internals/frustum';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
-import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../../../../core/types';
+import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../engine-core/types';
 import {
     DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ,
     STAT_SX, STAT_SY, STAT_SZ,
@@ -105,7 +106,7 @@ export class DirectionalShadowManager {
      * light box) and record the directional pass. Skips the pass when the box
      * and caster poses are unchanged.
      */
-    render(encoder: GPUCommandEncoder): void {
+    render(encoder: RawCommandEncoder): void {
         const { instances, materials, core, camera, lights } = this.deps;
         const boxChanged = this.system.update(lights.sunDirection, camera.position);
         if (!this.system.enabled) return;
@@ -230,7 +231,7 @@ export class SpotShadowManager {
      * spheres, and record the spot pass. Skips the pass when the casters and
      * poses are unchanged.
      */
-    render(encoder: GPUCommandEncoder): void {
+    render(encoder: RawCommandEncoder): void {
         const { instances, materials, core, lights } = this.deps;
         const casterCount = lights.assignSpotShadows(this.system.maxShadows);
         if (casterCount <= 0) {
@@ -360,7 +361,7 @@ export class PointShadowManager {
      * spheres, and record the point pass. Skips the pass when the casters and
      * poses are unchanged.
      */
-    render(encoder: GPUCommandEncoder): void {
+    render(encoder: RawCommandEncoder): void {
         const { instances, materials, core, lights } = this.deps;
         const casterCount = lights.assignPointShadows(this.system.maxShadows);
         if (casterCount <= 0) {

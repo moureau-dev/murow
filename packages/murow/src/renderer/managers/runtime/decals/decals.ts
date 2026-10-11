@@ -1,10 +1,10 @@
 import { PooledCollection } from 'murow/core/collection';
-import type { DecalId, LayerId } from '../../ids';
+import type { DecalId, LayerId } from '../ids';
 import type { Logger } from 'murow/core';
 import type { MaterialHandle } from '../materials/material-library';
 import type { MaterialSpec } from '../materials/specs';
 import { DecalLayer, type DecalInstance, type DecalLayerOptions, type SpawnDecalOptions } from './decal-layer';
-import type { Handles } from '../../handles';
+import type { Handles } from '../handles';
 
 type ManagedDecalLayer = Handles.DecalLayer;
 type DecalHandle = Handles.DecalHandle;

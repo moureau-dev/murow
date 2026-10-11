@@ -1,7 +1,9 @@
-import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d, std } from '../../../../gpu';
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
+import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
+import { compileProgram, createGpuBindGroupLayout, createRawBuffer } from '../../backend';
 
 
-import { ComputeBuilder, type ComputeKernel } from '../../../../compute/compute-builder';
+import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotMap } from 'murow/core/slot-map';
 import { Logger } from 'murow/core';
@@ -140,9 +142,9 @@ export interface ParticleEmitter3D {
 }
 
 export interface ParticleSystem3DOptions {
-    root: { device: GPUDevice };
+    root: { device: RawDevice };
     /** Target color format. */
-    format: GPUTextureFormat;
+    format: RawTextureFormat;
     /** Max live particles (rounded up to a power of two). Default 4096. */
     maxParticles?: number;
     /** Max particles spawned per frame. Default 512. */
@@ -152,7 +154,7 @@ export interface ParticleSystem3DOptions {
     /** Max live emitters. Default 64. */
     maxEmitters?: number;
     /** Resolves a material texture id to a GPU view + sampler. */
-    resolveTexture?: (id: string) => { view: GPUTextureView; sampler: GPUSampler } | undefined;
+    resolveTexture?: (id: string) => { view: RawTextureView; sampler: RawSampler } | undefined;
     /** Diagnostic logger for non-fatal warnings. Defaults to a no-op. */
     logger?: Logger;
 }
@@ -160,9 +162,9 @@ export interface ParticleSystem3DOptions {
 
 interface ParticleMaterial {
     key: string;
-    bindGroup: GPUBindGroup;
-    pipeline: GPURenderPipeline;
-    buffer: GPUBuffer;
+    bindGroup: RawBindGroup;
+    pipeline: RawRenderPipeline;
+    buffer: RawBuffer;
 }
 
 function nextPowerOfTwo(n: number): number {
@@ -178,33 +180,33 @@ function nextPowerOfTwo(n: number): number {
  * camera-facing quads batched by material.
  */
 export class ParticleSystem3D {
-    private readonly device: GPUDevice;
-    private readonly format: GPUTextureFormat;
+    private readonly device: RawDevice;
+    private readonly format: RawTextureFormat;
     private readonly max: number;
     private readonly mask: number;
     private readonly maxSpawns: number;
     private readonly maxMaterials: number;
     private readonly maxEmitters: number;
-    private readonly resolveTexture: ((id: string) => { view: GPUTextureView; sampler: GPUSampler } | undefined) | undefined;
+    private readonly resolveTexture: ((id: string) => { view: RawTextureView; sampler: RawSampler } | undefined) | undefined;
     private readonly logger: Logger;
-    private readonly pool: GPUBuffer;
-    private readonly spawns: GPUBuffer;
-    private readonly computeFrame: GPUBuffer;
-    private readonly renderFrame: GPUBuffer;
+    private readonly pool: RawBuffer;
+    private readonly spawns: RawBuffer;
+    private readonly computeFrame: RawBuffer;
+    private readonly renderFrame: RawBuffer;
     private readonly spawnKernel: ComputeKernel<any>;
     private readonly integrateKernel: ComputeKernel<any>;
     private readonly compactKernel: ComputeKernel<any>;
     private readonly argsKernel: ComputeKernel<any>;
-    private readonly counts: GPUBuffer;
-    private readonly indices: GPUBuffer;
-    private readonly args: GPUBuffer;
+    private readonly counts: RawBuffer;
+    private readonly indices: RawBuffer;
+    private readonly args: RawBuffer;
     private readonly countsZero: Uint32Array<ArrayBuffer>;
     private readonly layout: GpuBindGroupLayout;
-    private readonly whiteTexture: GPUTexture;
-    private readonly whiteView: GPUTextureView;
-    private readonly sampler: GPUSampler;
-    private readonly additivePipeline: GPURenderPipeline;
-    private readonly alphaPipeline: GPURenderPipeline;
+    private readonly whiteTexture: RawTexture;
+    private readonly whiteView: RawTextureView;
+    private readonly sampler: RawSampler;
+    private readonly additivePipeline: RawRenderPipeline;
+    private readonly alphaPipeline: RawRenderPipeline;
     private readonly materialSlots: SlotMap;
     private readonly materials: (ParticleMaterial | null)[];
     private readonly spawnStaging: Float32Array;
@@ -381,7 +383,7 @@ export class ParticleSystem3D {
         this.whiteTexture = this.device.createTexture({
             size: [1, 1, 1],
             format: 'rgba8unorm',
-            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+            usage: RawTextureUsage.TEXTURE_BINDING | RawTextureUsage.COPY_DST,
         });
         this.device.queue.writeTexture({ texture: this.whiteTexture }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
         this.whiteView = this.whiteTexture.createView();
@@ -459,7 +461,7 @@ export class ParticleSystem3D {
         const { code } = compileProgram([vertex, fragment]);
         const module = this.device.createShaderModule({ code, label: 'particles-3d' });
         const pipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [createGpuBindGroupLayout(this.device, layout.toDescriptor())] });
-        const target = (blend: GPUBlendState | undefined): GPUColorTargetState => ({ format, blend });
+        const target = (blend: RawBlendState | undefined): RawColorTargetState => ({ format, blend });
         this.additivePipeline = this.device.createRenderPipeline({
             label: 'particles-3d-additive',
             layout: pipelineLayout,
@@ -485,7 +487,7 @@ export class ParticleSystem3D {
 
         this.renderFrame = this.device.createBuffer({
             size: PARTICLE_3D_FRAME_FLOATS * 4,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            usage: RawBufferUsage.UNIFORM | RawBufferUsage.COPY_DST,
         });
 
         // Material 0 is the default soft additive disc.
@@ -582,7 +584,7 @@ export class ParticleSystem3D {
     }
 
     /** Draw every material batch into the current render pass. */
-    draw(pass: GPURenderPassEncoder, viewProj: Float32Array, right: ArrayLike<number>, up: ArrayLike<number>): void {
+    draw(pass: RawRenderPassEncoder, viewProj: Float32Array, right: ArrayLike<number>, up: ArrayLike<number>): void {
         if (this.totalSpawned === 0) return;
 
         const f = this.frameData;
@@ -646,7 +648,7 @@ export class ParticleSystem3D {
         const sampler = resolved?.sampler ?? this.sampler;
         const id = slot;
 
-        const buffer = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const buffer = this.device.createBuffer({ size: 32, usage: RawBufferUsage.UNIFORM | RawBufferUsage.COPY_DST });
         const atlas = spec.atlas;
         this.device.queue.writeBuffer(buffer, 0, new Float32Array([id, useTexture, id * this.max, atlas?.cols ?? 1, atlas?.rows ?? 1, atlas?.fps ?? 0, 0, 0]));
         const bindGroup = this.device.createBindGroup({

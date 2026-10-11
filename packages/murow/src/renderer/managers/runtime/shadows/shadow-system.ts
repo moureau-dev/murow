@@ -1,8 +1,10 @@
-import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, d, std } from '../../../../gpu';
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
+import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
+import { compileProgram, createGpuBindGroupLayout } from '../backend';
 
 
-import { DynamicMesh, SkinnedStaticMesh, StaticMesh } from '../../../../core/types';
-import type { RendererCore } from '../../core/renderer-core';
+import { DynamicMesh, SkinnedStaticMesh, StaticMesh } from '../engine-core/types';
+import type { RendererCore } from '../core/renderer-core';
 
 /** Light-space matrix + tunables, shared by the shadow pass and receivers. */
 export const ShadowUniforms = d.struct({
@@ -39,9 +41,9 @@ export interface ShadowDrawBatch {
 }
 
 export interface ShadowModelLike {
-    rawVertexBuffer: GPUBuffer;
-    rawIndexBuffer: GPUBuffer | null;
-    indexFormat: GPUIndexFormat;
+    rawVertexBuffer: RawBuffer;
+    rawIndexBuffer: RawBuffer | null;
+    indexFormat: RawIndexFormat;
     indexCount: number;
     vertexCount: number;
 }
@@ -55,10 +57,10 @@ const FLOATS = 16 + 4 + 4;
  * against it with a 3x3 PCF.
  */
 export class ShadowSystem {
-    private readonly device: GPUDevice;
+    private readonly device: RawDevice;
     private readonly maxInstances: number;
     /** Slot indices of casters, written per frame from the all-instance list. */
-    private readonly slotIndexBuffer: GPUBuffer;
+    private readonly slotIndexBuffer: RawBuffer;
 
     /** Mutable settings; all uniform-driven except `resolution`. */
     enabled = true;
@@ -79,19 +81,19 @@ export class ShadowSystem {
     private hasBox = false;
 
     private resolutionValue: number;
-    private map: GPUTexture;
-    private mapView: GPUTextureView;
-    private depth: GPUTexture;
-    private depthView: GPUTextureView;
-    private readonly sampler: GPUSampler;
-    private readonly uniformBuffer: GPUBuffer;
+    private map: RawTexture;
+    private mapView: RawTextureView;
+    private depth: RawTexture;
+    private depthView: RawTextureView;
+    private readonly sampler: RawSampler;
+    private readonly uniformBuffer: RawBuffer;
     private readonly uniformData = new Float32Array(FLOATS);
     private readonly layout: ReturnType<typeof createShadowLayout>;
-    private readonly pipeline: GPURenderPipeline;
-    private readonly bindGroup: GPUBindGroup;
-    private readonly skinnedSlotIndexBuffer: GPUBuffer | null;
-    private readonly skinnedPipeline: GPURenderPipeline | null;
-    private readonly skinnedBindGroup: GPUBindGroup | null;
+    private readonly pipeline: RawRenderPipeline;
+    private readonly bindGroup: RawBindGroup;
+    private readonly skinnedSlotIndexBuffer: RawBuffer | null;
+    private readonly skinnedPipeline: RawRenderPipeline | null;
+    private readonly skinnedBindGroup: RawBindGroup | null;
     private resolutionHook: (() => void) | null = null;
 
     constructor(deps: ShadowSystemDeps, options: ShadowOptions = {}) {
@@ -100,7 +102,7 @@ export class ShadowSystem {
         this.resolutionValue = options.resolution ?? 2048;
         this.slotIndexBuffer = this.device.createBuffer({
             size: Math.max(4, deps.maxInstances * 4),
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            usage: RawBufferUsage.STORAGE | RawBufferUsage.COPY_DST,
         });
 
         // Linear filtering bilinear-averages each PCF tap, which smooths the
@@ -119,7 +121,7 @@ export class ShadowSystem {
 
         this.uniformBuffer = this.device.createBuffer({
             size: FLOATS * 4,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            usage: RawBufferUsage.UNIFORM | RawBufferUsage.COPY_DST,
         });
 
         this.layout = createShadowLayout(deps.maxInstances);
@@ -162,7 +164,7 @@ export class ShadowSystem {
             const s = deps.skinned;
             this.skinnedSlotIndexBuffer = this.device.createBuffer({
                 size: Math.max(4, s.maxInstances * 4),
-                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+                usage: RawBufferUsage.STORAGE | RawBufferUsage.COPY_DST,
             });
             const skinnedLayout = createSkinnedShadowLayout(s.maxInstances, s.maxBones);
             const skinnedVertex = createSkinnedShadowVertex(skinnedLayout);
@@ -207,11 +209,11 @@ export class ShadowSystem {
     /** Called by the renderer after a resolution change so materials rebind. */
     setResolutionHook(fn: () => void): void { this.resolutionHook = fn; }
     /** Uniform buffer holding `ShadowUniforms`, bound by receiving materials. */
-    get uniforms(): GPUBuffer { return this.uniformBuffer; }
+    get uniforms(): RawBuffer { return this.uniformBuffer; }
     /** Current light view-projection (column-major, 16 floats), for culling. */
     get viewProjection(): Float32Array { return this.uniformData.subarray(0, 16); }
-    get mapTexture(): GPUTextureView { return this.mapView; }
-    get mapSampler(): GPUSampler { return this.sampler; }
+    get mapTexture(): RawTextureView { return this.mapView; }
+    get mapSampler(): RawSampler { return this.sampler; }
 
     /**
      * Recompute the sun's orthographic view-projection around `focus`.
@@ -292,7 +294,7 @@ export class ShadowSystem {
     }
 
     /** Encode the shadow pass into `encoder` (before the main pass). */
-    encode(encoder: GPUCommandEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined, skinnedBatches: ShadowDrawBatch[] = []): void {
+    encode(encoder: RawCommandEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined, skinnedBatches: ShadowDrawBatch[] = []): void {
         if (!this.enabled) return;
         const pass = encoder.beginRenderPass({
             colorAttachments: [{
@@ -326,8 +328,8 @@ export class ShadowSystem {
         }
     }
 
-    private drawBatches(pass: GPURenderPassEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined): void {
-        let current: GPUBuffer | null = null;
+    private drawBatches(pass: RawRenderPassEncoder, batches: ShadowDrawBatch[], getModel: (id: number) => ShadowModelLike | undefined): void {
+        let current: RawBuffer | null = null;
         for (const batch of batches) {
             const model = getModel(batch.modelId);
             if (!model) continue;
@@ -365,16 +367,16 @@ export class ShadowSystem {
         this.skinnedSlotIndexBuffer?.destroy();
     }
 
-    private createTargets(res: number): { map: GPUTexture; mapView: GPUTextureView; depth: GPUTexture } {
+    private createTargets(res: number): { map: RawTexture; mapView: RawTextureView; depth: RawTexture } {
         const map = this.device.createTexture({
             size: [res, res, 1],
             format: 'rgba16float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+            usage: RawTextureUsage.RENDER_ATTACHMENT | RawTextureUsage.TEXTURE_BINDING,
         });
         const depth = this.device.createTexture({
             size: [res, res, 1],
             format: 'depth32float',
-            usage: GPUTextureUsage.RENDER_ATTACHMENT,
+            usage: RawTextureUsage.RENDER_ATTACHMENT,
         });
         return { map, mapView: map.createView(), depth };
     }

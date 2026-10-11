@@ -2,7 +2,7 @@
  * Per-prefab GPU handle helpers, populated by the renderer at `init()` time
  * when a PrefabBucket is supplied.
  */
-import type { ModelHandle, GltfModel } from '../../types';
+import type { ModelHandle, GltfModel } from '../types';
 import type { Prefab3D } from 'murow/renderer';
 
 const GPU_HANDLE = Symbol('murow.gpuHandle');

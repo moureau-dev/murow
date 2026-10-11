@@ -1,7 +1,7 @@
-import { GpuBindGroupLayout, GpuShader, d, std } from '../../../../gpu';
+import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
 
 import type { GpuStruct } from 'murow/gpu/schema';
-import { DynamicMesh, SkinnedStaticMesh } from '../../../../core/types';
+import { DynamicMesh, SkinnedStaticMesh } from '../engine-core/types';
 
 
 /**

@@ -1,6 +1,6 @@
 type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 import { PooledCollection } from 'murow/core/collection';
-import type { MaterialId } from '../../ids';
+import type { MaterialId } from '../ids';
 import { generateId, type Logger } from 'murow/core';
 import type { MaterialLibrary, MaterialHandle } from './material-library';
 import type { MaterialSpec } from './specs';

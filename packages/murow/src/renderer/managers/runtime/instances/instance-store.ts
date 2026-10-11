@@ -1,8 +1,9 @@
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { SlotMap } from 'murow/core/slot-map';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { TexturePrefab } from 'murow/renderer';
-import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS } from '../../../../core/types';
-import type { MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../../types';
+import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS } from '../engine-core/types';
+import type { MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../types';
 import {
     DYN_PREV_PX, DYN_PREV_PY, DYN_PREV_PZ,
     DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ,
@@ -18,7 +19,7 @@ import { EMPTY_MATERIALS } from './empty-materials';
 export interface InstanceStoreDeps {
     maxInstances: number;
     /** Bind group for a registered texture id, or undefined. */
-    getTextureBindGroup(id: string): GPUBindGroup | undefined;
+    getTextureBindGroup(id: string): RawBindGroup | undefined;
     /** Record one instance starting to use a 1-based material id (0 = default). */
     retainMaterial?(materialId: number): void;
     /** Record one instance stopping use of a 1-based material id. */
@@ -49,7 +50,7 @@ export class InstanceStore {
     /** Number of materials in each slot's list (always at least 1). */
     readonly materialCount: Uint8Array;
     /** Per-slot texture override bind group, or null for the model default. */
-    private readonly textureBGs: (GPUBindGroup | null)[];
+    private readonly textureBGs: (RawBindGroup | null)[];
 
     constructor(private readonly deps: InstanceStoreDeps) {
         const n = deps.maxInstances;
@@ -65,11 +66,11 @@ export class InstanceStore {
         this.batcher = new SparseBatcher(n);
     }
 
-    textureBindGroup(slot: number): GPUBindGroup | undefined {
+    textureBindGroup(slot: number): RawBindGroup | undefined {
         return this.textureBGs[slot] ?? undefined;
     }
 
-    setTextureBindGroup(slot: number, bindGroup: GPUBindGroup): void {
+    setTextureBindGroup(slot: number, bindGroup: RawBindGroup): void {
         this.textureBGs[slot] = bindGroup;
     }
 

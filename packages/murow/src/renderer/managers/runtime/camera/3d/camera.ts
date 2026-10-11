@@ -1,4 +1,4 @@
-import { Camera3D, type Camera3DOptions } from '../../../../camera/camera-3d';
+import { Camera3D, type Camera3DOptions } from '../../cameras/camera-3d';
 
 /**
  * CameraManager is the public camera facade over `Camera3D`. It carries no

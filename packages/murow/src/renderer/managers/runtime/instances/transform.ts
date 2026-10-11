@@ -1,4 +1,4 @@
-import type { MeshInstanceOptions } from '../../types';
+import type { MeshInstanceOptions } from '../types';
 
 /** Resolve the tuple-shape transform options into flat scalars + defaults. */
 export function resolveTransform(opts: MeshInstanceOptions<any>) {

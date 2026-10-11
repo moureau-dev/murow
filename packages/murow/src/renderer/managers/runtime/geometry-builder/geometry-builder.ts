@@ -1,0 +1,1025 @@
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
+/**
+ * GeometryBuilder — fluent builder for custom instanced geometries.
+ * Uses TypeGPU for type-safe GPU resource management.
+ * Fully generic — field names and types are inferred through the builder chain.
+ *
+ * Usage:
+ * ```ts
+ * const geom = renderer.geometry
+ *     .create('particles', { maxInstances: 5000, geometry: 'quad' })
+ *     .instanceLayout({ dynamic: { position: d.vec2f }, static: { color: d.vec4f } })
+ *     .uniforms({ time: d.f32 })
+ *     .shaders((layout) => ({
+ *         vertex: tgpu.vertexFn({...})(function(input) {
+ *             const pos = layout.$.dynamicInstances[input.instanceIndex].position;
+ *             return { pos: d.vec4f(pos.x, pos.y, 0, 1) };
+ *         }),
+ *         fragment: tgpu.fragmentFn({...})(function(input) { ... }),
+ *     }))
+ *     .build();
+ *
+ * geom.addInstance({ position: [1, 2], color: [1, 0, 0, 1] }); // ← typed field names
+ * geom.updateUniforms({ time: 1.5 });                           // ← typed uniform names
+ * ```
+ */
+import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
+import { compileProgram, createGpuBindGroupLayout, createRawBuffer, sizeOf, getPresentation } from '../backend';
+
+// Stable local names: shader bodies are parsed from their source, so bundlers
+// must not rename `d`/`std` inside them.
+import type { BuiltInGeometry, GeometryData } from './built-in';
+import { resolveBuiltInGeometry } from './built-in';
+import { SlotMap } from 'murow/core/slot-map';
+import type { ComputeKernel } from '../compute/compute-builder';
+
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
+
+/** Pack a schema value to bytes for upload. */
+function pack(schema: any, value: unknown): Uint8Array {
+    const size = sizeOf(schema);
+    const buffer = new ArrayBuffer(size);
+    const dv = new DataView(buffer);
+    if (Array.isArray(schema.fields)) for (const m of schema.fields) m.field.write(dv, m.offset, (value as Record<string, unknown>)?.[m.name]);
+    else schema.write(dv, 0, value);
+    return new Uint8Array(buffer);
+}
+
+// =============================================================================
+// Type utilities
+// =============================================================================
+
+/** Map a TypeGPU data type to its JS value representation. */
+type DataToValue<T> =
+    T extends typeof d.f32 ? number :
+    T extends typeof d.vec2f ? [number, number] | number[] :
+    T extends typeof d.vec3f ? [number, number, number] | number[] :
+    T extends typeof d.vec4f ? [number, number, number, number] | number[] :
+    number | number[];
+
+/** Partial record mapping field names to their JS values. */
+type FieldValues<T extends Record<string, AnyField>> = {
+    [K in keyof T]?: DataToValue<T[K]>;
+};
+
+/** All instance field names (dynamic + static). */
+type AllFields<D extends Record<string, AnyField>, S extends Record<string, AnyField>> =
+    keyof D | keyof S;
+
+// =============================================================================
+// Public types
+// =============================================================================
+
+export interface CustomGeometryLayout {
+    layout?: Record<string, { type: string; size: number }>;
+    vertices?: Array<Record<string, number | number[]>>;
+    indices?: number[];
+}
+
+export interface GeometryOptions {
+    maxInstances: number;
+    geometry: BuiltInGeometry | CustomGeometryLayout;
+}
+
+/** Typed instance layout config with inferred field types. */
+export interface InstanceLayoutConfig<
+    D extends Record<string, AnyField> = Record<string, AnyField>,
+    S extends Record<string, AnyField> = Record<string, AnyField>,
+> {
+    dynamic: D;
+    static: S;
+}
+
+export interface GeometryDataLayout<
+    D extends Record<string, AnyField> = Record<string, AnyField>,
+    S extends Record<string, AnyField> = Record<string, AnyField>,
+    U extends Record<string, AnyField> = Record<string, AnyField>,
+> {
+    dataLayout: GpuBindGroupLayout;
+    instanceLayout: InstanceLayoutConfig<D, S>;
+    uniformDefs: U;
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+export function getFieldFloats(desc: AnyField): number {
+    if (desc === d.f32) return 1;
+    if (desc === d.vec2f) return 2;
+    if (desc === d.vec3f) return 3;
+    if (desc === d.vec4f) return 4;
+    if (desc === d.mat3x3f) return 9;
+    if (desc === d.mat4x4f) return 16;
+    if (typeof desc === 'object' && desc !== null) {
+        try { return d.sizeOf(desc) / 4; } catch { /* fallthrough */ }
+    }
+    return 1;
+}
+
+function buildStructFromLayout(fields: Record<string, AnyField>) {
+    return d.struct(fields);
+}
+
+function buildCustomGeometryData(config: CustomGeometryLayout): GeometryData {
+    if (!config.layout || !config.vertices) {
+        throw new Error('Custom geometry requires layout and vertices');
+    }
+    const fieldNames = Object.keys(config.layout);
+    let floatsPerVertex = 0;
+    for (const name of fieldNames) floatsPerVertex += config.layout[name].size;
+    const verts: number[] = [];
+    for (const vertex of config.vertices) {
+        for (const name of fieldNames) {
+            const val = vertex[name];
+            if (typeof val === 'number') verts.push(val);
+            else if (Array.isArray(val)) verts.push(...val);
+        }
+    }
+    const result: GeometryData = {
+        vertices: new Float32Array(verts),
+        vertexCount: config.vertices.length,
+        floatsPerVertex,
+        is3D: floatsPerVertex >= 6,
+    };
+    if (config.indices) result.indices = new Uint16Array(config.indices);
+    return result;
+}
+
+// =============================================================================
+// createGeometryDataLayout
+// =============================================================================
+
+export function createGeometryDataLayout<
+    D extends Record<string, AnyField>,
+    S extends Record<string, AnyField>,
+    U extends Record<string, AnyField>,
+>(
+    instanceLayout: InstanceLayoutConfig<D, S>,
+    uniformDefs: U,
+    maxInstances: number,
+): GeometryDataLayout<D, S, U> {
+    const DynStruct = Object.keys(instanceLayout.dynamic).length > 0
+        ? buildStructFromLayout(instanceLayout.dynamic)
+        : d.struct({ _pad: d.f32 });
+    const StatStruct = Object.keys(instanceLayout.static).length > 0
+        ? buildStructFromLayout(instanceLayout.static)
+        : d.struct({ _pad: d.f32 });
+
+    const parsedUniformDefs: Record<string, AnyField> = {};
+    for (const [key, val] of Object.entries(uniformDefs)) {
+        if (val === d.f32 || val === d.vec2f || val === d.vec3f || val === d.vec4f) {
+            parsedUniformDefs[key] = val;
+        } else {
+            parsedUniformDefs[key] = d.f32;
+        }
+    }
+    const UniformStruct = Object.keys(parsedUniformDefs).length > 0
+        ? buildStructFromLayout(parsedUniformDefs)
+        : d.struct({ _pad: d.f32 });
+
+    const dataLayout = new GpuBindGroupLayout({
+        uniforms: { uniform: UniformStruct },
+        dynamic: { storage: d.arrayOf(DynStruct, maxInstances) },
+        statics: { storage: d.arrayOf(StatStruct, maxInstances) },
+    });
+
+    return { dataLayout, instanceLayout, uniformDefs };
+}
+
+// =============================================================================
+// CustomGeometry
+// =============================================================================
+
+export class CustomGeometry<
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
+> {
+    readonly name: string;
+    readonly maxInstances: number;
+    readonly geometryData: GeometryData;
+
+    private device: RawDevice;
+    private slots: SlotMap;
+    private layoutConfig: InstanceLayoutConfig<TDynamic, TStatic>;
+
+    private dynamicFieldNames: string[];
+    private staticFieldNames: string[];
+    private dynamicFloatsPerInstance: number;
+    private staticFloatsPerInstance: number;
+    private dynamicData: Float32Array;
+    private staticData: Float32Array;
+    private uniformValues: Record<string, unknown>;
+
+    private _dynamicDirty = true;
+    private _staticDirty = true;
+    private _uniformDirty = true;
+    private _isComputeSourced = false;
+    private _drawCount = 0;
+
+    private _ctx: InstanceContext<TDynamic, TStatic>;
+
+    private dynamicBuffer: RawBuffer;
+    private staticBuffer: RawBuffer;
+    private uniformBuffer: RawBuffer;
+    private uniformSchema: any;
+    private staticSchema: any;
+    private pipeline: RawRenderPipeline;
+    private dataBindGroup: RawBindGroup;
+    private canvas: HTMLCanvasElement;
+    private clearColor: [number, number, number, number];
+
+    /** @internal — use GeometryBuilder to create instances. */
+    constructor(
+        name: string, device: RawDevice, maxInstances: number, geometryData: GeometryData,
+        layoutConfig: InstanceLayoutConfig<TDynamic, TStatic>,
+        uniformValues: Record<string, unknown>,
+        dynamicBuffer: RawBuffer, staticBuffer: RawBuffer,
+        uniformBuffer: RawBuffer, uniformSchema: any, staticSchema: any,
+        pipeline: RawRenderPipeline, dataBindGroup: RawBindGroup,
+        canvas: HTMLCanvasElement, clearColor: [number, number, number, number],
+        isComputeSourced = false,
+    ) {
+        this.name = name;
+        this.device = device;
+        this.maxInstances = maxInstances;
+        this.geometryData = geometryData;
+        this.layoutConfig = layoutConfig;
+
+        this.dynamicFieldNames = Object.keys(layoutConfig.dynamic);
+        this.staticFieldNames = Object.keys(layoutConfig.static);
+
+        this.dynamicFloatsPerInstance = 0;
+        for (const n of this.dynamicFieldNames) this.dynamicFloatsPerInstance += getFieldFloats(layoutConfig.dynamic[n]);
+        this.staticFloatsPerInstance = 0;
+        for (const n of this.staticFieldNames) this.staticFloatsPerInstance += getFieldFloats(layoutConfig.static[n]);
+
+        this.slots = new SlotMap(maxInstances);
+        this.dynamicData = new Float32Array(maxInstances * this.dynamicFloatsPerInstance);
+        this.staticData = new Float32Array(maxInstances * this.staticFloatsPerInstance);
+        this.uniformValues = { ...uniformValues };
+
+        this.dynamicBuffer = dynamicBuffer;
+        this.staticBuffer = staticBuffer;
+        this.uniformBuffer = uniformBuffer;
+        this.uniformSchema = uniformSchema;
+        this.staticSchema = staticSchema;
+        this.pipeline = pipeline;
+        this.dataBindGroup = dataBindGroup;
+        this.canvas = canvas;
+        this.clearColor = clearColor;
+
+        this._ctx = new InstanceContext<TDynamic, TStatic>();
+        this._isComputeSourced = isComputeSourced;
+        if (isComputeSourced) this._drawCount = maxInstances;
+    }
+
+    /**
+     * Set the number of instances to draw. Only needed for compute-sourced geometries
+     * where the instance count may change dynamically.
+     */
+    setDrawCount(count: number): void {
+        this._drawCount = count;
+    }
+
+    addInstance(data: FieldValues<TDynamic> & FieldValues<TStatic>): number {
+        const slot = this.slots.add();
+        if (slot === -1) throw new Error(`Max instances (${this.maxInstances}) reached for "${this.name}"`);
+        this.setInstanceData(slot, data);
+        return slot;
+    }
+
+    removeInstance(slot: number): void {
+        const dynBase = slot * this.dynamicFloatsPerInstance;
+        const statBase = slot * this.staticFloatsPerInstance;
+        this.dynamicData.fill(0, dynBase, dynBase + this.dynamicFloatsPerInstance);
+        this.staticData.fill(0, statBase, statBase + this.staticFloatsPerInstance);
+        this._dynamicDirty = true;
+        this._staticDirty = true;
+
+        this.slots.remove(slot);
+    }
+
+    setInstanceData(slot: number, data: FieldValues<TDynamic> & FieldValues<TStatic>): void {
+        const rawData = data as Record<string, number | number[] | undefined>;
+        let dynOffset = slot * this.dynamicFloatsPerInstance;
+        for (const field of this.dynamicFieldNames) {
+            const size = getFieldFloats(this.layoutConfig.dynamic[field]);
+            const val = rawData[field];
+            if (val !== undefined) {
+                if (typeof val === 'number') this.dynamicData[dynOffset] = val;
+                else for (let i = 0; i < val.length; i++) this.dynamicData[dynOffset + i] = val[i];
+            }
+            dynOffset += size;
+        }
+        let statOffset = slot * this.staticFloatsPerInstance;
+        for (const field of this.staticFieldNames) {
+            const size = getFieldFloats(this.layoutConfig.static[field]);
+            const val = rawData[field];
+            if (val !== undefined) {
+                if (typeof val === 'number') this.staticData[statOffset] = val;
+                else for (let i = 0; i < val.length; i++) this.staticData[statOffset + i] = val[i];
+            }
+            statOffset += size;
+        }
+        this._dynamicDirty = true;
+        this._staticDirty = true;
+    }
+
+    getInstance(slot: number): InstanceAccessor<TDynamic, TStatic> {
+        return new InstanceAccessor<TDynamic, TStatic>(
+            this.dynamicData, this.staticData, slot,
+            this.dynamicFloatsPerInstance, this.staticFloatsPerInstance,
+            this.dynamicFieldNames, this.staticFieldNames, this.layoutConfig,
+            () => { this._dynamicDirty = true; },
+            () => { this._staticDirty = true; },
+        );
+    }
+
+    updateUniforms(values: Partial<FieldValues<TUniforms>>): void {
+        for (const [key, val] of Object.entries(values)) {
+            if (val === undefined) continue;
+            if (typeof val === 'number') {
+                this.uniformValues[key] = val;
+            } else if (Array.isArray(val)) {
+                if (val.length === 2) this.uniformValues[key] = d.vec2f(val[0], val[1]);
+                else if (val.length === 3) this.uniformValues[key] = d.vec3f(val[0], val[1], val[2]);
+                else if (val.length === 4) this.uniformValues[key] = d.vec4f(val[0], val[1], val[2], val[3]);
+                else this.uniformValues[key] = val;
+            } else {
+                this.uniformValues[key] = val;
+            }
+        }
+        this._uniformDirty = true;
+    }
+
+    getActiveCount(): number {
+        return this.slots.size;
+    }
+
+    updateAll(callback: (ctx: InstanceContext<TDynamic, TStatic>, slot: number) => void): void {
+        this._ctx._bind(this.dynamicData, this.staticData,
+            this.dynamicFloatsPerInstance, this.staticFloatsPerInstance,
+            this.dynamicFieldNames, this.staticFieldNames, this.layoutConfig);
+
+        const count = this.slots.size;
+        const slots = this.slots.activeSlots;
+        for (let i = 0; i < count; i++) {
+            const slot = slots[i]!;
+            this._ctx._setSlot(slot);
+            callback(this._ctx, slot);
+        }
+
+        this._dynamicDirty = true;
+        this._staticDirty = true;
+    }
+
+    render(): void {
+        const device = this.device;
+        const count = this._isComputeSourced ? this._drawCount : this.slots.size;
+        if (count === 0) return;
+
+        const context = getPresentation().context;
+        if (!context) return;
+        const view = context.getCurrentTexture().createView();
+
+        // Skip dynamic buffer upload for compute-sourced geometries — compute owns the buffer
+        if (!this._isComputeSourced && this._dynamicDirty) {
+            device.queue.writeBuffer(this.dynamicBuffer, 0,
+                this.dynamicData.buffer, this.dynamicData.byteOffset, this.dynamicData.byteLength);
+            this._dynamicDirty = false;
+        }
+        if (this._staticDirty) {
+            device.queue.writeBuffer(this.staticBuffer, 0,
+                this.staticData.buffer, this.staticData.byteOffset, this.staticData.byteLength);
+            this._staticDirty = false;
+        }
+        if (this._uniformDirty) {
+            device.queue.writeBuffer(this.uniformBuffer, 0, pack(this.uniformSchema, this.uniformValues) as RawBufferSource);
+            this._uniformDirty = false;
+        }
+
+        const [r, g, b, a] = this.clearColor;
+        const encoder = device.createCommandEncoder();
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r, g, b, a } }],
+        });
+        pass.setPipeline(this.pipeline);
+        pass.setBindGroup(0, this.dataBindGroup);
+        pass.draw(this.geometryData.vertexCount, count);
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+    }
+
+    destroy(): void {
+        this.dynamicBuffer.destroy();
+        this.staticBuffer.destroy();
+        this.uniformBuffer.destroy();
+    }
+}
+
+// =============================================================================
+// InstanceContext (reusable, zero-alloc for updateAll)
+// =============================================================================
+
+export class InstanceContext<
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+> {
+    private dynamicData!: Float32Array;
+    private staticData!: Float32Array;
+    private dynamicStride = 0;
+    private staticStride = 0;
+    private dynamicFieldNames!: string[];
+    private staticFieldNames!: string[];
+    private layout!: InstanceLayoutConfig<TDynamic, TStatic>;
+    private dynBase = 0;
+    private statBase = 0;
+
+    /** @internal */
+    _bind(
+        dynamicData: Float32Array, staticData: Float32Array,
+        dynamicStride: number, staticStride: number,
+        dynamicFieldNames: string[], staticFieldNames: string[],
+        layout: InstanceLayoutConfig<TDynamic, TStatic>,
+    ): void {
+        this.dynamicData = dynamicData;
+        this.staticData = staticData;
+        this.dynamicStride = dynamicStride;
+        this.staticStride = staticStride;
+        this.dynamicFieldNames = dynamicFieldNames;
+        this.staticFieldNames = staticFieldNames;
+        this.layout = layout;
+    }
+
+    /** @internal */
+    _setSlot(slot: number): void {
+        this.dynBase = slot * this.dynamicStride;
+        this.statBase = slot * this.staticStride;
+    }
+
+    get(field: AllFields<TDynamic, TStatic> & string): number | number[] {
+        const dynIdx = this.fieldOffset(field, this.dynamicFieldNames, this.layout.dynamic);
+        if (dynIdx !== null) {
+            const size = getFieldFloats(this.layout.dynamic[field]);
+            if (size === 1) return this.dynamicData[this.dynBase + dynIdx];
+            const result: number[] = [];
+            for (let i = 0; i < size; i++) result.push(this.dynamicData[this.dynBase + dynIdx + i]);
+            return result;
+        }
+        const statIdx = this.fieldOffset(field, this.staticFieldNames, this.layout.static);
+        if (statIdx !== null) {
+            const size = getFieldFloats(this.layout.static[field]);
+            if (size === 1) return this.staticData[this.statBase + statIdx];
+            const result: number[] = [];
+            for (let i = 0; i < size; i++) result.push(this.staticData[this.statBase + statIdx + i]);
+            return result;
+        }
+        throw new Error(`Field "${field}" not found`);
+    }
+
+    set(field: AllFields<TDynamic, TStatic> & string, value: number | number[]): void {
+        const dynIdx = this.fieldOffset(field, this.dynamicFieldNames, this.layout.dynamic);
+        if (dynIdx !== null) {
+            if (typeof value === 'number') this.dynamicData[this.dynBase + dynIdx] = value;
+            else for (let i = 0; i < value.length; i++) this.dynamicData[this.dynBase + dynIdx + i] = value[i];
+            return;
+        }
+        const statIdx = this.fieldOffset(field, this.staticFieldNames, this.layout.static);
+        if (statIdx !== null) {
+            if (typeof value === 'number') this.staticData[this.statBase + statIdx] = value;
+            else for (let i = 0; i < value.length; i++) this.staticData[this.statBase + statIdx + i] = value[i];
+            return;
+        }
+        throw new Error(`Field "${field}" not found`);
+    }
+
+    private fieldOffset(field: string, names: string[], layoutFields: Record<string, AnyField>): number | null {
+        let offset = 0;
+        for (const name of names) {
+            if (name === field) return offset;
+            offset += getFieldFloats(layoutFields[name]);
+        }
+        return null;
+    }
+}
+
+// =============================================================================
+// InstanceAccessor
+// =============================================================================
+
+export class InstanceAccessor<
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+> {
+    private dynamicData: Float32Array;
+    private staticData: Float32Array;
+    private dynBase: number;
+    private statBase: number;
+    private dynamicFieldNames: string[];
+    private staticFieldNames: string[];
+    private layout: InstanceLayoutConfig<TDynamic, TStatic>;
+    private _onDynDirty: () => void;
+    private _onStatDirty: () => void;
+
+    constructor(
+        dynamicData: Float32Array, staticData: Float32Array,
+        slot: number, dynamicStride: number, staticStride: number,
+        dynamicFieldNames: string[], staticFieldNames: string[],
+        layout: InstanceLayoutConfig<TDynamic, TStatic>,
+        onDynDirty: () => void, onStatDirty: () => void,
+    ) {
+        this.dynamicData = dynamicData;
+        this.staticData = staticData;
+        this.dynBase = slot * dynamicStride;
+        this.statBase = slot * staticStride;
+        this.dynamicFieldNames = dynamicFieldNames;
+        this.staticFieldNames = staticFieldNames;
+        this.layout = layout;
+        this._onDynDirty = onDynDirty;
+        this._onStatDirty = onStatDirty;
+    }
+
+    get(field: AllFields<TDynamic, TStatic> & string): number | number[] {
+        const dynIdx = this.fieldOffset(field, this.dynamicFieldNames, this.layout.dynamic);
+        if (dynIdx !== null) {
+            const size = getFieldFloats(this.layout.dynamic[field]);
+            if (size === 1) return this.dynamicData[this.dynBase + dynIdx];
+            const result: number[] = [];
+            for (let i = 0; i < size; i++) result.push(this.dynamicData[this.dynBase + dynIdx + i]);
+            return result;
+        }
+        const statIdx = this.fieldOffset(field, this.staticFieldNames, this.layout.static);
+        if (statIdx !== null) {
+            const size = getFieldFloats(this.layout.static[field]);
+            if (size === 1) return this.staticData[this.statBase + statIdx];
+            const result: number[] = [];
+            for (let i = 0; i < size; i++) result.push(this.staticData[this.statBase + statIdx + i]);
+            return result;
+        }
+        throw new Error(`Field "${field}" not found`);
+    }
+
+    set(field: AllFields<TDynamic, TStatic> & string, value: number | number[]): void {
+        const dynIdx = this.fieldOffset(field, this.dynamicFieldNames, this.layout.dynamic);
+        if (dynIdx !== null) {
+            if (typeof value === 'number') this.dynamicData[this.dynBase + dynIdx] = value;
+            else for (let i = 0; i < value.length; i++) this.dynamicData[this.dynBase + dynIdx + i] = value[i];
+            this._onDynDirty();
+            return;
+        }
+        const statIdx = this.fieldOffset(field, this.staticFieldNames, this.layout.static);
+        if (statIdx !== null) {
+            if (typeof value === 'number') this.staticData[this.statBase + statIdx] = value;
+            else for (let i = 0; i < value.length; i++) this.staticData[this.statBase + statIdx + i] = value[i];
+            this._onStatDirty();
+            return;
+        }
+        throw new Error(`Field "${field}" not found`);
+    }
+
+    private fieldOffset(field: string, names: string[], layoutFields: Record<string, AnyField>): number | null {
+        let offset = 0;
+        for (const name of names) {
+            if (name === field) return offset;
+            offset += getFieldFloats(layoutFields[name]);
+        }
+        return null;
+    }
+}
+
+// =============================================================================
+// GeometryBuilder
+// =============================================================================
+
+type ShaderResult = {
+    vertex: GpuShader<Record<string, AnyField>, Record<string, AnyField>>;
+    fragment: GpuShader<Record<string, AnyField>, AnyField>;
+};
+
+/** Vertex input builtins available in shader functions. */
+export interface VertexInput {
+    /** The vertex index within the current draw call (0-5 for a quad). */
+    vertexIndex: number;
+    /** The instance index within the current draw call. */
+    instanceIndex: number;
+}
+
+/**
+ * Declarative shader config — no `tgpu.vertexFn`, no `'use gpu'`.
+ * The builder handles all TypeGPU wiring internally.
+ */
+export interface DeclarativeShaders<
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
+> {
+    vertex: {
+        /** Varyings output from vertex to fragment (position is always included). */
+        out: Record<string, AnyField>;
+        /** Vertex shader body. Receives typed context and vertex input. */
+        fn: (
+            ctx: ShaderContext<TDynamic, TStatic, TUniforms>,
+            input: VertexInput,
+        ) => Record<string, unknown>;
+    };
+    fragment: {
+        /** Fragment shader body. Receives varyings from vertex shader. */
+        fn: (input: Record<string, unknown>) => unknown;
+    };
+}
+
+type ResolveWgsl<T> =
+  // factory function
+  T extends (...args: any) => infer R ? R :
+  T;
+
+type ResolveRecord<T extends Record<string, AnyField>> = {
+  readonly [K in keyof T]: ResolveWgsl<T[K]>;
+};
+
+/**
+ * Context passed to the shader factory callback.
+ * Provides `dynamic`, `statics`, and `uniforms` accessors with typed field names.
+ *
+ * **These accessors are lazy** — they only resolve when accessed inside a `'use gpu'` body.
+ * Capture them in the closure and use inside shader functions:
+ *
+ * ```ts
+ * .shaders(({ dynamic, statics, uniforms }) => ({
+ *     vertex: tgpu.vertexFn({...})(function(input) {
+ *         'use gpu';
+ *         const pos = dynamic[input.instanceIndex].position;
+ *         const time = uniforms.time;
+ *     }),
+ * }))
+ * ```
+ */
+export interface ShaderContext<
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
+    > {
+    /** Per-instance dynamic data (updated every frame). Access: `dynamic[instanceIndex].fieldName` */
+    readonly dynamic: Readonly<Record<number, Readonly<ResolveRecord<TDynamic>>>>;
+    /** Per-instance static data (set once). Access: `statics[instanceIndex].fieldName` */
+    readonly statics: Readonly<Record<number, Readonly<ResolveRecord<TStatic>>>>;
+    /** Shared uniforms. Access: `uniforms.fieldName` */
+    readonly uniforms: Readonly<ResolveRecord<TUniforms>>;
+    /** Raw TypeGPU bind group layout — escape hatch for advanced usage. */
+    readonly layout: GpuBindGroupLayout;
+}
+
+type ShaderFactory<
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
+> = (ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => ShaderResult;
+
+export class GeometryBuilder<
+    TDynamic extends Record<string, AnyField> = Record<string, never>,
+    TStatic extends Record<string, AnyField> = Record<string, never>,
+    TUniforms extends Record<string, AnyField> = Record<string, never>,
+> {
+    private _name: string;
+    private _options: GeometryOptions;
+    private _root: { device: RawDevice };
+    private _format: RawTextureFormat;
+    private _layoutConfig: InstanceLayoutConfig<TDynamic, TStatic> | null = null;
+    private _uniformDefs: TUniforms = {} as TUniforms;
+    private _vertexFn: GpuShader<Record<string, AnyField>, Record<string, AnyField>> | null = null;
+    private _fragmentFn: GpuShader<Record<string, AnyField>, AnyField> | null = null;
+    private _shaderFactory: ShaderFactory<TDynamic, TStatic, TUniforms> | null = null;
+    private _vertexVaryings: Record<string, AnyField> | null = null;
+    private _vertexFactory: ((ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => Function) | null = null;
+    private _fragmentFactory: Function | null = null;
+    private _declarativeShaders: DeclarativeShaders<TDynamic, TStatic, TUniforms> | null = null;
+    private _computeSource: { kernel: ComputeKernel<Record<string, unknown>>; bufferName: string } | null = null;
+    private _dataLayout: GeometryDataLayout<TDynamic, TStatic, TUniforms> | null = null;
+
+    private _canvas: HTMLCanvasElement;
+    private _clearColor: [number, number, number, number];
+
+    constructor(name: string, options: GeometryOptions, root: { device: RawDevice }, format: RawTextureFormat, canvas: HTMLCanvasElement, clearColor: [number, number, number, number]) {
+        this._name = name;
+        this._options = options;
+        this._root = root;
+        this._format = format;
+        this._canvas = canvas;
+        this._clearColor = clearColor;
+    }
+
+    instanceLayout<
+        D extends Record<string, AnyField>,
+        S extends Record<string, AnyField>,
+    >(layout: InstanceLayoutConfig<D, S> | GeometryDataLayout<D, S, TUniforms>): GeometryBuilder<D, S, TUniforms> {
+        const next = this as unknown as GeometryBuilder<D, S, TUniforms>;
+        if ('dataLayout' in layout) {
+            next._dataLayout = layout;
+            next._layoutConfig = layout.instanceLayout;
+            next._uniformDefs = layout.uniformDefs as unknown as TUniforms;
+        } else {
+            next._layoutConfig = layout;
+        }
+        return next;
+    }
+
+    uniforms<U extends Record<string, AnyField>>(defs: U): GeometryBuilder<TDynamic, TStatic, U> {
+        const next = this as unknown as GeometryBuilder<TDynamic, TStatic, U>;
+        next._uniformDefs = defs;
+        return next;
+    }
+
+    /**
+     * Bind a compute kernel's buffer as this geometry's dynamic instance data.
+     * Zero-copy: the render shader reads directly from the compute buffer.
+     *
+     * ```ts
+     * const compute = renderer.compute.create('physics', { workgroupSize: 256 })
+     *     .buffers({ particles: { storage: d.arrayOf(ParticleStruct, MAX), readwrite: true } })
+     *     .shader(...)
+     *     .build();
+     *
+     * const render = renderer.geometry.create('vis', { maxInstances: MAX, geometry: 'quad' })
+     *     .fromCompute(compute, 'particles')
+     *     .uniforms({ resolution: d.vec2f })
+     *     .shaders({ ... })
+     *     .build();
+     * ```
+     */
+    fromCompute(kernel: ComputeKernel<Record<string, unknown>>, bufferName: string): this {
+        this._computeSource = { kernel, bufferName };
+        return this;
+    }
+
+    /**
+     * Provide shaders as a callback that receives the bind group layout.
+     *
+     * ```ts
+     * .shaders((layout) => ({
+     *     vertex: tgpu.vertexFn({...})(function(input) {
+     *         const pos = layout.$.dynamicInstances[input.instanceIndex].position;
+     *     }),
+     *     fragment: tgpu.fragmentFn({...})(function(input) { ... }),
+     * }))
+     * ```
+     *
+     * Or provide pre-built shaders directly:
+     * ```ts
+     * .shaders(vertexFn, fragmentFn)
+     * ```
+     */
+    /**
+     * Provide shaders via a factory callback that receives a typed context.
+     *
+     * ```ts
+     * .shaders(({ dynamic, statics, uniforms }) => ({
+     *     vertex: tgpu.vertexFn({...})(function(input) { ... }),
+     *     fragment: tgpu.fragmentFn({...})(function(input) { ... }),
+     * }))
+     * ```
+     *
+     * Or provide pre-built shaders directly:
+     * ```ts
+     * .shaders(vertexFn, fragmentFn)
+     * ```
+     */
+    shaders(
+        vertexOrFactoryOrConfig:
+            | GpuShader<Record<string, AnyField>, Record<string, AnyField>>
+            | ShaderFactory<TDynamic, TStatic, TUniforms>
+            | DeclarativeShaders<TDynamic, TStatic, TUniforms>,
+        fragment?: GpuShader<Record<string, AnyField>, AnyField>,
+    ): this {
+        if (fragment !== undefined) {
+            // .shaders(vertexFn, fragmentFn)
+            this._vertexFn = vertexOrFactoryOrConfig as GpuShader<Record<string, AnyField>, Record<string, AnyField>>;
+            this._fragmentFn = fragment;
+        } else if (typeof vertexOrFactoryOrConfig === 'function') {
+            // .shaders((ctx) => ({ vertex, fragment }))
+            this._shaderFactory = vertexOrFactoryOrConfig as ShaderFactory<TDynamic, TStatic, TUniforms>;
+        } else {
+            // .shaders({ vertex: { out, fn }, fragment: { fn } })
+            this._declarativeShaders = vertexOrFactoryOrConfig as DeclarativeShaders<TDynamic, TStatic, TUniforms>;
+        }
+        return this;
+    }
+
+    /**
+     * Set the vertex shader with typed context.
+     * The builder handles `tgpu.vertexFn` wrapping and builtin inputs.
+     *
+     * ```ts
+     * .vertex(
+     *     { brightness: d.f32, localUV: d.vec2f },  // varyings
+     *     (ctx) => function(input) {
+     *         'use gpu';
+     *         const pos = ctx.dynamic[input.instanceIndex].position;
+     *         return { pos: d.vec4f(...), brightness, localUV };
+     *     }
+     * )
+     * ```
+     */
+    vertexShader<V extends Record<string, AnyField>>(
+        varyings: V,
+        factory: (ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => (input: { vertexIndex: number; instanceIndex: number }) => Record<string, AnyField>,
+    ): this {
+        this._vertexVaryings = varyings;
+        this._vertexFactory = factory;
+        return this;
+    }
+
+    /**
+     * Set the fragment shader.
+     *
+     * ```ts
+     * .fragmentShader(function(input) {
+     *     'use gpu';
+     *     return d.vec4f(1, 1, 1, 1);
+     * })
+     * ```
+     */
+    fragmentShader(
+        fn: (input: Record<string, unknown>) => unknown,
+    ): this {
+        this._fragmentFactory = fn;
+        return this;
+    }
+
+    build(): CustomGeometry<TDynamic, TStatic, TUniforms> {
+        if (!this._layoutConfig) throw new Error(`Geometry "${this._name}": instanceLayout() is required`);
+
+        const root = this._root;
+        const maxInstances = this._options.maxInstances;
+
+        const geometryData = typeof this._options.geometry === 'string'
+            ? resolveBuiltInGeometry(this._options.geometry)
+            : buildCustomGeometryData(this._options.geometry);
+
+        const geoLayout = this._dataLayout ?? createGeometryDataLayout(
+            this._layoutConfig, this._uniformDefs, maxInstances,
+        );
+
+        // Build the lazy shader context (getters defer layout.$ access to GPU evaluation time)
+        const layout = geoLayout.dataLayout;
+        const lazyCtx = Object.create(null) as ShaderContext<TDynamic, TStatic, TUniforms>;
+        Object.defineProperties(lazyCtx, {
+            dynamic: { get: () => layout.$.dynamic },
+            statics: { get: () => layout.$.statics },
+            uniforms: { get: () => layout.$.uniforms },
+            layout: { value: layout },
+        });
+
+        // Resolve shaders
+        if (this._shaderFactory) {
+            // Callback: .shaders((ctx) => ({ vertex, fragment }))
+            const shaders = this._shaderFactory(lazyCtx);
+            this._vertexFn = shaders.vertex;
+            this._fragmentFn = shaders.fragment;
+        } else if (this._declarativeShaders) {
+            // Declarative: .shaders({ vertex: { out, fn }, fragment: { fn } })
+            const decl = this._declarativeShaders;
+            const varyings = decl.vertex.out;
+
+            const vertexOut: Record<string, unknown> = { pos: d.builtin.position };
+            const fragmentIn: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(varyings)) {
+                vertexOut[k] = v;
+                fragmentIn[k] = v;
+            }
+
+            // Build the externals resolver — maps free variable names in the shader body
+            // to their runtime values. Called lazily by TypeGPU during pipeline resolution
+            // (inside GPU context, so layout.$ is valid).
+            const resolveExternals = (knownExternals: Record<string, unknown>) => () => {
+                // Try layout accessors first (works inside shader context).
+                // Fall back to placeholders when called eagerly (e.g. for minification detection).
+                const base: Record<string, unknown> = { d, std, ...knownExternals };
+                for (const key of ['dynamic', 'statics', 'uniforms'] as const) {
+                    try {
+                        base[key] = (layout.$ as Record<string, unknown>)[key];
+                    } catch {
+                        // Outside shader context — placeholder is fine, eager call only
+                        // checks for bundler-renamed names, never accesses buffer values.
+                        base[key] = {};
+                    }
+                }
+                return base;
+            };
+
+            // Attach metadata so the facade can lower the body. A vertex fn has
+            // (ctx, input): strip the first param, and its destructured names
+            // resolve against the externals provider below.
+            const geoExpose = { uniforms: 'geo.uniforms', dynamic: 'geo.dynamic', statics: 'geo.statics' };
+            this._vertexFn = GpuShader.vertex({
+                in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
+                out: vertexOut,
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, decl.vertex.fn as any);
+            this._fragmentFn = GpuShader.fragment({
+                in: fragmentIn,
+                out: d.vec4f,
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, decl.fragment.fn as any);
+        } else if (this._vertexFactory && this._fragmentFactory) {
+            // Builder methods: .vertexShader().fragmentShader()
+            const varyings = this._vertexVaryings ?? {};
+            const vertexOut: Record<string, unknown> = { pos: d.builtin.position };
+            const fragmentIn: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(varyings)) {
+                vertexOut[k] = v;
+                fragmentIn[k] = v;
+            }
+
+            const geoExpose = { uniforms: 'geo.uniforms', dynamic: 'geo.dynamic', statics: 'geo.statics' };
+            const vertexBody = this._vertexFactory(lazyCtx);
+            this._vertexFn = GpuShader.vertex({
+                in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
+                out: vertexOut,
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, vertexBody as any);
+            this._fragmentFn = GpuShader.fragment({
+                in: fragmentIn,
+                out: d.vec4f,
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, this._fragmentFactory as any);
+        }
+
+        if (!this._vertexFn) throw new Error(`Geometry "${this._name}": vertex shader is required`);
+        if (!this._fragmentFn) throw new Error(`Geometry "${this._name}": fragment shader is required`);
+        const dataLayout = geoLayout.dataLayout;
+
+        // Uniform initial values
+        const uniformInitial: Record<string, unknown> = {};
+        for (const key of Object.keys(this._uniformDefs)) {
+            uniformInitial[key] = 0;
+        }
+
+        // TypeGPU structs
+        const DynStruct = Object.keys(this._layoutConfig.dynamic).length > 0
+            ? buildStructFromLayout(this._layoutConfig.dynamic)
+            : d.struct({ _pad: d.f32 });
+        const StatStruct = Object.keys(this._layoutConfig.static).length > 0
+            ? buildStructFromLayout(this._layoutConfig.static)
+            : d.struct({ _pad: d.f32 });
+        const parsedUniformDefs: Record<string, AnyField> = {};
+        for (const [key, val] of Object.entries(this._uniformDefs)) {
+            parsedUniformDefs[key] = (val === d.f32 || val === d.vec2f || val === d.vec3f || val === d.vec4f) ? val : d.f32;
+        }
+        const UniformStruct = Object.keys(parsedUniformDefs).length > 0
+            ? buildStructFromLayout(parsedUniformDefs)
+            : d.struct({ _pad: d.f32 });
+
+        // Buffers — if fromCompute() was called, reuse the compute buffer as dynamic data
+        const device = root.device;
+        const dynamicBuffer = this._computeSource
+            ? this._computeSource.kernel.getBuffer(this._computeSource.bufferName)
+            : createRawBuffer(device, d.arrayOf(DynStruct, maxInstances), 'storage');
+        const staticBuffer = createRawBuffer(device, d.arrayOf(StatStruct, maxInstances), 'storage');
+        const uniformBuffer = createRawBuffer(device, UniformStruct, 'uniform');
+
+        const dataBgl = createGpuBindGroupLayout(device, dataLayout.toDescriptor());
+        const dataBindGroup = device.createBindGroup({
+            layout: dataBgl,
+            entries: [
+                { binding: 0, resource: { buffer: uniformBuffer } },
+                { binding: 1, resource: { buffer: dynamicBuffer } },
+                { binding: 2, resource: { buffer: staticBuffer } },
+            ],
+        });
+
+        const { code } = compileProgram([this._vertexFn as any, this._fragmentFn as any]);
+        const module = device.createShaderModule({ code, label: this._name });
+        const pipeline = device.createRenderPipeline({
+            label: this._name,
+            layout: device.createPipelineLayout({ bindGroupLayouts: [dataBgl] }),
+            vertex: { module },
+            fragment: {
+                module,
+                targets: [{
+                    format: this._format,
+                    blend: {
+                        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                    },
+                }],
+            },
+            primitive: { topology: 'triangle-list' },
+        });
+
+        return new CustomGeometry<TDynamic, TStatic, TUniforms>(
+            this._name, device, maxInstances, geometryData,
+            this._layoutConfig, uniformInitial,
+            dynamicBuffer, staticBuffer,
+            uniformBuffer, UniformStruct, StatStruct,
+            pipeline, dataBindGroup,
+            this._canvas, this._clearColor,
+            !!this._computeSource,
+        );
+    }
+}

@@ -1,8 +1,9 @@
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { SlotMap } from 'murow/core/slot-map';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { SkeletalAnimState, PlayOptions, TexturePrefab } from 'murow/renderer';
-import { DYNAMIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../../../../core/types';
-import type { MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../../types';
+import { DYNAMIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../engine-core/types';
+import type { MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../types';
 import {
     DYN_PREV_PX, DYN_PREV_PY, DYN_PREV_PZ,
     DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ,
@@ -33,7 +34,7 @@ export interface SkinnedInstanceStoreDeps {
     maxSkins: number;
     /** Upload the skin's rest pose into the shared bone-matrix buffer at `boneOffset`. */
     uploadRestPose(skinModel: SkinModelLike, boneOffset: number, jointCount: number): void;
-    getTextureBindGroup(id: string): GPUBindGroup | undefined;
+    getTextureBindGroup(id: string): RawBindGroup | undefined;
     /** Record one instance starting to use a 1-based material id (0 = default). */
     retainMaterial?(materialId: number): void;
     /** Record one instance stopping use of a 1-based material id. */
@@ -74,7 +75,7 @@ export class SkinnedInstanceStore {
     /** Dense live-slot set; iterate `activeSlots` over `[0, size)`. */
     readonly slots: SlotMap;
     /** Per-slot texture override bind group, or null for the model default. */
-    private readonly textureBGs: (GPUBindGroup | null)[];
+    private readonly textureBGs: (RawBindGroup | null)[];
     /** Per-slot material ids, `MAX_MATERIALS_PER_INSTANCE` per slot (0 = default). */
     readonly materialIds: Uint16Array;
     /** Number of materials in each slot's list (always at least 1). */
@@ -103,7 +104,7 @@ export class SkinnedInstanceStore {
     }
 
     /** Per-slot texture override bind group, or undefined for the model default. */
-    textureBindGroup(slot: number): GPUBindGroup | undefined {
+    textureBindGroup(slot: number): RawBindGroup | undefined {
         return this.textureBGs[slot] ?? undefined;
     }
 

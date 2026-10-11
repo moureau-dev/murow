@@ -1,6 +1,8 @@
-import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d, std, sizeOf } from '../../../../gpu';
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
+import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
+import { compileProgram, createGpuBindGroupLayout, createRawBuffer, sizeOf } from '../backend';
 
-import { lightContribution, tonemap } from '../../../../shaders/utils';
+import { lightContribution, tonemap } from '../shaders/utils';
 
 type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 type Infer<T> = any;
@@ -16,16 +18,16 @@ function pack(schema: any, value: unknown): Uint8Array {
     return new Uint8Array(buffer);
 }
 import { SlotMap } from 'murow/core/slot-map';
-import type { MaterialId } from '../../ids';
-import type { MeshPipelines } from '../../internals/mesh-pipelines/mesh-pipelines';
-import type { TextureRegistry } from '../../internals/texture-registry';
+import type { MaterialId } from '../ids';
+import type { MeshPipelines } from '../internals/mesh-pipelines/mesh-pipelines';
+import type { TextureRegistry } from '../internals/texture-registry';
 import type { ShadowSystem } from '../shadows';
 import { ShadowUniforms } from '../shadows';
 import type { SpotShadowSystem } from '../shadows/spot-shadow-system';
 import { SpotShadowUniforms } from '../shadows/spot-shadow-system';
 import type { PointShadowSystem } from '../shadows/point-shadow-system';
 import { PointShadowUniforms } from '../shadows/point-shadow-system';
-import { createUnlitMeshVertex, createTexturedMeshVertex, createSkinnedMeshVertex, createExtrudedMeshVertex, createExtrudedSkinnedMeshVertex, type MeshDataLayout, type SkinnedMeshDataLayout } from '../../../shader';
+import { createUnlitMeshVertex, createTexturedMeshVertex, createSkinnedMeshVertex, createExtrudedMeshVertex, createExtrudedSkinnedMeshVertex, type MeshDataLayout, type SkinnedMeshDataLayout } from '../shader';
 import type { MaterialSpec, ResolvedRenderState } from './specs';
 import { resolveRenderState, isTransparent } from './specs';
 import {
@@ -68,17 +70,17 @@ export interface MaterialHandle<
 }
 
 export interface CompiledMaterial {
-    readonly pipeline: GPURenderPipeline;
+    readonly pipeline: RawRenderPipeline;
     /** Pipeline variant for skinned instances, when a skinned layout is available. */
-    readonly skinnedPipeline: GPURenderPipeline | null;
-    readonly bindGroup: GPUBindGroup;
+    readonly skinnedPipeline: RawRenderPipeline | null;
+    readonly bindGroup: RawBindGroup;
     readonly renderState: ResolvedRenderState;
     readonly transparent: boolean;
 }
 
 export interface MaterialLibraryDeps {
     root?: unknown;
-    device: GPUDevice;
+    device: RawDevice;
     pipelines: MeshPipelines;
     textures: TextureRegistry;
     meshLayout: MeshDataLayout;
@@ -97,13 +99,13 @@ interface MaterialEntry {
     /** Registered name, when one was supplied (released on destroy). */
     name?: string;
     compiled: CompiledMaterial;
-    buffer: GPUBuffer;
+    buffer: RawBuffer;
     layout: any;
     mirror: Record<string, unknown>;
     textureNames: string[];
     textureIds: Record<string, string | null>;
     /** Per-texture sampler overrides (wrap/filter), re-applied on rebind. */
-    samplerOverrides: Record<string, GPUSampler> | undefined;
+    samplerOverrides: Record<string, RawSampler> | undefined;
     /** Whether this material's geometry is added to the shadow map. */
     shadowCast: boolean;
     write(): void;
@@ -116,7 +118,7 @@ export class MaterialLibrary {
     private shaderVertex: ReturnType<typeof createTexturedMeshVertex> | null = null;
     private shaderSkinnedVertex: ReturnType<typeof createSkinnedMeshVertex> | null = null;
     private shaderUnlitVertex: ReturnType<typeof createUnlitMeshVertex> | null = null;
-    private readonly samplers: { key: string; sampler: GPUSampler }[] = [];
+    private readonly samplers: { key: string; sampler: RawSampler }[] = [];
     /** Live instance users per 1-based material id; index 0 is the default. */
     private readonly useCounts: Uint32Array;
     /** Registered material names -> slot. Names are unique per renderer. */
@@ -255,7 +257,7 @@ export class MaterialLibrary {
             receiveShadow: (spec.shadow?.receive ?? true) ? 1 : 0,
             extrude: spec.extrude ?? 0,
         };
-        this.deps.device.queue.writeBuffer(buffer, 0, pack(EngineMaterialUniforms, mirror) as GPUAllowSharedBufferSource);
+        this.deps.device.queue.writeBuffer(buffer, 0, pack(EngineMaterialUniforms, mirror) as RawBufferSource);
 
         // Built per material: the vertex reads this material's `extrude`, so it
         // must reference this material's bind-group layout object (not a cached one).
@@ -283,7 +285,7 @@ export class MaterialLibrary {
         // Alpha-tested geometry would cast a solid rectangle (the shadow pass
         // ignores the alpha texture), so it does not cast unless asked.
         const shadowCast = (spec.shadow?.cast ?? (spec.alphaTest ?? 0) <= 0) && !isTransparent(state);
-        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides, shadowCast, write: () => this.deps.device.queue.writeBuffer(buffer, 0, pack(EngineMaterialUniforms, mirror) as GPUAllowSharedBufferSource) };
+        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides, shadowCast, write: () => this.deps.device.queue.writeBuffer(buffer, 0, pack(EngineMaterialUniforms, mirror) as RawBufferSource) };
     }
 
     private createShaderMaterial(slot: number, spec: Extract<MaterialSpec, { type: 'shader' }>, state: ResolvedRenderState): MaterialEntry {
@@ -323,7 +325,7 @@ export class MaterialLibrary {
                 const key = keys[i]!;
                 out[key] = coerceUniform(schema[key]!, mirror[key]);
             }
-            this.deps.device.queue.writeBuffer(buffer, 0, pack(Struct, out) as GPUAllowSharedBufferSource);
+            this.deps.device.queue.writeBuffer(buffer, 0, pack(Struct, out) as RawBufferSource);
         };
         writeMirror();
 
@@ -420,7 +422,7 @@ export class MaterialLibrary {
         return { vertex, fragment };
     }
 
-    private buildEngineSkinnedPipeline(spec: Extract<MaterialSpec, { type: 'standard' | 'unlit' | 'emissive' }>, layout: any, state: ResolvedRenderState): GPURenderPipeline | null {
+    private buildEngineSkinnedPipeline(spec: Extract<MaterialSpec, { type: 'standard' | 'unlit' | 'emissive' }>, layout: any, state: ResolvedRenderState): RawRenderPipeline | null {
         const skinnedLayout = this.deps.skinnedLayout;
         if (!skinnedLayout) return null;
         const vertex = createExtrudedSkinnedMeshVertex(skinnedLayout, layout);
@@ -442,7 +444,7 @@ export class MaterialLibrary {
         });
     }
 
-    private buildShaderSkinnedPipeline(spec: Extract<MaterialSpec, { type: 'shader' }>, layout: any, state: ResolvedRenderState, textureNames: string[]): GPURenderPipeline | null {
+    private buildShaderSkinnedPipeline(spec: Extract<MaterialSpec, { type: 'shader' }>, layout: any, state: ResolvedRenderState, textureNames: string[]): RawRenderPipeline | null {
         const skinnedLayout = this.deps.skinnedLayout;
         if (!skinnedLayout || spec.shaders.vertex) return null;
         const { vertex, fragment } = this.compileDeclarative(spec, skinnedLayout, layout, textureNames, true);
@@ -461,12 +463,12 @@ export class MaterialLibrary {
 
     private createBindGroup(
         layout: GpuBindGroupLayout,
-        buffer: GPUBuffer,
+        buffer: RawBuffer,
         textureNames: string[],
         textureIds: Record<string, string | null>,
-        samplerOverrides?: Record<string, GPUSampler>,
-    ): GPUBindGroup {
-        const entries: GPUBindGroupEntry[] = [
+        samplerOverrides?: Record<string, RawSampler>,
+    ): RawBindGroup {
+        const entries: RawBindGroupEntry[] = [
             { binding: 0, resource: { buffer } },
         ];
         let binding = 1;
@@ -491,7 +493,7 @@ export class MaterialLibrary {
     }
 
     /** Sampler for a texture address mode + filter combination, cached by config. */
-    private getSampler(wrap?: 'repeat' | 'clamp', filter?: 'linear' | 'nearest'): GPUSampler {
+    private getSampler(wrap?: 'repeat' | 'clamp', filter?: 'linear' | 'nearest'): RawSampler {
         const mode = wrap === 'repeat' ? 'repeat' : 'clamp-to-edge';
         const filtering = filter === 'nearest' ? 'nearest' : 'linear';
         const key = `${mode}|${filtering}`;
@@ -510,7 +512,7 @@ export class MaterialLibrary {
         return sampler;
     }
 
-    private resolveTexture(textureId: string | null): { view: GPUTextureView; sampler: GPUSampler } {
+    private resolveTexture(textureId: string | null): { view: RawTextureView; sampler: RawSampler } {
         if (textureId) {
             const tex = this.deps.textures.get(textureId);
             if (tex) return { view: tex.view, sampler: tex.sampler };

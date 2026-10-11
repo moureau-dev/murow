@@ -1,4 +1,4 @@
-import { Camera2D, type Camera2DOptions } from '../../../../camera/camera-2d';
+import { Camera2D, type Camera2DOptions } from '../../cameras/camera-2d';
 
 /**
  * CameraManager2D is the public 2D camera facade over `Camera2D`. It carries no

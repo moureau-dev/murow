@@ -1,3 +1,4 @@
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { PooledCollection } from 'murow/core/collection';
 import type { EmitterId } from '../../ids';
 import type { Logger } from 'murow/core';
@@ -64,7 +65,7 @@ export class ParticleManager extends PooledCollection<EmitterId, ParticleEmitter
     }
 
     /** Draw every particle batch into the current render pass. */
-    draw(pass: GPURenderPassEncoder, viewProj: Float32Array, right: ArrayLike<number>, up: ArrayLike<number>): void {
+    draw(pass: RawRenderPassEncoder, viewProj: Float32Array, right: ArrayLike<number>, up: ArrayLike<number>): void {
         this.system.draw(pass, viewProj, right, up);
     }
 

@@ -1,8 +1,9 @@
+import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 import { PooledCollection } from 'murow/core/collection';
-import type { Interpolator } from '../../types';
-import type { LightId } from '../../ids';
+import type { Interpolator } from '../types';
+import type { LightId } from '../ids';
 import type { Logger } from 'murow/core';
-import type { Handles } from '../../handles';
+import type { Handles } from '../handles';
 import type { LightSpec } from './light-system';
 import { LightSystem } from './light-system';
 
@@ -86,7 +87,7 @@ export class LightManager extends PooledCollection<LightId, LightHandle, number>
      * @internal Pack live lights, upload the light buffer, and write the light
      * block of the scene uniforms. Returns the packed light count.
      */
-    upload(device: GPUDevice, lightBuffer: GPUBuffer, uniformData: Float32Array, offset: number): number {
+    upload(device: RawDevice, lightBuffer: RawBuffer, uniformData: Float32Array, offset: number): number {
         const packed = this.system.pack();
         if (packed.count > 0) {
             device.queue.writeBuffer(lightBuffer, 0, packed.data.buffer, packed.data.byteOffset, packed.byteLength);
