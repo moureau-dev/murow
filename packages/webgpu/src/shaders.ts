@@ -122,20 +122,20 @@ struct EffectU {
 `;
 
 const HITBOX_WGSL = `
-                struct Uniforms {
-                    mvp: mat4x4<f32>,
-                    color: vec4<f32>,
-                };
-                @group(0) @binding(0) var<uniform> u: Uniforms;
-                @vertex
-                fn vs(@location(0) p: vec3<f32>) -> @builtin(position) vec4<f32> {
-                    return u.mvp * vec4<f32>(p, 1.0);
-                }
-                @fragment
-                fn fs() -> @location(0) vec4<f32> {
-                    return u.color;
-                }
-            `;
+struct Uniforms {
+    mvp: mat4x4<f32>,
+    color: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@vertex
+fn vs(@location(0) p: vec3<f32>) -> @builtin(position) vec4<f32> {
+    return u.mvp * vec4<f32>(p, 1.0);
+}
+@fragment
+fn fs() -> @location(0) vec4<f32> {
+    return u.color;
+}
+`;
 
 const SPRITE_2D_WGSL = `
 // --- Uniforms ---
@@ -251,7 +251,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 `;
 
 /** 3D value noise, in the range [0, 1]. */
-const NOISE_WGSL = `fn noise(x: vec3<f32>) -> f32 {
+const NOISE_WGSL = `
+fn noise(x: vec3<f32>) -> f32 {
     let px = floor(x.x);
     let py = floor(x.y);
     let pz = floor(x.z);
@@ -293,7 +294,8 @@ const NOISE_WGSL = `fn noise(x: vec3<f32>) -> f32 {
 }`;
 
 /** Signed value noise, in the range [-1, 1]. */
-const SNOISE_WGSL = `fn snoise(uv: vec3<f32>, res: f32) -> f32 {
+const SNOISE_WGSL = `
+fn snoise(uv: vec3<f32>, res: f32) -> f32 {
     let s = vec3<f32>(1.0, 100.0, 10000.0);
     let invRes = 1.0 / res;
     let r3 = vec3<f32>(res, res, res);
@@ -314,7 +316,8 @@ const SNOISE_WGSL = `fn snoise(uv: vec3<f32>, res: f32) -> f32 {
 }`;
 
 /** Diffuse contribution of one point or spot light. */
-const LIGHT_CONTRIBUTION_WGSL = `fn lightContribution(pos: vec3<f32>, axis: vec3<f32>, color: vec3<f32>, params: vec4<f32>, normal: vec3<f32>, worldPos: vec3<f32>) -> vec3<f32> {
+const LIGHT_CONTRIBUTION_WGSL = `
+fn lightContribution(pos: vec3<f32>, axis: vec3<f32>, color: vec3<f32>, params: vec4<f32>, normal: vec3<f32>, worldPos: vec3<f32>) -> vec3<f32> {
     let intensity = params.x;
     let range = params.y;
     let innerCos = params.z;
@@ -337,7 +340,8 @@ const LIGHT_CONTRIBUTION_WGSL = `fn lightContribution(pos: vec3<f32>, axis: vec3
 }`;
 
 /** Reinhard tone map. */
-const TONEMAP_WGSL = `fn tonemap(c: vec3<f32>) -> vec3<f32> {
+const TONEMAP_WGSL = `
+fn tonemap(c: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(c.x / (1.0 + c.x), c.y / (1.0 + c.y), c.z / (1.0 + c.z));
 }`;
 
