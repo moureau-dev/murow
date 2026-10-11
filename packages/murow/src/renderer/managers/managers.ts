@@ -1,50 +1,239 @@
 /**
- * Renderer managers composition root.
+ * Constructs and wires the renderer's managers against the shared core.
  *
- * Constructs a renderer's managers (instances, materials, lights, shadows,
- * decals, particles, camera) against a single {@link RendererBackend}. Because
- * the backend is a {@link GpuContext}, the same managers run on any GPU API;
- * capability flags let it pick fallbacks where a backend lacks a feature (for
- * example a compute-based skeletal animation on WebGPU versus a vertex path
- * elsewhere).
- *
- * The individual managers are ported onto this root incrementally; this class
- * owns the backend they all share.
+ * The renderer instantiates this with its dependencies and then exposes each
+ * manager as a property, so nothing backend-specific lives in the renderer.
  */
-import type { GpuCapabilities, GpuContext } from '../../gpu';
-import type { RendererBackend } from './backend';
+import type { Logger } from 'murow/core';
+import type { AssetBucket, PrefabBucket3D } from 'murow/renderer';
+import {
+    InstanceManager,
+    InstanceStore,
+    SkinnedInstanceStore,
+    MaterialManager,
+    MaterialLibrary,
+    LightManager,
+    LightSystem,
+    ShadowManager,
+    ShadowSystem,
+    SpotShadowSystem,
+    PointShadowSystem,
+    DecalManager,
+    ParticleManager,
+    ParticleSystem3D,
+    CameraManager,
+    ModelsManager,
+} from './runtime';
+import { TextureRegistry, ModelLibrary, SkeletalRuntime, SkinCull } from './runtime/internals';
+import { MainPass, RaycastController, WebGPURaycast3D } from './runtime/internals';
+import type { RendererCore } from './runtime/core';
+import { DEFAULT_CAPACITIES } from './runtime/defaults';
 
-/** Options for {@link RendererManagers}. */
-export interface RendererManagersOptions {
-    /** The GPU backend every manager is built against. */
-    readonly backend: RendererBackend;
-    /** Instance capacity hint, used to size buffers. */
-    readonly maxInstances?: number;
-    /** Light capacity hint, used to size buffers. */
-    readonly maxLights?: number;
+/** Dependencies the managers need from the renderer. */
+export interface RendererManagersDeps {
+    core: RendererCore;
+    logger: Logger;
+    options: any;
+    camera: CameraManager;
+    skinCull: SkinCull;
+    maxInstances: number;
+    maxSkinnedInstances: number;
+    maxTotalBones: number;
+    canvas: HTMLCanvasElement;
+    assets: AssetBucket<'3d', any, any> | null;
+    prefabs: PrefabBucket3D | null;
+    elapsed(): number;
+    nextDecalSeq(): number;
 }
 
-/** The managers a renderer drives, all bound to one backend. */
+/** The renderer's managers, all bound to one core. */
 export class RendererManagers {
-    /** The backend every manager was built against. */
-    readonly backend: RendererBackend;
+    readonly camera!: CameraManager;
+    readonly animation!: InstanceType<typeof SkeletalRuntime>;
+    readonly materials!: MaterialManager;
+    readonly lights!: LightManager;
+    readonly particles!: ParticleManager;
+    readonly models!: ModelsManager;
+    readonly instances!: InstanceManager;
+    readonly shadows!: ShadowManager;
+    readonly decals!: DecalManager;
+    readonly mainPass!: MainPass;
+    readonly raycast!: WebGPURaycast3D;
+    readonly interpolators!: unknown[];
 
-    constructor(options: RendererManagersOptions) {
-        this.backend = options.backend;
-    }
+    constructor(private readonly deps: RendererManagersDeps) {
+        const rendererOptions = this.deps.options as any;
+        const maxLights = rendererOptions.maxLights ?? DEFAULT_CAPACITIES.lights;
+        const shadowSystem = new ShadowSystem({
+            core: deps.core,
+            maxInstances: deps.maxInstances,
+            skinned: {
+                maxInstances: deps.maxSkinnedInstances,
+                maxBones: deps.maxTotalBones,
+            },
+        }, { resolution: (deps.options as any).shadowResolution ?? 2048 });
 
-    /** Code generator and device the managers use. */
-    get context(): GpuContext {
-        return this.backend.context;
-    }
+        const spotShadowSystem = new SpotShadowSystem({
+            core: deps.core,
+            maxInstances: deps.maxInstances,
+            skinned: {
+                maxInstances: deps.maxSkinnedInstances,
+                maxBones: deps.maxTotalBones,
+            },
+        }, { maxShadows: (deps.options as any).maxSpotShadows });
 
-    /** Feature flags of the underlying backend. */
-    get capabilities(): GpuCapabilities {
-        return this.backend.capabilities;
-    }
+        const pointShadowSystem = new PointShadowSystem({
+            core: deps.core,
+            maxInstances: deps.maxInstances,
+            skinned: {
+                maxInstances: deps.maxSkinnedInstances,
+                maxBones: deps.maxTotalBones,
+            },
+        }, {
+            maxShadows: (deps.options as any).maxPointShadows,
+            resolution: (deps.options as any).pointShadowResolution,
+        });
 
-    /** Release every resource owned by the managers. */
-    destroy(): void {
-        this.backend.context.destroy();
+        deps.core.textures = new TextureRegistry(deps.core.device, deps.core.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
+        deps.core.textures.initWhiteFallback();
+        if (deps.assets) {
+            // The bucket accessor proxy binds methods per access; capture it once.
+            const findTexture = deps.assets.textures.find;
+            deps.core.textures.setResolver((id) => findTexture(id));
+        }
+
+        const maxParticleEmitters = rendererOptions.maxParticleEmitters ?? 64;
+        const maxParticles = rendererOptions.maxParticles ?? 4096;
+        const lightSystem = new LightSystem(maxLights);
+        const particleSystem = new ParticleSystem3D({
+            root: deps.core.root,
+            format: deps.core.format,
+            maxParticles,
+            maxMaterials: rendererOptions.maxParticleMaterials ?? 16,
+            maxEmitters: maxParticleEmitters,
+            resolveTexture: (id) => deps.core.textures.get(id),
+            logger: deps.logger,
+        });
+
+        const maxMaterials = rendererOptions.maxMaterials ?? DEFAULT_CAPACITIES.materials;
+        const materialLibrary = new MaterialLibrary({
+            root: deps.core.root,
+            device: deps.core.device,
+            pipelines: deps.core.pipelines,
+            textures: deps.core.textures,
+            meshLayout: deps.core.pipelines.meshLayout,
+            skinnedLayout: deps.core.pipelines.skinnedMeshLayout,
+            shadow: shadowSystem,
+            spotShadow: spotShadowSystem,
+            pointShadow: pointShadowSystem,
+            maxMaterials,
+        });
+        // Changing `renderer.shadows.resolution` rebinds every material.
+        shadowSystem.setResolutionHook(() => materialLibrary.rebuildBindGroups());
+        deps.core.materialLibrary = materialLibrary;
+
+        // Instance stores are created here so their material refcounting can
+        // reach the library; the animation runtime reads the skinned store.
+        const retainMaterial = (materialId: number) => materialLibrary.retain(materialId);
+        const releaseMaterial = (materialId: number) => materialLibrary.release(materialId);
+        const instanceStore = new InstanceStore({
+            maxInstances: deps.maxInstances,
+            getTextureBindGroup: (id) => deps.core.textures.get(id)?.bindGroup,
+            retainMaterial,
+            releaseMaterial,
+        });
+        const skinnedStore = new SkinnedInstanceStore({
+            maxSkinnedInstances: deps.maxSkinnedInstances,
+            maxTotalBones: deps.maxTotalBones,
+            maxSkins: deps.prefabs ? deps.prefabs.size : 64,
+            uploadRestPose: (skinModel, boneOffset, jointCount) => animation.writeRestPose(skinModel, boneOffset, jointCount),
+            getTextureBindGroup: (id) => deps.core.textures.get(id)?.bindGroup,
+            retainMaterial,
+            releaseMaterial,
+        });
+
+        this.materials = new MaterialManager({
+            capacity: maxMaterials,
+            logger: deps.logger,
+            library: materialLibrary,
+            reassignUsers: (materialId) => this.instances?.reassignMaterial(materialId),
+        });
+        this.lights = new LightManager({ capacity: maxLights, logger: deps.logger, system: lightSystem });
+        this.particles = new ParticleManager({
+            capacity: { maxEmitters: maxParticleEmitters, maxParticles },
+            logger: deps.logger,
+            system: particleSystem,
+        });
+
+        const animation = new SkeletalRuntime({
+            root: deps.core.root,
+            device: deps.core.device,
+            pipelines: deps.core.pipelines,
+            skinned: skinnedStore,
+            camera: deps.camera,
+            skinCull: deps.skinCull,
+            maxSkinnedInstances: deps.maxSkinnedInstances,
+            maxTotalBones: deps.maxTotalBones,
+            maxSkins: deps.prefabs ? deps.prefabs.size : 64,
+            getModel: (id) => deps.core.models.get(id),
+            getSkinModel: (i) => deps.core.models.skinnedModel(i),
+            skinnedModelCount: () => deps.core.models.skinnedModelCount(),
+        });
+
+        deps.core.models = new ModelLibrary({
+            device: deps.core.device,
+            pipelines: deps.core.pipelines,
+            textures: deps.core.textures,
+            onSkinLoaded: (skinData, animClips) => animation.addSkin(skinData, animClips),
+        });
+        this.models = new ModelsManager(deps.core, animation);
+
+        this.instances = new InstanceManager({
+            capacity: deps.maxInstances,
+            poolSize: deps.maxInstances + deps.maxSkinnedInstances,
+            logger: deps.logger,
+            store: instanceStore,
+            skinned: skinnedStore,
+            models: deps.core.models,
+            prefabs: deps.prefabs,
+            getSkinModel: (index) => deps.core.models.skinnedModel(index),
+            materialName: (id) => materialLibrary.nameOf(id),
+        });
+        this.raycast = new WebGPURaycast3D(new RaycastController({
+            camera: deps.camera,
+            eachInstance: this.instances.eachInstance.bind(this.instances),
+            resolveHitbox: this.instances.resolveHitbox.bind(this.instances),
+        }), deps.canvas);
+        this.shadows = new ShadowManager({
+            directional: shadowSystem,
+            spot: spotShadowSystem,
+            point: pointShadowSystem,
+            instances: this.instances,
+            materials: this.materials,
+            lights: this.lights,
+            camera: deps.camera,
+            core: deps.core,
+            motionVersion: () => this.instances.store.dynamicVersion + this.instances.skinnedStore.dynamicVersion + animation.version,
+        });
+        this.decals = new DecalManager({
+            capacity: rendererOptions.maxDecals ?? 16,
+            logger: deps.logger,
+            createMaterial: (spec) => this.materials.create({
+                ...spec,
+                name: spec.name ?? `__decal_${deps.nextDecalSeq()}`,
+            }) as never,
+            addDecalInstance: (prefab, material) => this.instances!.add({
+                prefab,
+                position: [0, -10000, 0],
+                scale: 0.001,
+                material,
+            }) as never,
+            elapsedSeconds: () => deps.elapsed(),
+        });
+
+        // Snapshot order is irrelevant; the three snapshots are independent.
+        this.interpolators = [deps.camera, this.instances, this.lights];
+
+        this.mainPass = new MainPass(deps.core, this.instances, this.materials);
     }
 }

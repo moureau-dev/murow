@@ -38,5 +38,3 @@ export {
 // Raycast — abstract pick / ray-test contract
 export * from "./raycast";
 
-// Managers — composition root for a renderer's managers over a GPU backend
-export * from "./managers";

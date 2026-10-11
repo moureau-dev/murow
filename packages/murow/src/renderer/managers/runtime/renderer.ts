@@ -1,4 +1,5 @@
 import { createPresentation } from './backend';
+import { RendererManagers } from '../managers';
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 /**
  * WebGPU3DRenderer — instanced 3D mesh renderer backed by TypeGPU.
@@ -226,181 +227,35 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.cameraEffects = new CameraEffectStack({ root: this.core.root, format: this.core.format, maxEffects: this.maxCameraEffects });
         this.cameraEffects.setDepth(this.core.pipelines.depthTexture.createView(), this.core.pipelines.depthSampler, this.camera.near, this.camera.far);
 
-        const shadowSystem = new ShadowSystem({
+        const managers = new RendererManagers({
             core: this.core,
-            maxInstances: this.maxInstances,
-            skinned: {
-                maxInstances: this.maxSkinnedInstances,
-                maxBones: this.maxTotalBones,
-            },
-        }, { resolution: (this.options as WebGPU3DRendererOptions).shadowResolution ?? 2048 });
-
-        const spotShadowSystem = new SpotShadowSystem({
-            core: this.core,
-            maxInstances: this.maxInstances,
-            skinned: {
-                maxInstances: this.maxSkinnedInstances,
-                maxBones: this.maxTotalBones,
-            },
-        }, { maxShadows: (this.options as WebGPU3DRendererOptions).maxSpotShadows });
-
-        const pointShadowSystem = new PointShadowSystem({
-            core: this.core,
-            maxInstances: this.maxInstances,
-            skinned: {
-                maxInstances: this.maxSkinnedInstances,
-                maxBones: this.maxTotalBones,
-            },
-        }, {
-            maxShadows: (this.options as WebGPU3DRendererOptions).maxPointShadows,
-            resolution: (this.options as WebGPU3DRendererOptions).pointShadowResolution,
-        });
-
-        this.core.textures = new TextureRegistry(this.core.device, this.core.pipelines.rawTexturedPipeline.getBindGroupLayout(1));
-        this.core.textures.initWhiteFallback();
-        if (this._assets) {
-            // The bucket accessor proxy binds methods per access; capture it once.
-            const findTexture = this._assets.textures.find;
-            this.core.textures.setResolver((id) => findTexture(id));
-        }
-
-        const maxParticleEmitters = rendererOptions.maxParticleEmitters ?? 64;
-        const maxParticles = rendererOptions.maxParticles ?? 4096;
-        const lightSystem = new LightSystem(maxLights);
-        const particleSystem = new ParticleSystem3D({
-            root: this.core.root,
-            format: this.core.format,
-            maxParticles,
-            maxMaterials: rendererOptions.maxParticleMaterials ?? 16,
-            maxEmitters: maxParticleEmitters,
-            resolveTexture: (id) => this.core.textures.get(id),
             logger: this.logger,
-        });
-
-        const maxMaterials = rendererOptions.maxMaterials ?? DEFAULT_CAPACITIES.materials;
-        const materialLibrary = new MaterialLibrary({
-            root: this.core.root,
-            device: this.core.device,
-            pipelines: this.core.pipelines,
-            textures: this.core.textures,
-            meshLayout: this.core.pipelines.meshLayout,
-            skinnedLayout: this.core.pipelines.skinnedMeshLayout,
-            shadow: shadowSystem,
-            spotShadow: spotShadowSystem,
-            pointShadow: pointShadowSystem,
-            maxMaterials,
-        });
-        // Changing `renderer.shadows.resolution` rebinds every material.
-        shadowSystem.setResolutionHook(() => materialLibrary.rebuildBindGroups());
-        this.core.materialLibrary = materialLibrary;
-
-        // Instance stores are created here so their material refcounting can
-        // reach the library; the animation runtime reads the skinned store.
-        const retainMaterial = (materialId: number) => materialLibrary.retain(materialId);
-        const releaseMaterial = (materialId: number) => materialLibrary.release(materialId);
-        const instanceStore = new InstanceStore({
-            maxInstances: this.maxInstances,
-            getTextureBindGroup: (id) => this.core.textures.get(id)?.bindGroup,
-            retainMaterial,
-            releaseMaterial,
-        });
-        const skinnedStore = new SkinnedInstanceStore({
-            maxSkinnedInstances: this.maxSkinnedInstances,
-            maxTotalBones: this.maxTotalBones,
-            maxSkins: this._prefabs ? this._prefabs.size : 64,
-            uploadRestPose: (skinModel, boneOffset, jointCount) => this.animation.writeRestPose(skinModel, boneOffset, jointCount),
-            getTextureBindGroup: (id) => this.core.textures.get(id)?.bindGroup,
-            retainMaterial,
-            releaseMaterial,
-        });
-
-        this.materials = new MaterialManager({
-            capacity: maxMaterials,
-            logger: this.logger,
-            library: materialLibrary,
-            reassignUsers: (materialId) => this.instances?.reassignMaterial(materialId),
-        });
-        this.lights = new LightManager({ capacity: maxLights, logger: this.logger, system: lightSystem });
-        this.particles = new ParticleManager({
-            capacity: { maxEmitters: maxParticleEmitters, maxParticles },
-            logger: this.logger,
-            system: particleSystem,
-        });
-
-        this.animation = new SkeletalRuntime({
-            root: this.core.root,
-            device: this.core.device,
-            pipelines: this.core.pipelines,
-            skinned: skinnedStore,
+            options: this.options,
             camera: this.camera,
             skinCull: this.skinCull,
+            maxInstances: this.maxInstances,
             maxSkinnedInstances: this.maxSkinnedInstances,
             maxTotalBones: this.maxTotalBones,
-            maxSkins: this._prefabs ? this._prefabs.size : 64,
-            getModel: (id) => this.core.models.get(id),
-            getSkinModel: (i) => this.core.models.skinnedModel(i),
-            skinnedModelCount: () => this.core.models.skinnedModelCount(),
+            canvas: this.canvas,
+            assets: this._assets,
+            prefabs: this._prefabs,
+            elapsed: () => this.elapsed,
+            nextDecalSeq: () => this.decalMaterialSeq++,
         });
-
-        this.core.models = new ModelLibrary({
-            device: this.core.device,
-            pipelines: this.core.pipelines,
-            textures: this.core.textures,
-            onSkinLoaded: (skinData, animClips) => this.animation.addSkin(skinData, animClips),
-        });
-        this.models = new ModelsManager(this.core, this.animation);
-
+        this.animation = managers.animation;
+        this.materials = managers.materials;
+        this.lights = managers.lights;
+        this.particles = managers.particles;
+        this.models = managers.models;
+        this.instances = managers.instances;
+        this.shadows = managers.shadows;
+        this.decals = managers.decals;
+        this.mainPass = managers.mainPass;
+        this.raycast = managers.raycast;
+        this.interpolators = managers.interpolators as never;
         if (this._prefabs) {
             await this.models.upload(this._assets!);
         }
-
-        this.instances = new InstanceManager({
-            capacity: this.maxInstances,
-            poolSize: this.maxInstances + this.maxSkinnedInstances,
-            logger: this.logger,
-            store: instanceStore,
-            skinned: skinnedStore,
-            models: this.core.models,
-            prefabs: this._prefabs,
-            getSkinModel: (index) => this.core.models.skinnedModel(index),
-            materialName: (id) => materialLibrary.nameOf(id),
-        });
-        this.raycast = new WebGPURaycast3D(new RaycastController({
-            camera: this.camera,
-            eachInstance: this.instances.eachInstance.bind(this.instances),
-            resolveHitbox: this.instances.resolveHitbox.bind(this.instances),
-        }), this.canvas);
-        this.shadows = new ShadowManager({
-            directional: shadowSystem,
-            spot: spotShadowSystem,
-            point: pointShadowSystem,
-            instances: this.instances,
-            materials: this.materials,
-            lights: this.lights,
-            camera: this.camera,
-            core: this.core,
-            motionVersion: () => this.instances.store.dynamicVersion + this.instances.skinnedStore.dynamicVersion + this.animation.version,
-        });
-        this.decals = new DecalManager({
-            capacity: rendererOptions.maxDecals ?? 16,
-            logger: this.logger,
-            createMaterial: (spec) => this.materials.create({
-                ...spec,
-                name: spec.name ?? `__decal_${this.decalMaterialSeq++}`,
-            }) as never,
-            addDecalInstance: (prefab, material) => this.instances!.add({
-                prefab,
-                position: [0, -10000, 0],
-                scale: 0.001,
-                material,
-            }) as never,
-            elapsedSeconds: () => this.elapsed,
-        });
-
-        // Snapshot order is irrelevant; the three snapshots are independent.
-        this.interpolators = [this.camera, this.instances, this.lights];
-
-        this.mainPass = new MainPass(this.core, this.instances, this.materials);
 
         this.hitboxDebug.init(this.core.device, this.core.format);
         this.resize = new ResizeController(

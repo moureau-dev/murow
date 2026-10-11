@@ -10,6 +10,13 @@
  * imported from there.
  */
 
+import { installWebGPUBackend } from './backend-ports';
+
+// Install the WebGPU implementation of the renderer's backend ports.
+installWebGPUBackend();
+
+export { installWebGPUBackend } from './backend-ports';
+
 // TypeGPU re-exports — bundler-safe wraps (see ./shaders/typegpu.ts).
 export { d, std } from './gpu';
 

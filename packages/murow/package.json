@@ -139,6 +139,12 @@
       "types": "./dist/netcode/types/index.d.ts",
       "import": "./dist/netcode/esm/index.js",
       "require": "./dist/netcode/cjs/index.js"
+    },
+    "./renderer/managers": {
+      "types": "./dist/types/renderer/managers/index.d.ts",
+      "import": "./dist/esm/renderer/managers/index.js",
+      "require": "./dist/cjs/renderer/managers/index.js",
+      "default": "./dist/esm/renderer/managers/index.js"
     }
   },
   "optionalDependencies": {
@@ -147,5 +153,7 @@
     "tinyest-for-wgsl": "^0.3.2",
     "typegpu": "^0.10.2"
   },
-  "files": ["dist"]
+  "files": [
+    "dist"
+  ]
 }

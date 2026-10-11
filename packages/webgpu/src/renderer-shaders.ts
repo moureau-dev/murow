@@ -1,4 +1,4 @@
-import { configureShaderSources } from 'murow/renderer';
+import { configureShaderSources } from 'murow/renderer/managers';
 
 export const CAMERA_EFFECT_WGSL = `
 struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
