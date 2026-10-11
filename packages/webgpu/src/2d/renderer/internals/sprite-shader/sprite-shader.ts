@@ -7,6 +7,7 @@
  * NOTE: TGSL bodies must use `function` syntax, not arrow functions.
  */
 import { GpuBindGroupLayout, GpuShader, d, std } from '../../../../gpu';
+
 import { DynamicSprite, StaticSprite, SpriteUniforms } from '../../../../core/types';
 
 

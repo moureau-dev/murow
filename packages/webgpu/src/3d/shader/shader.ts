@@ -9,6 +9,9 @@ import { GpuBindGroupLayout, GpuShader, d, std } from '../../gpu';
 import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms, Light } from '../../core/types';
 import { lightContribution, tonemap } from '../../shaders/utils';
 
+// Stable local names: shader bodies are parsed from their source, so bundlers
+// must not rename `d`/`std` inside them.
+
 
 /** Max point/spot lights the mesh shaders' storage buffer holds. */
 export const MAX_LIGHTS = 64;

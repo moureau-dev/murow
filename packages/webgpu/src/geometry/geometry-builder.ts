@@ -23,6 +23,9 @@
  * ```
  */
 import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d, std, sizeOf } from '../gpu';
+
+// Stable local names: shader bodies are parsed from their source, so bundlers
+// must not rename `d`/`std` inside them.
 import type { BuiltInGeometry, GeometryData } from './built-in';
 import { resolveBuiltInGeometry } from './built-in';
 import { SlotMap } from 'murow/core/slot-map';

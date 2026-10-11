@@ -5,6 +5,9 @@ import {
     d,
     type GpuBindGroupLayout,
 } from '../../../../gpu';
+
+// Stable local name: shader bodies are parsed from their source, so bundlers
+// must not rename `d` inside them.
 import {
     DynamicMesh,
     StaticMesh,

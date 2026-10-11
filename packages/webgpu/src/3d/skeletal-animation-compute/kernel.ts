@@ -8,9 +8,6 @@
  * - No closure captures — offsets passed via uniforms
  * - 6 buffers (under 8 binding limit)
  */
-// Use bundler-safe wraps so `d.X` / `std.X` accesses inside the shader
-// function body survive Rollup's namespace-member inlining (see
-// ../../shaders/typegpu.ts).
 import { d, std } from '../../gpu';
 
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
