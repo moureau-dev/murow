@@ -20,9 +20,14 @@ import type { GpuType } from '../types';
 import type { Field } from '../schema/field';
 import type { GpuStruct } from '../schema/struct';
 import type { GpuBindGroupLayout } from '../resources/bind-group';
+import type { ShaderValue } from './value';
 
-/** Any value accepted where shape does not matter: a number or a shader value. */
-export type Input = number | SV<any>;
+/**
+ * Any value accepted where shape does not matter: a number, a shaped shader
+ * value, or the raw runtime `ShaderValue` (what `layout.$.name` and untyped
+ * helpers produce, which carries no shape but is still a valid operand).
+ */
+export type Input = number | SV<any> | ShaderValue;
 
 /** Marker for a stage builtin such as `position` or `instance_index`. */
 interface BuiltinMarker {
@@ -194,6 +199,12 @@ export interface TypedStd extends TypedD {
     div(a: Input, b: Input): SV<any>;
     neg<A>(a: SV<A>): SV<A>;
     neg(a: Input): SV<any>;
+    lt(a: Input, b: Input): SV<'bool'>;
+    lte(a: Input, b: Input): SV<'bool'>;
+    gt(a: Input, b: Input): SV<'bool'>;
+    gte(a: Input, b: Input): SV<'bool'>;
+    eq(a: Input, b: Input): SV<'bool'>;
+    not(a: Input): SV<'bool'>;
     mod(a: Input, b: Input): SV<'f32'>;
     mix<A>(a: SV<A>, b: SV<A>, t: Input): SV<A>;
     mix(a: Input, b: Input, t: Input): SV<any>;

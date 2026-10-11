@@ -9,7 +9,7 @@
  */
 import type { GpuType } from '../types';
 import type { IrExpr } from '../ir/nodes';
-import { call, discardStmt, sample } from '../ir/builders';
+import { binary, call, discardStmt, sample, unary } from '../ir/builders';
 import { bool as boolType, u32 as u32Type, vec as vecType } from '../ir/types';
 import { combineType, scalarOf, ShaderValue, toExpr, vecOf, type ShaderInput } from './value';
 import { d } from './data';
@@ -60,6 +60,26 @@ const stdImpl = {
 
     neg(a: ShaderInput): ShaderValue {
         return unaryCall('neg', a);
+    },
+
+    lt(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return value(binary(boolType(), '<', toExpr(a), toExpr(b)));
+    },
+
+    lte(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return value(binary(boolType(), '<=', toExpr(a), toExpr(b)));
+    },
+
+    gt(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return value(binary(boolType(), '>', toExpr(a), toExpr(b)));
+    },
+
+    gte(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return value(binary(boolType(), '>=', toExpr(a), toExpr(b)));
+    },
+
+    eq(a: ShaderInput, b: ShaderInput): ShaderValue {
+        return value(binary(boolType(), '==', toExpr(a), toExpr(b)));
     },
 
     dot(a: ShaderInput, b: ShaderInput): ShaderValue {
@@ -229,7 +249,7 @@ const stdImpl = {
 
     not(a: ShaderInput): ShaderValue {
         const ea = toExpr(a);
-        return value(call(ea.type, 'not', [ea]));
+        return value(unary(ea.type, '!', ea));
     },
 
     any(a: ShaderInput): ShaderValue {

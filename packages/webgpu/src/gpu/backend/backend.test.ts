@@ -3,7 +3,7 @@ import { emitEntry } from 'murow/gpu/codegen';
 import { construct, entry, f32, literal, param, returnStmt, vec } from 'murow/gpu/ir';
 import { WgslBackend, wgslSpec } from './backend';
 import { GpuBackend, GpuBindGroupLayout, GpuProgram, GpuShader } from 'murow/gpu';
-import { d } from 'murow/gpu/dsl';
+import { d, std } from 'murow/gpu/dsl';
 import { gpuStruct, vec4f } from 'murow/gpu/schema';
 
 describe('WgslBackend', () => {
@@ -42,5 +42,29 @@ describe('wgslSpec', () => {
         expect(layouts.length).toBe(1);
         expect(code).toContain('@fragment');
         expect(code).toContain('@group(0) @binding(0) var<uniform>');
+    });
+
+    test('emits comparison builtins', () => {
+        const frag = GpuShader.fragment(
+            { in: { v: d.f32 }, out: vec('f32', 4) },
+            (input) => {
+                const a = input.v;
+                const zero = d.vec4f(0, 0, 0, 1);
+                if (std.lt(a, d.f32(1))) { return d.vec4f(1, 0, 0, 1); }
+                if (std.gt(a, d.f32(2))) { return d.vec4f(0, 1, 0, 1); }
+                if (std.lte(a, d.f32(3))) { return d.vec4f(0, 0, 1, 1); }
+                if (std.gte(a, d.f32(4))) { return d.vec4f(1, 1, 0, 1); }
+                if (std.eq(a, d.f32(5))) { return d.vec4f(0, 1, 1, 1); }
+                if (std.not(std.lt(a, d.f32(6)))) { return d.vec4f(1, 0, 1, 1); }
+                return zero;
+            },
+        );
+        const { code } = new GpuBackend(wgslSpec).compile(GpuProgram.link([frag]));
+        expect(code).toContain(' < ');
+        expect(code).toContain(' > ');
+        expect(code).toContain(' <= ');
+        expect(code).toContain(' >= ');
+        expect(code).toContain(' == ');
+        expect(code).toContain('!');
     });
 });
