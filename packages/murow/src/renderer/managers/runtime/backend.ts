@@ -14,13 +14,55 @@ import type {
     RawTextureView,
 } from 'murow/gpu';
 
+/**
+ * Skeletal-animation backend port.
+ *
+ * The renderer drives skeletal animation only through this port; the WebGPU
+ * package implements it with a compute kernel, another backend with CPU or a
+ * vertex path. No kernel or builder type crosses the boundary.
+ */
+export interface AnimationKernelBudgets {
+    skelI32Capacity: number;
+    animF32Capacity: number;
+    matricesCapacity: number;
+}
+
+/** Packed animation buffer sizes and table offsets (opaque payload). */
+export interface PackedAnimationBuffers {
+    readonly clipTableOffset: number;
+    readonly channelTableOffset: number;
+    readonly jointLookupOffset: number;
+    readonly skelI32Length: number;
+    readonly animF32Length: number;
+    readonly totalMats: number;
+}
+
+/** Skeletal-animation simulation port. */
+export interface Skinning {
+    /** Pack CPU animation data and report its sizes/offsets. */
+    pack(packed: unknown): PackedAnimationBuffers;
+    /** Build/rebuild the simulation from packed data. */
+    build(
+        root: { device: RawDevice },
+        packed: unknown,
+        maxInstances: number,
+        maxTotalBones: number,
+        budgets: AnimationKernelBudgets,
+    ): { buffers: PackedAnimationBuffers; budgets: AnimationKernelBudgets };
+    /** Upload packed data into the current simulation (no rebuild). */
+    upload(root: { device: RawDevice }, packed: unknown): void;
+    /** Advance `count` instances with per-instance data and dispatch. */
+    step(count: number, instData: Float32Array, buffers: PackedAnimationBuffers): void;
+    /** The bone-matrix buffer the mesh pipeline binds, or null before build. */
+    readonly boneBuffer: RawBuffer | null;
+    /** Release the simulation. */
+    destroy(): void;
+}
+
 /** Compute is backend-specific; a backend supplies an implementation. */
 export interface ComputeProvider {
     ComputeBuilder: new (...args: any[]) => any;
     ComputeManager: new (...args: any[]) => any;
-    buildAnimationKernel(...args: any[]): any;
-    uploadPackedToKernel(...args: any[]): any;
-    packAnimationData(...args: any[]): any;
 }
 
 /** The present target a renderer draws to. Backend-specific (canvas/surface). */
@@ -46,8 +88,10 @@ export interface RendererRuntime {
     createBindGroupLayout(descriptor: unknown): RawBindGroupLayout;
     /** Named shader helper source (WGSL/GLSL/…). */
     shaderSource(name: string): string;
-    /** Backend-specific compute implementation. */
+    /** Backend-specific compute implementation (particle simulation, etc.). */
     readonly compute: ComputeProvider;
+    /** Skeletal-animation simulation port. */
+    readonly skinning: Skinning;
 }
 
 export { sizeOf } from 'murow/gpu/dsl';

@@ -27,3 +27,4 @@ export * from './sheets';
 export * from './sprites';
 export * from './geometry';
 export * from './camera/2d';
+export * from './backend';

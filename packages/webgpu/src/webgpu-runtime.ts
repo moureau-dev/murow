@@ -10,8 +10,7 @@ import { compileProgram } from './gpu/backend';
 import { createGpuBindGroupLayout, createRawBuffer } from './gpu/device';
 import { ComputeBuilder } from './compute/compute-builder';
 import { ComputeManager } from './compute/compute-manager';
-import { buildAnimationKernel, uploadPackedToKernel } from './3d/skeletal-animation-compute/kernel';
-import { packAnimationData } from './3d/skeletal-animation-compute/packer';
+import { createComputeSkinning } from './compute-skinning';
 import { CAMERA_EFFECT_WGSL, HITBOX_WGSL, SPRITE_2D_WGSL } from './renderer-shaders';
 
 const SHADER_SOURCES: Record<string, string> = {
@@ -60,10 +59,8 @@ export function webgpuRuntime(): RendererRuntime {
         compute: {
             ComputeBuilder: ComputeBuilder as never,
             ComputeManager: ComputeManager as never,
-            buildAnimationKernel,
-            uploadPackedToKernel,
-            packAnimationData,
         },
+        skinning: createComputeSkinning(),
     };
     return runtime;
 }

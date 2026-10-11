@@ -4,10 +4,8 @@ import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent,
 import type { PrefabBucket3D, PackedAnimationData, ParsedGltf, SkeletalAnimation } from 'murow/renderer';
 import { createPackedAnimationData, packSkinAndAnimations } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../../engine-core/types';
-type ComputeKernel<T = any> = any;
 import type { Camera3D } from '../../cameras/camera-3d';
-import { buildAnimationKernel, uploadPackedToKernel, type AnimationKernelBudgets } from '../../skeletal-animation-compute/index';
-import { packAnimationData } from '../../skeletal-animation-compute/packer';
+import type { AnimationKernelBudgets, PackedAnimationBuffers } from '../../backend';
 import { GltfClipResyncCoordinator } from '../clip-resync-coordinator/clip-resync-coordinator';
 import { DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ, SSTAT_SX, SSTAT_SY, SSTAT_SZ } from '../../instances/offsets';
 import type { SkinnedInstanceStore } from '../../instances/skinned-instance-store';
@@ -51,12 +49,9 @@ export class SkeletalRuntime {
     version = 0;
 
     private packedAnimData: PackedAnimationData = createPackedAnimationData();
-    private kernel: ComputeKernel | null = null;
+    private buffers: PackedAnimationBuffers | null = null;
     private needsRebuild = false;
     private budgets: AnimationKernelBudgets | null = null;
-    private clipTableOffset = 0;
-    private channelTableOffset = 0;
-    private jointLookupOffset = 0;
     private readonly gpuInstData: Float32Array;
     private readonly gpuInstDV: DataView;
     private readonly updatedBoneOffsets: Uint8Array;
@@ -124,27 +119,23 @@ export class SkeletalRuntime {
     dispose(): void {
         this.clipResync?.dispose();
         this.clipResync = null;
-        this.kernel?.destroy();
-        this.kernel = null;
+        this.runtime.skinning.destroy();
+        this.buffers = null;
     }
 
     update(deltaTime: number): void {
         this.syncLazyAnimationChanges();
 
         if (this.needsRebuild && this.packedAnimData.clips.length > 0) {
-            this.kernel?.destroy();
             const budgets = this.growBudgetsForPacked(this.packedAnimData, null);
-            const { kernel, packedBuffers } = buildAnimationKernel(this.runtime, 
+            const built = this.runtime.skinning.build(
                 this.deps.root, this.packedAnimData, this.deps.maxSkinnedInstances, this.deps.maxTotalBones, budgets,
             );
-            this.kernel = kernel;
-            this.budgets = budgets;
-            this.clipTableOffset = packedBuffers.clipTableOffset;
-            this.channelTableOffset = packedBuffers.channelTableOffset;
-            this.jointLookupOffset = packedBuffers.jointLookupOffset;
+            this.buffers = built.buffers;
+            this.budgets = built.budgets;
 
-            const rawBoneBuffer = kernel.getBuffer('boneMatrices');
-            this.deps.pipelines.setBoneBuffer(rawBoneBuffer);
+            const boneBuffer = this.runtime.skinning.boneBuffer;
+            if (boneBuffer) this.deps.pipelines.setBoneBuffer(boneBuffer);
 
             this.deps.device.queue.writeBuffer(
                 this.deps.pipelines.rawBoneMatrixBuffer, 0,
@@ -222,17 +213,8 @@ export class SkeletalRuntime {
         if (count > 0) {
             // Bones changed this frame; consumers (e.g. shadows) can invalidate.
             this.version++;
-            if (this.kernel) {
-                this.kernel.write('uniforms', {
-                    instanceCount: count,
-                    clipTableOffset: this.clipTableOffset,
-                    channelTableOffset: this.channelTableOffset,
-                    jointLookupOffset: this.jointLookupOffset,
-                });
-                const instBuf = this.kernel.getBuffer('instances');
-                const rawInstBuf = instBuf;
-                this.deps.device.queue.writeBuffer(rawInstBuf, 0, this.gpuInstData.buffer, 0, count * 32);
-                this.kernel.dispatch(count);
+            if (this.buffers) {
+                this.runtime.skinning.step(count, this.gpuInstData, this.buffers);
             } else {
                 this.updatedBoneOffsets.fill(0);
                 for (let li = 0; li < liveSlots.size; li++) {
@@ -339,31 +321,28 @@ export class SkeletalRuntime {
         packed: PackedAnimationData,
         previous: AnimationKernelBudgets | null,
     ): AnimationKernelBudgets {
-        const pb = packAnimationData(this.runtime, packed);
+        const pb = this.runtime.skinning.pack(packed);
         const grow = (cur: number, prev: number, floor: number) =>
             Math.max(cur * 2, prev, floor);
         return {
-            skelI32Capacity:   grow(pb.skelI32.length,   previous?.skelI32Capacity   ?? 0, 256),
-            animF32Capacity:   grow(pb.animF32.length,   previous?.animF32Capacity   ?? 0, 4096),
+            skelI32Capacity:   grow(pb.skelI32Length,    previous?.skelI32Capacity   ?? 0, 256),
+            animF32Capacity:   grow(pb.animF32Length,    previous?.animF32Capacity   ?? 0, 4096),
             matricesCapacity:  grow(pb.totalMats,        previous?.matricesCapacity  ?? 0, 8),
         };
     }
 
     /** Upload `packedAnimData` to the existing kernel iff it fits the current budgets. */
     private tryUploadInPlace(): boolean {
-        const kernel = this.kernel;
         const budgets = this.budgets;
-        if (!kernel || !budgets) return false;
+        if (!this.buffers || !budgets) return false;
 
-        const pb = packAnimationData(this.runtime, this.packedAnimData);
-        if (pb.skelI32.length  > budgets.skelI32Capacity)  return false;
-        if (pb.animF32.length  > budgets.animF32Capacity)  return false;
-        if (pb.totalMats       > budgets.matricesCapacity) return false;
+        const pb = this.runtime.skinning.pack(this.packedAnimData);
+        if (pb.skelI32Length > budgets.skelI32Capacity)  return false;
+        if (pb.animF32Length > budgets.animF32Capacity)  return false;
+        if (pb.totalMats     > budgets.matricesCapacity) return false;
 
-        uploadPackedToKernel(this.runtime, this.deps.root, kernel, pb);
-        this.clipTableOffset = pb.clipTableOffset;
-        this.channelTableOffset = pb.channelTableOffset;
-        this.jointLookupOffset = pb.jointLookupOffset;
+        this.runtime.skinning.upload(this.deps.root, this.packedAnimData);
+        this.buffers = pb;
         return true;
     }
 }
