@@ -1,8 +1,20 @@
-import type { TgpuRoot, TgpuBuffer } from 'typegpu';
-import type { Infer, AnyWgslData } from 'typegpu/data';
-import { tgpu, d, std } from '../../../../shaders/typegpu';
-import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
+import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d, std, sizeOf } from '../../../../gpu';
+
 import { lightContribution, tonemap } from '../../../../shaders/utils';
+
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
+type Infer<T> = any;
+// The shader authoring DSL stays loose so bodies read naturally.
+
+/** Pack a schema value to bytes for upload. */
+function pack(schema: any, value: unknown): Uint8Array {
+    const size = sizeOf(schema);
+    const buffer = new ArrayBuffer(size);
+    const dv = new DataView(buffer);
+    if (Array.isArray(schema.fields)) for (const m of schema.fields) m.field.write(dv, m.offset, (value as Record<string, unknown>)?.[m.name]);
+    else schema.write(dv, 0, value);
+    return new Uint8Array(buffer);
+}
 import { SlotMap } from 'murow/core/slot-map';
 import type { MaterialId } from '../../ids';
 import type { MeshPipelines } from '../../internals/mesh-pipelines/mesh-pipelines';
@@ -27,7 +39,7 @@ import {
     type EngineMaterialLayout,
 } from './built-in';
 
-type UniformSchema = Record<string, AnyWgslData>;
+type UniformSchema = Record<string, AnyField>;
 type UniformValues<U extends UniformSchema> = { [K in keyof U]: Infer<U[K]> };
 
 export interface MaterialHandle<
@@ -65,7 +77,7 @@ export interface CompiledMaterial {
 }
 
 export interface MaterialLibraryDeps {
-    root: TgpuRoot;
+    root?: unknown;
     device: GPUDevice;
     pipelines: MeshPipelines;
     textures: TextureRegistry;
@@ -85,7 +97,7 @@ interface MaterialEntry {
     /** Registered name, when one was supplied (released on destroy). */
     name?: string;
     compiled: CompiledMaterial;
-    buffer: TgpuBuffer<any>;
+    buffer: GPUBuffer;
     layout: any;
     mirror: Record<string, unknown>;
     textureNames: string[];
@@ -229,7 +241,7 @@ export class MaterialLibrary {
 
     private createEngineMaterial(slot: number, spec: Extract<MaterialSpec, { type: 'standard' | 'unlit' | 'emissive' }>, state: ResolvedRenderState): MaterialEntry {
         const layout = createEngineMaterialLayout();
-        const buffer = this.deps.root.createBuffer(EngineMaterialUniforms).$usage('uniform');
+        const buffer = createRawBuffer(this.deps.device, EngineMaterialUniforms, 'uniform');
         const color = spec.color ?? [1, 1, 1];
         const uvScale = spec.uvScale ?? [1, 1];
         const uvOffset = spec.uvOffset ?? [0, 0];
@@ -243,7 +255,7 @@ export class MaterialLibrary {
             receiveShadow: (spec.shadow?.receive ?? true) ? 1 : 0,
             extrude: spec.extrude ?? 0,
         };
-        buffer.write(mirror);
+        this.deps.device.queue.writeBuffer(buffer, 0, pack(EngineMaterialUniforms, mirror) as GPUAllowSharedBufferSource);
 
         // Built per material: the vertex reads this material's `extrude`, so it
         // must reference this material's bind-group layout object (not a cached one).
@@ -271,7 +283,7 @@ export class MaterialLibrary {
         // Alpha-tested geometry would cast a solid rectangle (the shadow pass
         // ignores the alpha texture), so it does not cast unless asked.
         const shadowCast = (spec.shadow?.cast ?? (spec.alphaTest ?? 0) <= 0) && !isTransparent(state);
-        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides, shadowCast, write: () => buffer.write(mirror as never) };
+        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides, shadowCast, write: () => this.deps.device.queue.writeBuffer(buffer, 0, pack(EngineMaterialUniforms, mirror) as GPUAllowSharedBufferSource) };
     }
 
     private createShaderMaterial(slot: number, spec: Extract<MaterialSpec, { type: 'shader' }>, state: ResolvedRenderState): MaterialEntry {
@@ -294,11 +306,11 @@ export class MaterialLibrary {
         bindings.pointShadow = { uniform: PointShadowUniforms };
         bindings.pointShadowMap = { texture: 'float', viewDimension: 'cube-array' };
         bindings.pointSampler = { sampler: 'filtering' };
-        const layout = tgpu.bindGroupLayout(bindings as any);
+        const layout = new GpuBindGroupLayout(bindings as any);
 
         const { vertex, fragment } = this.compileDeclarative(spec, this.deps.meshLayout, layout, textureNames);
 
-        const buffer = this.deps.root.createBuffer(Struct).$usage('uniform');
+        const buffer = createRawBuffer(this.deps.device, Struct, 'uniform');
         const keys = Object.keys(schema);
         const mirror: Record<string, unknown> = {};
         for (let i = 0; i < keys.length; i++) {
@@ -311,7 +323,7 @@ export class MaterialLibrary {
                 const key = keys[i]!;
                 out[key] = coerceUniform(schema[key]!, mirror[key]);
             }
-            buffer.write(out as never);
+            this.deps.device.queue.writeBuffer(buffer, 0, pack(Struct, out) as GPUAllowSharedBufferSource);
         };
         writeMirror();
 
@@ -332,40 +344,36 @@ export class MaterialLibrary {
         return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides: undefined, shadowCast, write: writeMirror };
     }
 
-    private compileDeclarative(spec: Extract<MaterialSpec, { type: 'shader' }>, meshLayout: MeshDataLayout | SkinnedMeshDataLayout, matLayout: any, textureNames: string[], skinned = false) {
+    private compileDeclarative(spec: Extract<MaterialSpec, { type: 'shader' }>, meshLayout: MeshDataLayout | SkinnedMeshDataLayout, matLayout: GpuBindGroupLayout, textureNames: string[], skinned = false) {
         const decl = spec.shaders;
         if (!decl.fragment || typeof decl.fragment.fn !== 'function') {
             throw new Error('createMaterial: shader materials require `shaders.fragment: { fn }`');
         }
-        const noiseFn = createNoiseFn(matLayout);
-        const snoiseFn = createSnoiseFn(matLayout);
+        const noiseFn = createNoiseFn();
+        const snoiseFn = createSnoiseFn();
 
-        const resolveExternals = () => () => {
-            const ext: Record<string, unknown> = { d, std, meshLayout, matLayout, lightContribution, tonemap, noise: noiseFn, snoise: snoiseFn };
-            try { ext.scene = (meshLayout as any).$.uniforms; } catch { /* outside shader */ }
-            try {
-                ext.lights = (meshLayout as any).$.lights;
-                ext.dynamic = (meshLayout as any).$.dynamicInstances;
-                ext.statics = (meshLayout as any).$.staticInstances;
-                ext.slotIndices = (meshLayout as any).$.slotIndices;
-            } catch { /* outside shader */ }
-            try {
-                ext.material = (matLayout as any).$.material;
-                const textures: Record<string, unknown> = {};
-                for (const name of textureNames) {
-                    textures[name] = (matLayout as any).$[name];
-                    textures[`${name}Sampler`] = (matLayout as any).$[`${name}Sampler`];
-                }
-                if (textureNames[0]) textures.sampler = (matLayout as any).$[`${textureNames[0]}Sampler`];
-                ext.textures = textures;
-                ext.shadow = (matLayout as any).$.shadow;
-                ext.shadowMap = (matLayout as any).$.shadowMap;
-                ext.shadowSampler = (matLayout as any).$.shadowSampler;
-            } catch { /* outside shader */ }
-            return ext;
+        const textures: Record<string, string> = {};
+        for (const name of textureNames) {
+            textures[name] = `mat.${name}`;
+            textures[`${name}Sampler`] = `mat.${name}Sampler`;
+        }
+        if (textureNames[0]) textures.sampler = `mat.${textureNames[0]}Sampler`;
+        const expose: Record<string, string | Record<string, string>> = {
+            material: 'mat.material',
+            scene: 'mesh.uniforms',
+            lights: 'mesh.lights',
+            dynamic: 'mesh.dynamicInstances',
+            statics: 'mesh.staticInstances',
+            slotIndices: 'mesh.slotIndices',
+            shadow: 'mat.shadow',
+            shadowMap: 'mat.shadowMap',
+            shadowSampler: 'mat.shadowSampler',
+            textures,
         };
+        const bindings = { mesh: meshLayout, mat: matLayout };
+        const helpers = { lightContribution, tonemap, noise: noiseFn, snoise: snoiseFn };
 
-        let vertex: any;
+        let vertex: GpuShader;
         let fragmentIn: Record<string, unknown>;
 
         if (decl.vertex) {
@@ -375,8 +383,7 @@ export class MaterialLibrary {
                 vertexOut[k] = v;
                 fragmentIn[k] = v;
             }
-            attachShaderMetadata(decl.vertex.fn as any, resolveExternals(), true, { d, std, meshLayout, matLayout } as any);
-            vertex = tgpu.vertexFn({
+            vertex = GpuShader.vertex({
                 in: {
                     position: d.location(0, d.vec3f),
                     normal: d.location(1, d.vec3f),
@@ -384,7 +391,10 @@ export class MaterialLibrary {
                     instanceIndex: d.builtin.instanceIndex,
                 },
                 out: vertexOut,
-            } as any)(decl.vertex.fn as any);
+                bindings,
+                expose,
+                helpers,
+            } as any, decl.vertex.fn as any);
         } else if (skinned) {
             if (!this.shaderSkinnedVertex) this.shaderSkinnedVertex = createSkinnedMeshVertex(meshLayout as SkinnedMeshDataLayout);
             vertex = this.shaderSkinnedVertex;
@@ -399,20 +409,13 @@ export class MaterialLibrary {
             fragmentIn = { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position, vCustom: d.vec2f };
         }
 
-        // The skinned variant attaches independent metadata to a placeholder fn
-        // (via `sourceOverride`), so it does not clobber the main fragment's
-        // metadata on the shared user function.
-        const userFragmentFn = decl.fragment.fn as Function;
-        const fragmentTarget: Function = skinned ? function() {} : userFragmentFn;
-        attachShaderMetadata(
-            fragmentTarget as any,
-            resolveExternals(),
-            false,
-            { d, std, meshLayout, matLayout } as any,
-            undefined,
-            skinned ? userFragmentFn.toString() : undefined,
-        );
-        const fragment = tgpu.fragmentFn({ in: fragmentIn, out: d.vec4f } as any)(fragmentTarget as any);
+        const fragment = GpuShader.fragment({
+            in: fragmentIn,
+            out: d.vec4f,
+            bindings,
+            expose,
+            helpers,
+        } as any, decl.fragment.fn as any);
 
         return { vertex, fragment };
     }
@@ -457,14 +460,14 @@ export class MaterialLibrary {
     }
 
     private createBindGroup(
-        layout: any,
-        buffer: TgpuBuffer<any>,
+        layout: GpuBindGroupLayout,
+        buffer: GPUBuffer,
         textureNames: string[],
         textureIds: Record<string, string | null>,
         samplerOverrides?: Record<string, GPUSampler>,
     ): GPUBindGroup {
         const entries: GPUBindGroupEntry[] = [
-            { binding: 0, resource: { buffer: this.deps.root.unwrap(buffer) as unknown as GPUBuffer } },
+            { binding: 0, resource: { buffer } },
         ];
         let binding = 1;
         for (const name of textureNames) {
@@ -482,7 +485,7 @@ export class MaterialLibrary {
         entries.push({ binding: binding++, resource: this.deps.pointShadow.mapTexture });
         entries.push({ binding: binding++, resource: this.deps.pointShadow.mapSampler });
         return this.deps.device.createBindGroup({
-            layout: this.deps.root.unwrap(layout) as unknown as GPUBindGroupLayout,
+            layout: createGpuBindGroupLayout(this.deps.device, layout.toDescriptor()),
             entries,
         });
     }
@@ -550,17 +553,11 @@ export class MaterialLibrary {
     }
 }
 
-function coerceUniform(type: AnyWgslData, value: unknown): unknown {
-    if (Array.isArray(value)) {
-        const a = value as number[];
-        if (type === (d.vec2f as unknown)) return d.vec2f(a[0]!, a[1]!);
-        if (type === (d.vec3f as unknown)) return d.vec3f(a[0]!, a[1]!, a[2]!);
-        if (type === (d.vec4f as unknown)) return d.vec4f(a[0]!, a[1]!, a[2]!, a[3]!);
-    }
+function coerceUniform(_type: AnyField, value: unknown): unknown {
     return value;
 }
 
-function zeroValue(type: AnyWgslData): unknown {
+function zeroValue(type: AnyField): unknown {
     if (type === (d.vec2f as unknown)) return [0, 0];
     if (type === (d.vec3f as unknown)) return [0, 0, 0];
     if (type === (d.vec4f as unknown)) return [0, 0, 0, 0];

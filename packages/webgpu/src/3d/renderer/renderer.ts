@@ -7,10 +7,9 @@
  * - GPU index buffer for sparse instancing
  * - Depth testing + back-face culling
  */
-import type { TgpuRoot } from 'typegpu';
-import type { AnyWgslData } from 'typegpu/data';
+type GpuDeviceRef = { device: GPUDevice };
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 import { Base3DRenderer } from 'murow/renderer';
-import { tgpu } from '../../shaders/typegpu';
 import { MESH_UNIFORM_LIGHT_OFFSET } from '../../core/types';
 import { Logger } from 'murow/core';
 import {
@@ -205,9 +204,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             maxComputeInvocationsPerWorkgroup: a.maxComputeInvocationsPerWorkgroup,
         };
         const device = await adapter.requestDevice({ requiredLimits });
-        this.core.root = tgpu.initFromDevice({ device });
-        this.core.device = this.core.root.device;
-        this.compute = new ComputeManager(this.core.root);
+        this.core.root = { device } as never;
+        this.core.device = device;
+        this.compute = new ComputeManager(this.core.device);
 
         this.core.context = this.canvas.getContext('webgpu')!;
         this.core.format = navigator.gpu.getPreferredCanvasFormat();
@@ -699,6 +698,5 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.particles?.system.destroy();
         this.core.pipelines?.destroy();
         this.core.models?.destroy();
-        this.core.root?.destroy();
     }
 }

@@ -1,6 +1,6 @@
-import type { TgpuRoot, TgpuBuffer, TgpuBindGroupLayout } from 'typegpu';
-import { tgpu, d, std } from '../../../../shaders/typegpu';
-import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
+import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d, std } from '../../../../gpu';
+
+
 import { ComputeBuilder, type ComputeKernel } from '../../../../compute/compute-builder';
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotMap } from 'murow/core/slot-map';
@@ -140,7 +140,7 @@ export interface ParticleEmitter3D {
 }
 
 export interface ParticleSystem3DOptions {
-    root: TgpuRoot;
+    root: { device: GPUDevice };
     /** Target color format. */
     format: GPUTextureFormat;
     /** Max live particles (rounded up to a power of two). Default 4096. */
@@ -178,7 +178,6 @@ function nextPowerOfTwo(n: number): number {
  * camera-facing quads batched by material.
  */
 export class ParticleSystem3D {
-    private readonly root: TgpuRoot;
     private readonly device: GPUDevice;
     private readonly format: GPUTextureFormat;
     private readonly max: number;
@@ -188,19 +187,19 @@ export class ParticleSystem3D {
     private readonly maxEmitters: number;
     private readonly resolveTexture: ((id: string) => { view: GPUTextureView; sampler: GPUSampler } | undefined) | undefined;
     private readonly logger: Logger;
-    private readonly pool: TgpuBuffer<any>;
-    private readonly spawns: TgpuBuffer<any>;
-    private readonly computeFrame: TgpuBuffer<any>;
+    private readonly pool: GPUBuffer;
+    private readonly spawns: GPUBuffer;
+    private readonly computeFrame: GPUBuffer;
     private readonly renderFrame: GPUBuffer;
     private readonly spawnKernel: ComputeKernel<any>;
     private readonly integrateKernel: ComputeKernel<any>;
     private readonly compactKernel: ComputeKernel<any>;
     private readonly argsKernel: ComputeKernel<any>;
-    private readonly counts: TgpuBuffer<any>;
-    private readonly indices: TgpuBuffer<any>;
-    private readonly args: TgpuBuffer<any>;
+    private readonly counts: GPUBuffer;
+    private readonly indices: GPUBuffer;
+    private readonly args: GPUBuffer;
     private readonly countsZero: Uint32Array<ArrayBuffer>;
-    private readonly layout: TgpuBindGroupLayout;
+    private readonly layout: GpuBindGroupLayout;
     private readonly whiteTexture: GPUTexture;
     private readonly whiteView: GPUTextureView;
     private readonly sampler: GPUSampler;
@@ -232,7 +231,6 @@ export class ParticleSystem3D {
 
     constructor(options: ParticleSystem3DOptions) {
         const { root, format } = options;
-        this.root = root;
         this.device = root.device;
         this.format = format;
         this.max = nextPowerOfTwo(options.maxParticles ?? 4096);
@@ -248,9 +246,9 @@ export class ParticleSystem3D {
         this.emitters = new Array(this.maxEmitters).fill(null);
         this.countsZero = new Uint32Array(this.maxMaterials);
 
-        this.pool = root.createBuffer(d.arrayOf(Particle3D, this.max)).$usage('storage');
-        this.spawns = root.createBuffer(d.arrayOf(Particle3D, this.maxSpawns)).$usage('storage');
-        this.computeFrame = root.createBuffer(ComputeFrame).$usage('uniform');
+        this.pool = createRawBuffer(this.device, d.arrayOf(Particle3D, this.max), 'storage');
+        this.spawns = createRawBuffer(this.device, d.arrayOf(Particle3D, this.maxSpawns), 'storage');
+        this.computeFrame = createRawBuffer(this.device, ComputeFrame, 'uniform');
         this.spawnStaging = new Float32Array(this.maxSpawns * PARTICLE_3D_STRIDE);
 
         const spawns = this.spawns;
@@ -263,10 +261,11 @@ export class ParticleSystem3D {
                 spawnRecords: { storage: d.arrayOf(Particle3D, this.maxSpawns), external: spawns },
                 frame: { uniform: ComputeFrame, external: frame },
             })
-            .shader(({ particles, spawnRecords, frame }, { globalId }) => {
+            .shader(({ globalId }, { buffers }) => {
                 'use gpu';
+                const { particles, spawnRecords } = buffers;
+                const frame = buffers.frame as any;
                 const i = globalId.x;
-                // @ts-ignore — TGSL uniform struct access
                 if (i >= frame.counts.y) { return; }
                 // @ts-ignore — TGSL uniform struct access
                 const slot = (frame.counts.x + i) & frame.counts.w;
@@ -300,8 +299,9 @@ export class ParticleSystem3D {
                 particles: { storage: d.arrayOf(Particle3D, this.max), readwrite: true, external: pool },
                 frame: { uniform: ComputeFrame, external: frame },
             })
-            .shader(({ particles, frame }, { globalId }) => {
+            .shader(({ globalId }, { buffers }) => {
                 'use gpu';
+                const { particles, frame } = buffers;
                 const i = globalId.x;
                 const p = particles[i];
                 if (p.life <= 0.0) { return; }
@@ -329,9 +329,9 @@ export class ParticleSystem3D {
 
         // Per-material compaction: atomic counters + a compacted index list, then
         // an indirect-args buffer, so each material draws only its live particles.
-        this.counts = root.createBuffer(d.arrayOf(d.atomic(d.u32), this.maxMaterials)).$usage('storage');
-        this.indices = root.createBuffer(d.arrayOf(d.u32, this.maxMaterials * this.max)).$usage('storage');
-        this.args = root.createBuffer(d.arrayOf(DrawArgs, this.maxMaterials)).$usage('storage', 'indirect');
+        this.counts = createRawBuffer(this.device, d.arrayOf(d.atomic(d.u32), this.maxMaterials), 'storage');
+        this.indices = createRawBuffer(this.device, d.arrayOf(d.u32, this.maxMaterials * this.max), 'storage');
+        this.args = createRawBuffer(this.device, d.arrayOf(DrawArgs, this.maxMaterials), ['storage', 'indirect']);
         const counts = this.counts;
         const indices = this.indices;
         const args = this.args;
@@ -343,8 +343,9 @@ export class ParticleSystem3D {
                 indices: { storage: d.arrayOf(d.u32, this.maxMaterials * this.max), readwrite: true, external: indices },
                 frame: { uniform: ComputeFrame, external: frame },
             })
-            .shader(({ particles, counts, indices, frame }, { globalId }) => {
+            .shader(({ globalId }, { buffers }) => {
                 'use gpu';
+                const { particles, counts, indices, frame } = buffers;
                 const i = globalId.x;
                 const p = particles[i];
                 if (p.life <= 0.0) { return; }
@@ -363,8 +364,9 @@ export class ParticleSystem3D {
                 args: { storage: d.arrayOf(DrawArgs, this.maxMaterials), readwrite: true, external: args },
                 frame: { uniform: ComputeFrame, external: frame },
             })
-            .shader(({ counts, args, frame }, { globalId }) => {
+            .shader(({ globalId }, { buffers }) => {
                 'use gpu';
+                const { counts, args, frame } = buffers;
                 const m = globalId.x;
                 // @ts-ignore — atomic on a storage array element
                 args[m].vertexCount = d.u32(4);
@@ -385,7 +387,7 @@ export class ParticleSystem3D {
         this.whiteView = this.whiteTexture.createView();
         this.sampler = this.device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
 
-        const layout = tgpu.bindGroupLayout({
+        const layout = new GpuBindGroupLayout({
             frame: { uniform: FrameUniforms },
             particles: { storage: d.arrayOf(Particle3D, this.max) },
             tex: { texture: 'float' },
@@ -395,61 +397,68 @@ export class ParticleSystem3D {
         });
         this.layout = layout;
 
-        const vfn = function(input: { vertexIndex: number; instanceIndex: number }) {
+        const vertex = GpuShader.vertex(
+            {
+                in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
+                out: { pos: d.builtin.position, uv: d.vec2f, color: d.vec4f },
+                bindings: { buf: layout },
+            },
+            (input, { buf }) => {
             const vi = d.f32(input.vertexIndex);
             const x = (vi - 2.0 * std.floor(vi * 0.5)) * 2.0 - 1.0;
             const y = std.floor(vi * 0.5) * 2.0 - 1.0;
-            const base = d.u32(layout.$.material.baseOffset);
-            const p = layout.$.particles[layout.$.indices[base + input.instanceIndex]];
+            const base = d.u32(buf.material.baseOffset);
+            const p = buf.particles[buf.indices[base + input.instanceIndex]];
             if (p.life <= 0.0) {
                 return { pos: d.vec4f(0.0, 0.0, 0.0, 0.0), uv: d.vec2f(0.0, 0.0), color: d.vec4f(0.0, 0.0, 0.0, 0.0) };
             }
             const frac = p.age / p.life;
-            const size = p.size * std.mix(1.0, p.grow, frac) * layout.$.frame.params.w;
+            const size = p.size * std.mix(1.0, p.grow, frac) * buf.frame.params.w;
             const ang = p.rot + p.spin * p.age;
             const cs = std.cos(ang);
             const sn = std.sin(ang);
             const cx = x * cs - y * sn;
             const cy = x * sn + y * cs;
-            const rx = layout.$.frame.right;
-            const uy = layout.$.frame.up;
+            const rx = buf.frame.right;
+            const uy = buf.frame.up;
             const world = d.vec3f(
                 p.px + rx.x * (cx * size) + uy.x * (cy * size),
                 p.py + rx.y * (cx * size) + uy.y * (cy * size),
                 p.pz + rx.z * (cx * size) + uy.z * (cy * size),
             );
-            const cols = layout.$.material.atlasCols;
-            const rows = layout.$.material.atlasRows;
-            const frameIdx = std.mod(std.floor(p.age * layout.$.material.atlasFps), cols * rows);
+            const cols = buf.material.atlasCols;
+            const rows = buf.material.atlasRows;
+            const frameIdx = std.mod(std.floor(p.age * buf.material.atlasFps), cols * rows);
             const col = std.mod(frameIdx, cols);
             const row = std.floor(frameIdx / cols);
             return {
-                pos: std.mul(layout.$.frame.viewProj, d.vec4f(world.x, world.y, world.z, 1.0)),
+                pos: std.mul(buf.frame.viewProj, d.vec4f(world.x, world.y, world.z, 1.0)),
                 uv: d.vec2f((cx * 0.5 + 0.5 + col) / cols, (cy * 0.5 + 0.5 + row) / rows),
                 color: d.vec4f(p.r, p.g, p.b, p.a * (1.0 - frac)),
             };
-        };
-        attachShaderMetadata(vfn, () => ({ d, std }), false, { d, std, layout });
-        const vertex = tgpu.vertexFn({
-            in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
-            out: { pos: d.builtin.position, uv: d.vec2f, color: d.vec4f },
-        })(vfn);
+            },
+        );
 
-        const ffn = function(input: { uv: { x: number; y: number }; color: { x: number; y: number; z: number; w: number } }) {
+        const fragment = GpuShader.fragment(
+            {
+                in: { uv: d.vec2f, color: d.vec4f },
+                out: d.vec4f,
+                bindings: { buf: layout },
+            },
+            (input, { buf }) => {
             // Explicit LOD 0: mipmaps average across atlas cells and dilute alpha.
-            const sampled = std.textureSampleLevel(layout.$.tex, layout.$.sampler, d.vec2f(input.uv.x, input.uv.y), 0.0);
+            const sampled = std.textureSampleLevel(buf.tex, buf.sampler, d.vec2f(input.uv.x, input.uv.y), 0.0);
             const dd = std.length(d.vec2f(input.uv.x * 2.0 - 1.0, input.uv.y * 2.0 - 1.0));
             const disc = d.vec4f(1.0, 1.0, 1.0, std.smoothstep(1.0, 0.15, dd));
-            const base = std.mix(disc, sampled, layout.$.material.useTexture);
+            const base = std.mix(disc, sampled, buf.material.useTexture);
             const a = base.w * input.color.w;
             return d.vec4f(input.color.x * base.x * a, input.color.y * base.y * a, input.color.z * base.z * a, a);
-        };
-        attachShaderMetadata(ffn, () => ({ d, std }), false, { d, std, layout });
-        const fragment = tgpu.fragmentFn({ in: { uv: d.vec2f, color: d.vec4f }, out: d.vec4f })(ffn);
+            },
+        );
 
-        const { code } = tgpu.resolveWithContext([vertex, fragment]);
+        const { code } = compileProgram([vertex, fragment]);
         const module = this.device.createShaderModule({ code, label: 'particles-3d' });
-        const pipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.root.unwrap(layout) as unknown as GPUBindGroupLayout] });
+        const pipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [createGpuBindGroupLayout(this.device, layout.toDescriptor())] });
         const target = (blend: GPUBlendState | undefined): GPUColorTargetState => ({ format, blend });
         this.additivePipeline = this.device.createRenderPipeline({
             label: 'particles-3d-additive',
@@ -584,7 +593,7 @@ export class ParticleSystem3D {
         f[28] = this.totalSpawned; f[29] = 0; f[30] = 0; f[31] = 0;
         this.device.queue.writeBuffer(this.renderFrame, 0, f);
 
-        const args = this.root.unwrap(this.args) as unknown as GPUBuffer;
+        const args = this.args;
         const active = this.materialSlots.activeSlots;
         const size = this.materialSlots.size;
         for (let i = 0; i < size; i++) {
@@ -641,14 +650,14 @@ export class ParticleSystem3D {
         const atlas = spec.atlas;
         this.device.queue.writeBuffer(buffer, 0, new Float32Array([id, useTexture, id * this.max, atlas?.cols ?? 1, atlas?.rows ?? 1, atlas?.fps ?? 0, 0, 0]));
         const bindGroup = this.device.createBindGroup({
-            layout: this.root.unwrap(this.layout) as unknown as GPUBindGroupLayout,
+            layout: createGpuBindGroupLayout(this.device, this.layout.toDescriptor()),
             entries: [
                 { binding: 0, resource: { buffer: this.renderFrame } },
-                { binding: 1, resource: { buffer: this.root.unwrap(this.pool) as unknown as GPUBuffer } },
+                { binding: 1, resource: { buffer: this.pool } },
                 { binding: 2, resource: view },
                 { binding: 3, resource: sampler },
                 { binding: 4, resource: { buffer } },
-                { binding: 5, resource: { buffer: this.root.unwrap(this.indices) as unknown as GPUBuffer } },
+                { binding: 5, resource: { buffer: this.indices } },
             ],
         });
         this.materials[slot] = {
@@ -698,7 +707,7 @@ export class ParticleSystem3D {
 
         if (spawnCount > 0) {
             this.device.queue.writeBuffer(
-                this.root.unwrap(this.spawns) as unknown as GPUBuffer, 0,
+                this.spawns, 0,
                 this.spawnStaging.buffer, 0, spawnCount * PARTICLE_3D_STRIDE * 4,
             );
         }
@@ -712,10 +721,10 @@ export class ParticleSystem3D {
         this.computeFrameU32[6] = this.max;   // per-material index region stride
         this.computeFrameU32[7] = this.mask;
         this.device.queue.writeBuffer(
-            this.root.unwrap(this.computeFrame) as unknown as GPUBuffer, 0, this.computeFrameData,
+            this.computeFrame, 0, this.computeFrameData,
         );
         // Reset the per-material counters before compaction.
-        this.device.queue.writeBuffer(this.root.unwrap(this.counts) as unknown as GPUBuffer, 0, this.countsZero);
+        this.device.queue.writeBuffer(this.counts, 0, this.countsZero);
 
         const encoder = this.device.createCommandEncoder();
         if (spawnCount > 0) this.spawnKernel.encode(encoder, spawnCount);

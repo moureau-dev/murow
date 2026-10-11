@@ -1,5 +1,13 @@
-import type { TgpuRoot, TgpuBuffer, TgpuVertexFn, TgpuFragmentFn, TgpuBindGroupLayout } from 'typegpu';
-import { tgpu, d } from '../../../../shaders/typegpu';
+import {
+    compileProgram,
+    createGpuBindGroupLayout,
+    createRawBuffer,
+    d,
+    type GpuBindGroupLayout,
+} from '../../../../gpu';
+
+// Stable local name: shader bodies are parsed from their source, so bundlers
+// must not rename `d` inside them.
 import {
     DynamicMesh,
     StaticMesh,
@@ -23,8 +31,9 @@ import {
     type SkinnedMeshDataLayout,
 } from '../../../shader';
 
+
 export interface MeshPipelinesOptions {
-    root: TgpuRoot;
+    root?: unknown;
     device: GPUDevice;
     format: GPUTextureFormat;
     maxInstances: number;
@@ -49,12 +58,6 @@ export class MeshPipelines {
     depthTexture!: GPUTexture;
     depthSampler!: GPUSampler;
 
-    dynamicBuffer!: TgpuBuffer<any>;
-    staticBuffer!: TgpuBuffer<any>;
-    uniformBuffer!: TgpuBuffer<any>;
-    slotIndexBuffer!: TgpuBuffer<any>;
-    lightBuffer!: TgpuBuffer<any>;
-
     rawDynamicBuffer!: GPUBuffer;
     rawStaticBuffer!: GPUBuffer;
     rawUniformBuffer!: GPUBuffer;
@@ -76,16 +79,14 @@ export class MeshPipelines {
     rawSkinnedBGL!: GPUBindGroupLayout;
 
     private device!: GPUDevice;
-    private root!: TgpuRoot;
     private format!: GPUTextureFormat;
     private vertexBufferLayout!: GPUVertexBufferLayout;
     skinnedVertexBufferLayout!: GPUVertexBufferLayout;
     private rawMeshBGL!: GPUBindGroupLayout;
 
     build(opts: MeshPipelinesOptions): void {
-        const { root, device, format, maxInstances, maxSkinnedInstances, maxTotalBones } = opts;
+        const { device, format, maxInstances, maxSkinnedInstances, maxTotalBones } = opts;
         const maxLights = opts.maxLights ?? MAX_LIGHTS;
-        this.root = root;
         this.device = device;
         this.format = format;
 
@@ -123,9 +124,9 @@ export class MeshPipelines {
         // --- Untextured pipeline (color only) ---
         const vertex = createMeshVertex(this.meshLayout);
         const fragment = createMeshFragment(this.meshLayout);
-        const { code: wgslCode } = tgpu.resolveWithContext([vertex, fragment]);
+        const { code: wgslCode } = compileProgram([vertex, fragment]);
         const shaderModule = device.createShaderModule({ code: wgslCode });
-        const rawBGL = root.unwrap(this.meshLayout);
+        const rawBGL = createGpuBindGroupLayout(device, this.meshLayout.toDescriptor());
         this.rawMeshBGL = rawBGL;
 
         this.rawPipeline = device.createRenderPipeline({
@@ -140,9 +141,9 @@ export class MeshPipelines {
         const texLayout = createTextureBindGroupLayout();
         const texVertex = createTexturedMeshVertex(this.meshLayout);
         const texFragment = createTexturedMeshFragment(this.meshLayout, texLayout);
-        const { code: texWgslCode } = tgpu.resolveWithContext([texVertex, texFragment]);
+        const { code: texWgslCode } = compileProgram([texVertex, texFragment]);
         const texShaderModule = device.createShaderModule({ code: texWgslCode });
-        const rawTexBGL = root.unwrap(texLayout);
+        const rawTexBGL = createGpuBindGroupLayout(device, texLayout.toDescriptor());
 
         this.rawTexturedPipeline = device.createRenderPipeline({
             layout: device.createPipelineLayout({ bindGroupLayouts: [rawBGL, rawTexBGL] }),
@@ -162,17 +163,11 @@ export class MeshPipelines {
         });
 
         // Buffers
-        this.dynamicBuffer = root.createBuffer(d.arrayOf(DynamicMesh, maxInstances)).$usage('storage');
-        this.staticBuffer = root.createBuffer(d.arrayOf(StaticMesh, maxInstances)).$usage('storage');
-        this.uniformBuffer = root.createBuffer(MeshUniforms).$usage('uniform');
-        this.slotIndexBuffer = root.createBuffer(d.arrayOf(d.u32, maxInstances)).$usage('storage');
-        this.lightBuffer = root.createBuffer(d.arrayOf(Light, maxLights)).$usage('storage');
-
-        this.rawDynamicBuffer = root.unwrap(this.dynamicBuffer) as any;
-        this.rawStaticBuffer = root.unwrap(this.staticBuffer) as any;
-        this.rawUniformBuffer = root.unwrap(this.uniformBuffer) as any;
-        this.rawSlotIndexBuffer = root.unwrap(this.slotIndexBuffer) as any;
-        this.rawLightBuffer = root.unwrap(this.lightBuffer) as any;
+        this.rawDynamicBuffer = createRawBuffer(device, d.arrayOf(DynamicMesh, maxInstances), 'storage');
+        this.rawStaticBuffer = createRawBuffer(device, d.arrayOf(StaticMesh, maxInstances), 'storage');
+        this.rawUniformBuffer = createRawBuffer(device, MeshUniforms, 'uniform');
+        this.rawSlotIndexBuffer = createRawBuffer(device, d.arrayOf(d.u32, maxInstances), 'storage');
+        this.rawLightBuffer = createRawBuffer(device, d.arrayOf(Light, maxLights), 'storage');
 
         this.rawBindGroup = device.createBindGroup({
             layout: rawBGL,
@@ -203,9 +198,9 @@ export class MeshPipelines {
 
         const skinnedVertex = createSkinnedMeshVertex(this.skinnedMeshLayout);
         const skinnedFragment = createSkinnedMeshFragment(this.skinnedMeshLayout);
-        const { code: skinnedWgsl } = tgpu.resolveWithContext([skinnedVertex, skinnedFragment]);
+        const { code: skinnedWgsl } = compileProgram([skinnedVertex, skinnedFragment]);
         const skinnedShaderModule = device.createShaderModule({ code: skinnedWgsl });
-        const rawSkinnedBGL = root.unwrap(this.skinnedMeshLayout);
+        const rawSkinnedBGL = createGpuBindGroupLayout(device, this.skinnedMeshLayout.toDescriptor());
         this.rawSkinnedBGL = rawSkinnedBGL;
 
         this.skinnedVertexBufferLayout = skinnedVertexBufferLayout;
@@ -219,7 +214,7 @@ export class MeshPipelines {
 
         const skinnedTexVertex = createSkinnedMeshVertex(this.skinnedMeshLayout);
         const skinnedTexFragment = createSkinnedTexturedMeshFragment(this.skinnedMeshLayout, texLayout);
-        const { code: skinnedTexWgsl } = tgpu.resolveWithContext([skinnedTexVertex, skinnedTexFragment]);
+        const { code: skinnedTexWgsl } = compileProgram([skinnedTexVertex, skinnedTexFragment]);
         const skinnedTexShaderModule = device.createShaderModule({ code: skinnedTexWgsl });
 
         this.rawSkinnedTexturedPipeline = device.createRenderPipeline({
@@ -240,15 +235,10 @@ export class MeshPipelines {
         });
 
         // Skinned GPU buffers
-        const skinnedDynBuf = root.createBuffer(d.arrayOf(DynamicMesh, msi)).$usage('storage');
-        const skinnedStatBuf = root.createBuffer(d.arrayOf(SkinnedStaticMesh, msi)).$usage('storage');
-        const skinnedSlotBuf = root.createBuffer(d.arrayOf(d.u32, msi)).$usage('storage');
-        const boneBuf = root.createBuffer(d.arrayOf(d.mat4x4f, maxTotalBones)).$usage('storage');
-
-        this.rawSkinnedDynamicBuffer = root.unwrap(skinnedDynBuf) as any;
-        this.rawSkinnedStaticBuffer = root.unwrap(skinnedStatBuf) as any;
-        this.rawSkinnedSlotIndexBuffer = root.unwrap(skinnedSlotBuf) as any;
-        this.rawBoneMatrixBuffer = root.unwrap(boneBuf) as any;
+        this.rawSkinnedDynamicBuffer = createRawBuffer(device, d.arrayOf(DynamicMesh, msi), 'storage');
+        this.rawSkinnedStaticBuffer = createRawBuffer(device, d.arrayOf(SkinnedStaticMesh, msi), 'storage');
+        this.rawSkinnedSlotIndexBuffer = createRawBuffer(device, d.arrayOf(d.u32, msi), 'storage');
+        this.rawBoneMatrixBuffer = createRawBuffer(device, d.arrayOf(d.mat4x4f, maxTotalBones), 'storage');
 
         this.rebuildSkinnedBindGroup();
     }
@@ -266,7 +256,7 @@ export class MeshPipelines {
     buildMaterialPipeline(opts: {
         vertex: any;
         fragment: any;
-        materialLayout: TgpuBindGroupLayout;
+        materialLayout: GpuBindGroupLayout;
         blendState: { color?: GPUBlendComponent; alpha?: GPUBlendComponent } | null;
         depthWrite: boolean;
         depthTest: boolean;
@@ -279,9 +269,9 @@ export class MeshPipelines {
         depthBiasClamp?: number;
         label?: string;
     }): GPURenderPipeline {
-        const { code } = tgpu.resolveWithContext([opts.vertex as any, opts.fragment as any]);
+        const { code } = compileProgram([opts.vertex as any, opts.fragment as any]);
         const module = this.device.createShaderModule({ code, label: opts.label });
-        const rawMaterialBGL = this.root.unwrap(opts.materialLayout) as unknown as GPUBindGroupLayout;
+        const rawMaterialBGL = createGpuBindGroupLayout(this.device, opts.materialLayout.toDescriptor());
 
         const depthStencil: GPUDepthStencilState = {
             format: 'depth24plus',
@@ -322,7 +312,7 @@ export class MeshPipelines {
     }
 
     private rebuildSkinnedBindGroup(): void {
-        const rawSkinnedBGL = this.root.unwrap(this.skinnedMeshLayout);
+        const rawSkinnedBGL = createGpuBindGroupLayout(this.device, this.skinnedMeshLayout.toDescriptor());
         this.rawSkinnedBindGroup = this.device.createBindGroup({
             layout: rawSkinnedBGL as GPUBindGroupLayout,
             entries: [
@@ -338,11 +328,11 @@ export class MeshPipelines {
 
     destroy(): void {
         this.depthTexture?.destroy();
-        this.dynamicBuffer?.destroy();
-        this.staticBuffer?.destroy();
-        this.uniformBuffer?.destroy();
-        this.slotIndexBuffer?.destroy();
-        this.lightBuffer?.destroy();
+        this.rawDynamicBuffer?.destroy();
+        this.rawStaticBuffer?.destroy();
+        this.rawUniformBuffer?.destroy();
+        this.rawSlotIndexBuffer?.destroy();
+        this.rawLightBuffer?.destroy();
         this.rawSkinnedDynamicBuffer?.destroy();
         this.rawSkinnedStaticBuffer?.destroy();
         this.rawSkinnedSlotIndexBuffer?.destroy();

@@ -8,14 +8,11 @@
  * - No closure captures — offsets passed via uniforms
  * - 6 buffers (under 8 binding limit)
  */
-// Use bundler-safe wraps so `d.X` / `std.X` accesses inside the shader
-// function body survive Rollup's namespace-member inlining (see
-// ../../shaders/typegpu.ts).
-import type * as _d from 'typegpu/data';
-import { d, std } from '../../shaders/typegpu';
+import { d, std } from '../../gpu';
+
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { AnimComputeUniforms, InstanceAnimStateGPU } from '../../core/types';
-import type { TgpuRoot } from 'typegpu';
+type GpuDeviceRef = { device: GPUDevice };
 import { packAnimationData, type PackedBuffers } from './packer';
 import type { PackedAnimationData } from 'murow/renderer';
 
@@ -33,7 +30,7 @@ export interface AnimationKernelBudgets {
 }
 
 export function buildAnimationKernel(
-    root: TgpuRoot,
+    root: GpuDeviceRef,
     packed: PackedAnimationData,
     maxInstances: number,
     maxTotalBones: number,
@@ -57,7 +54,8 @@ export function buildAnimationKernel(
             matrices:     { storage: d.arrayOf(d.mat4x4f, budgets.matricesCapacity) },
             boneMatrices: { storage: d.arrayOf(d.mat4x4f, maxTotalBones), readwrite: true },
         })
-        .shader(({ uniforms, instances, skelI32, animF32, matrices, boneMatrices }, { globalId }) => {
+        .shader(({ globalId }, { buffers }) => {
+            const { uniforms, instances, skelI32, animF32, matrices, boneMatrices } = buffers;
             'use gpu';
             const idx = globalId.x;
             // @ts-ignore — TGSL struct field access
@@ -137,7 +135,7 @@ export function buildAnimationKernel(
                         const tLo = animF32[chDataOff + lo];
                         const tHi = animF32[chDataOff + hi];
                         let f = d.f32(time - time);
-                        if (tHi > tLo) { f = (time - tLo) / (tHi - tLo); }
+                        if (tHi > tLo) { f = d.f32((time - tLo) / (tHi - tLo)); }
                         const offA = valBase + lo * compCount;
                         const offB = valBase + hi * compCount;
 
@@ -245,7 +243,7 @@ export function buildAnimationKernel(
                             const ptLo = animF32[pchDataOff + prevLo];
                             const ptHi = animF32[pchDataOff + prevHi];
                             let pf = d.f32(time - time);
-                            if (ptHi > ptLo) { pf = (prevTime - ptLo) / (ptHi - ptLo); }
+                            if (ptHi > ptLo) { pf = d.f32((prevTime - ptLo) / (ptHi - ptLo)); }
                             const poffA = pvalBase + prevLo * prevCompCount;
                             const poffB = pvalBase + prevHi * prevCompCount;
 
@@ -261,7 +259,7 @@ export function buildAnimationKernel(
                                 const pomf = 1.0 - pf;
                                 pqx = pomf*pax + pf*pbx; pqy = pomf*pay + pf*pby; pqz = pomf*paz + pf*pbz; pqw = pomf*paw + pf*pbw;
                                 const plen = std.sqrt(pqx*pqx + pqy*pqy + pqz*pqz + pqw*pqw);
-                                if (plen > 0.0) { const pinv = 1.0/plen; pqx = pqx*pinv; pqy = pqy*pinv; pqz = pqz*pinv; pqw = pqw*pinv; }
+                                if (std.gt(plen, 0.0)) { const pinv = 1.0/plen; pqx = pqx*pinv; pqy = pqy*pinv; pqz = pqz*pinv; pqw = pqw*pinv; }
                             } else {
                                 psx = std.mix(animF32[poffA], animF32[poffB], pf);
                                 psy = std.mix(animF32[poffA+1], animF32[poffB+1], pf);
@@ -296,9 +294,9 @@ export function buildAnimationKernel(
                     // Blend: final = lerp(prevBone, currentBone, blendWeight)
                     // Assign to variables first so .columns resolve correctly.
                     // @ts-ignore
-                    const prevBoneMat: _d.Mat4x4f = boneMatrices[(worldOff + pj)] * matrices[(ibmOff + pj)];
+                    const prevBoneMat: any = boneMatrices[(worldOff + pj)] * matrices[(ibmOff + pj)];
                     // @ts-ignore
-                    const curBoneMat: _d.Mat4x4f = boneMatrices[(boneOff + pj)];
+                    const curBoneMat: any = boneMatrices[(boneOff + pj)];
                     const blendWeight = inst.blendWeight;
                     const oneMinusBlend = d.f32(1) - blendWeight;
                     boneMatrices[(boneOff + pj)] = d.mat4x4f(
@@ -320,15 +318,15 @@ export function buildAnimationKernel(
     return { kernel, packedBuffers: pb, budgets };
 }
 
-export function uploadPackedToKernel(root: TgpuRoot, kernel: ComputeKernel, pb: PackedBuffers): void {
+export function uploadPackedToKernel(root: GpuDeviceRef, kernel: ComputeKernel, pb: PackedBuffers): void {
     const queue = root.device.queue;
 
-    const skelBuf = root.unwrap(kernel.getBuffer('skelI32')) as GPUBuffer;
+    const skelBuf = kernel.getBuffer('skelI32');
     queue.writeBuffer(skelBuf, 0, pb.skelI32 as GPUAllowSharedBufferSource);
 
-    const animBuf = root.unwrap(kernel.getBuffer('animF32')) as GPUBuffer;
+    const animBuf = kernel.getBuffer('animF32');
     queue.writeBuffer(animBuf, 0, pb.animF32 as GPUAllowSharedBufferSource);
 
-    const matBuf = root.unwrap(kernel.getBuffer('matrices')) as GPUBuffer;
+    const matBuf = kernel.getBuffer('matrices');
     queue.writeBuffer(matBuf, 0, pb.matFloats as GPUAllowSharedBufferSource);
 }

@@ -6,14 +6,15 @@
  *
  * NOTE: TGSL bodies must use `function` syntax, not arrow functions.
  */
-import { tgpu, d, std } from '../../../../shaders/typegpu';
+import { GpuBindGroupLayout, GpuShader, d, std } from '../../../../gpu';
+
 import { DynamicSprite, StaticSprite, SpriteUniforms } from '../../../../core/types';
-import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
+
 
 // --- Bind group layouts ---
 
 export function createSpriteLayout(maxSprites: number) {
-    return tgpu.bindGroupLayout({
+    return new GpuBindGroupLayout({
         uniforms: { uniform: SpriteUniforms },
         dynamicInstances: { storage: d.arrayOf(DynamicSprite, maxSprites) },
         staticInstances: { storage: d.arrayOf(StaticSprite, maxSprites) },
@@ -22,7 +23,7 @@ export function createSpriteLayout(maxSprites: number) {
 }
 
 export function createTextureLayout() {
-    return tgpu.bindGroupLayout({
+    return new GpuBindGroupLayout({
         spriteTex: { texture: d.texture2d() },
         spriteSampler: { sampler: 'filtering' as const },
     });
@@ -37,15 +38,21 @@ export function createSpriteVertex(
     spriteLayout: SpriteDataLayout,
     _textureLayout: SpriteTextureLayout,
 ) {
-    const fn = function(input: any) {
+    return GpuShader.vertex(
+        {
+            in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
+            out: { pos: d.builtin.position, vUv: d.vec2f, vTint: d.vec4f, vOpacity: d.f32 },
+            bindings: { sprite: spriteLayout },
+        },
+        (input, { sprite }) => {
         const vertexIndex = input.vertexIndex;
         const instanceIndex = input.instanceIndex;
 
         // Indirection: instanceIndex → real slot in the data buffers
-        const slot = spriteLayout.$.slotIndices[instanceIndex];
-        const dyn = spriteLayout.$.dynamicInstances[slot];
-        const stat = spriteLayout.$.staticInstances[slot];
-        const alpha = spriteLayout.$.uniforms.alpha;
+        const slot = sprite.slotIndices[instanceIndex];
+        const dyn = sprite.dynamicInstances[slot];
+        const stat = sprite.staticInstances[slot];
+        const alpha = sprite.uniforms.alpha;
 
         // Interpolate position
         const x = std.mix(dyn.prevX, dyn.currX, alpha);
@@ -92,7 +99,7 @@ export function createSpriteVertex(
 
         // World position -> clip via camera matrix
         const worldPos = d.vec3f(std.add(x, rotX), std.add(y, rotY), 1.0);
-        const clipPos = std.mul(spriteLayout.$.uniforms.viewProjection, worldPos);
+        const clipPos = std.mul(sprite.uniforms.viewProjection, worldPos);
 
         // UV
         const u = std.mix(stat.uvMinX, stat.uvMaxX, rightF);
@@ -104,42 +111,28 @@ export function createSpriteVertex(
             vTint: d.vec4f(stat.tintR, stat.tintG, stat.tintB, stat.tintA),
             vOpacity: stat.opacity,
         };
-    };
-    attachShaderMetadata(fn, () => ({ d, std, spriteLayout }), true, { d, std });
-    return tgpu.vertexFn({
-        in: {
-            vertexIndex: d.builtin.vertexIndex,
-            instanceIndex: d.builtin.instanceIndex,
         },
-        out: {
-            pos: d.builtin.position,
-            vUv: d.vec2f,
-            vTint: d.vec4f,
-            vOpacity: d.f32,
-        },
-    })(fn);
+    );
 }
 
 export function createSpriteFragment(
     _spriteLayout: SpriteDataLayout,
     textureLayout: SpriteTextureLayout,
 ) {
-    const fn = function(input: any) {
+    return GpuShader.fragment(
+        {
+            in: { vUv: d.vec2f, vTint: d.vec4f, vOpacity: d.f32 },
+            out: d.vec4f,
+            bindings: { tex: textureLayout },
+        },
+        (input, { tex }) => {
         const texColor = std.textureSample(
-            textureLayout.$.spriteTex,
-            textureLayout.$.spriteSampler,
+            tex.spriteTex,
+            tex.spriteSampler,
             input.vUv,
         );
         const tinted = std.mul(texColor, input.vTint);
         return d.vec4f(tinted.x, tinted.y, tinted.z, std.mul(tinted.w, input.vOpacity));
-    };
-    attachShaderMetadata(fn, () => ({ d, std, textureLayout }), true, { d, std });
-    return tgpu.fragmentFn({
-        in: {
-            vUv: d.vec2f,
-            vTint: d.vec4f,
-            vOpacity: d.f32,
         },
-        out: d.vec4f,
-    })(fn);
+    );
 }

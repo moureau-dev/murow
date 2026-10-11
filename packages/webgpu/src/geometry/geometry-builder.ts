@@ -22,14 +22,26 @@
  * geom.updateUniforms({ time: 1.5 });                           // ← typed uniform names
  * ```
  */
-import type { TgpuRoot, TgpuBuffer, TgpuRenderPipeline, TgpuBindGroup, TgpuBindGroupLayout, TgpuVertexFn, TgpuFragmentFn } from 'typegpu';
-import type { AnyWgslData, AnyData } from 'typegpu/data';
-import { tgpu, d, std } from '../shaders/typegpu';
+import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d, std, sizeOf } from '../gpu';
+
+// Stable local names: shader bodies are parsed from their source, so bundlers
+// must not rename `d`/`std` inside them.
 import type { BuiltInGeometry, GeometryData } from './built-in';
 import { resolveBuiltInGeometry } from './built-in';
 import { SlotMap } from 'murow/core/slot-map';
-import { attachShaderMetadata } from '../shaders/runtime-transpile';
 import type { ComputeKernel } from '../compute/compute-builder';
+
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
+
+/** Pack a schema value to bytes for upload. */
+function pack(schema: any, value: unknown): Uint8Array {
+    const size = sizeOf(schema);
+    const buffer = new ArrayBuffer(size);
+    const dv = new DataView(buffer);
+    if (Array.isArray(schema.fields)) for (const m of schema.fields) m.field.write(dv, m.offset, (value as Record<string, unknown>)?.[m.name]);
+    else schema.write(dv, 0, value);
+    return new Uint8Array(buffer);
+}
 
 // =============================================================================
 // Type utilities
@@ -44,12 +56,12 @@ type DataToValue<T> =
     number | number[];
 
 /** Partial record mapping field names to their JS values. */
-type FieldValues<T extends Record<string, AnyWgslData>> = {
+type FieldValues<T extends Record<string, AnyField>> = {
     [K in keyof T]?: DataToValue<T[K]>;
 };
 
 /** All instance field names (dynamic + static). */
-type AllFields<D extends Record<string, AnyWgslData>, S extends Record<string, AnyWgslData>> =
+type AllFields<D extends Record<string, AnyField>, S extends Record<string, AnyField>> =
     keyof D | keyof S;
 
 // =============================================================================
@@ -69,19 +81,19 @@ export interface GeometryOptions {
 
 /** Typed instance layout config with inferred field types. */
 export interface InstanceLayoutConfig<
-    D extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    S extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    D extends Record<string, AnyField> = Record<string, AnyField>,
+    S extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     dynamic: D;
     static: S;
 }
 
 export interface GeometryDataLayout<
-    D extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    S extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    U extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    D extends Record<string, AnyField> = Record<string, AnyField>,
+    S extends Record<string, AnyField> = Record<string, AnyField>,
+    U extends Record<string, AnyField> = Record<string, AnyField>,
 > {
-    dataLayout: TgpuBindGroupLayout;
+    dataLayout: GpuBindGroupLayout;
     instanceLayout: InstanceLayoutConfig<D, S>;
     uniformDefs: U;
 }
@@ -90,7 +102,7 @@ export interface GeometryDataLayout<
 // Helpers
 // =============================================================================
 
-export function getFieldFloats(desc: AnyWgslData): number {
+export function getFieldFloats(desc: AnyField): number {
     if (desc === d.f32) return 1;
     if (desc === d.vec2f) return 2;
     if (desc === d.vec3f) return 3;
@@ -103,7 +115,7 @@ export function getFieldFloats(desc: AnyWgslData): number {
     return 1;
 }
 
-function buildStructFromLayout(fields: Record<string, AnyWgslData>) {
+function buildStructFromLayout(fields: Record<string, AnyField>) {
     return d.struct(fields);
 }
 
@@ -137,9 +149,9 @@ function buildCustomGeometryData(config: CustomGeometryLayout): GeometryData {
 // =============================================================================
 
 export function createGeometryDataLayout<
-    D extends Record<string, AnyWgslData>,
-    S extends Record<string, AnyWgslData>,
-    U extends Record<string, AnyWgslData>,
+    D extends Record<string, AnyField>,
+    S extends Record<string, AnyField>,
+    U extends Record<string, AnyField>,
 >(
     instanceLayout: InstanceLayoutConfig<D, S>,
     uniformDefs: U,
@@ -152,7 +164,7 @@ export function createGeometryDataLayout<
         ? buildStructFromLayout(instanceLayout.static)
         : d.struct({ _pad: d.f32 });
 
-    const parsedUniformDefs: Record<string, AnyWgslData> = {};
+    const parsedUniformDefs: Record<string, AnyField> = {};
     for (const [key, val] of Object.entries(uniformDefs)) {
         if (val === d.f32 || val === d.vec2f || val === d.vec3f || val === d.vec4f) {
             parsedUniformDefs[key] = val;
@@ -164,7 +176,7 @@ export function createGeometryDataLayout<
         ? buildStructFromLayout(parsedUniformDefs)
         : d.struct({ _pad: d.f32 });
 
-    const dataLayout = tgpu.bindGroupLayout({
+    const dataLayout = new GpuBindGroupLayout({
         uniforms: { uniform: UniformStruct },
         dynamic: { storage: d.arrayOf(DynStruct, maxInstances) },
         statics: { storage: d.arrayOf(StatStruct, maxInstances) },
@@ -178,15 +190,15 @@ export function createGeometryDataLayout<
 // =============================================================================
 
 export class CustomGeometry<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TUniforms extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     readonly name: string;
     readonly maxInstances: number;
     readonly geometryData: GeometryData;
 
-    private root: TgpuRoot;
+    private device: GPUDevice;
     private slots: SlotMap;
     private layoutConfig: InstanceLayoutConfig<TDynamic, TStatic>;
 
@@ -206,27 +218,29 @@ export class CustomGeometry<
 
     private _ctx: InstanceContext<TDynamic, TStatic>;
 
-    private dynamicBuffer: TgpuBuffer<AnyWgslData>;
-    private staticBuffer: TgpuBuffer<AnyWgslData>;
-    private uniformBuffer: TgpuBuffer<AnyWgslData>;
-    private pipeline: TgpuRenderPipeline;
-    private dataBindGroup: TgpuBindGroup;
+    private dynamicBuffer: GPUBuffer;
+    private staticBuffer: GPUBuffer;
+    private uniformBuffer: GPUBuffer;
+    private uniformSchema: any;
+    private staticSchema: any;
+    private pipeline: GPURenderPipeline;
+    private dataBindGroup: GPUBindGroup;
     private canvas: HTMLCanvasElement;
     private clearColor: [number, number, number, number];
 
     /** @internal — use GeometryBuilder to create instances. */
     constructor(
-        name: string, root: TgpuRoot, maxInstances: number, geometryData: GeometryData,
+        name: string, device: GPUDevice, maxInstances: number, geometryData: GeometryData,
         layoutConfig: InstanceLayoutConfig<TDynamic, TStatic>,
         uniformValues: Record<string, unknown>,
-        dynamicBuffer: TgpuBuffer<AnyWgslData>, staticBuffer: TgpuBuffer<AnyWgslData>,
-        uniformBuffer: TgpuBuffer<AnyWgslData>,
-        pipeline: TgpuRenderPipeline, dataBindGroup: TgpuBindGroup,
+        dynamicBuffer: GPUBuffer, staticBuffer: GPUBuffer,
+        uniformBuffer: GPUBuffer, uniformSchema: any, staticSchema: any,
+        pipeline: GPURenderPipeline, dataBindGroup: GPUBindGroup,
         canvas: HTMLCanvasElement, clearColor: [number, number, number, number],
         isComputeSourced = false,
     ) {
         this.name = name;
-        this.root = root;
+        this.device = device;
         this.maxInstances = maxInstances;
         this.geometryData = geometryData;
         this.layoutConfig = layoutConfig;
@@ -247,6 +261,8 @@ export class CustomGeometry<
         this.dynamicBuffer = dynamicBuffer;
         this.staticBuffer = staticBuffer;
         this.uniformBuffer = uniformBuffer;
+        this.uniformSchema = uniformSchema;
+        this.staticSchema = staticSchema;
         this.pipeline = pipeline;
         this.dataBindGroup = dataBindGroup;
         this.canvas = canvas;
@@ -358,7 +374,7 @@ export class CustomGeometry<
     }
 
     render(): void {
-        const device = this.root.device;
+        const device = this.device;
         const count = this._isComputeSourced ? this._drawCount : this.slots.size;
         if (count === 0) return;
 
@@ -368,30 +384,30 @@ export class CustomGeometry<
 
         // Skip dynamic buffer upload for compute-sourced geometries — compute owns the buffer
         if (!this._isComputeSourced && this._dynamicDirty) {
-            device.queue.writeBuffer(this.root.unwrap(this.dynamicBuffer) as GPUBuffer, 0,
+            device.queue.writeBuffer(this.dynamicBuffer, 0,
                 this.dynamicData.buffer, this.dynamicData.byteOffset, this.dynamicData.byteLength);
             this._dynamicDirty = false;
         }
         if (this._staticDirty) {
-            device.queue.writeBuffer(this.root.unwrap(this.staticBuffer) as GPUBuffer, 0,
+            device.queue.writeBuffer(this.staticBuffer, 0,
                 this.staticData.buffer, this.staticData.byteOffset, this.staticData.byteLength);
             this._staticDirty = false;
         }
         if (this._uniformDirty) {
-            (this.uniformBuffer as TgpuBuffer<AnyWgslData>).write(this.uniformValues);
+            device.queue.writeBuffer(this.uniformBuffer, 0, pack(this.uniformSchema, this.uniformValues) as GPUAllowSharedBufferSource);
             this._uniformDirty = false;
         }
 
         const [r, g, b, a] = this.clearColor;
-        (this.pipeline as unknown as { with(bg: TgpuBindGroup): { withColorAttachment(opts: Record<string, unknown>): { draw(v: number, i: number): void } } })
-            .with(this.dataBindGroup)
-            .withColorAttachment({
-                view,
-                loadOp: 'clear',
-                storeOp: 'store',
-                clearValue: { r, g, b, a },
-            })
-            .draw(this.geometryData.vertexCount, count);
+        const encoder = device.createCommandEncoder();
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r, g, b, a } }],
+        });
+        pass.setPipeline(this.pipeline);
+        pass.setBindGroup(0, this.dataBindGroup);
+        pass.draw(this.geometryData.vertexCount, count);
+        pass.end();
+        device.queue.submit([encoder.finish()]);
     }
 
     destroy(): void {
@@ -406,8 +422,8 @@ export class CustomGeometry<
 // =============================================================================
 
 export class InstanceContext<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     private dynamicData!: Float32Array;
     private staticData!: Float32Array;
@@ -477,7 +493,7 @@ export class InstanceContext<
         throw new Error(`Field "${field}" not found`);
     }
 
-    private fieldOffset(field: string, names: string[], layoutFields: Record<string, AnyWgslData>): number | null {
+    private fieldOffset(field: string, names: string[], layoutFields: Record<string, AnyField>): number | null {
         let offset = 0;
         for (const name of names) {
             if (name === field) return offset;
@@ -492,8 +508,8 @@ export class InstanceContext<
 // =============================================================================
 
 export class InstanceAccessor<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     private dynamicData: Float32Array;
     private staticData: Float32Array;
@@ -561,7 +577,7 @@ export class InstanceAccessor<
         throw new Error(`Field "${field}" not found`);
     }
 
-    private fieldOffset(field: string, names: string[], layoutFields: Record<string, AnyWgslData>): number | null {
+    private fieldOffset(field: string, names: string[], layoutFields: Record<string, AnyField>): number | null {
         let offset = 0;
         for (const name of names) {
             if (name === field) return offset;
@@ -576,8 +592,8 @@ export class InstanceAccessor<
 // =============================================================================
 
 type ShaderResult = {
-    vertex: TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
-    fragment: TgpuFragmentFn<Record<string, AnyWgslData>, AnyWgslData>;
+    vertex: GpuShader<Record<string, AnyField>, Record<string, AnyField>>;
+    fragment: GpuShader<Record<string, AnyField>, AnyField>;
 };
 
 /** Vertex input builtins available in shader functions. */
@@ -593,13 +609,13 @@ export interface VertexInput {
  * The builder handles all TypeGPU wiring internally.
  */
 export interface DeclarativeShaders<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TUniforms extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
 > {
     vertex: {
         /** Varyings output from vertex to fragment (position is always included). */
-        out: Record<string, AnyWgslData>;
+        out: Record<string, AnyField>;
         /** Vertex shader body. Receives typed context and vertex input. */
         fn: (
             ctx: ShaderContext<TDynamic, TStatic, TUniforms>,
@@ -617,7 +633,7 @@ type ResolveWgsl<T> =
   T extends (...args: any) => infer R ? R :
   T;
 
-type ResolveRecord<T extends Record<string, AnyWgslData>> = {
+type ResolveRecord<T extends Record<string, AnyField>> = {
   readonly [K in keyof T]: ResolveWgsl<T[K]>;
 };
 
@@ -639,9 +655,9 @@ type ResolveRecord<T extends Record<string, AnyWgslData>> = {
  * ```
  */
 export interface ShaderContext<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TUniforms extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
     > {
     /** Per-instance dynamic data (updated every frame). Access: `dynamic[instanceIndex].fieldName` */
     readonly dynamic: Readonly<Record<number, Readonly<ResolveRecord<TDynamic>>>>;
@@ -650,30 +666,30 @@ export interface ShaderContext<
     /** Shared uniforms. Access: `uniforms.fieldName` */
     readonly uniforms: Readonly<ResolveRecord<TUniforms>>;
     /** Raw TypeGPU bind group layout — escape hatch for advanced usage. */
-    readonly layout: TgpuBindGroupLayout;
+    readonly layout: GpuBindGroupLayout;
 }
 
 type ShaderFactory<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
-    TUniforms extends Record<string, AnyWgslData> = Record<string, AnyWgslData>,
+    TDynamic extends Record<string, AnyField> = Record<string, AnyField>,
+    TStatic extends Record<string, AnyField> = Record<string, AnyField>,
+    TUniforms extends Record<string, AnyField> = Record<string, AnyField>,
 > = (ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => ShaderResult;
 
 export class GeometryBuilder<
-    TDynamic extends Record<string, AnyWgslData> = Record<string, never>,
-    TStatic extends Record<string, AnyWgslData> = Record<string, never>,
-    TUniforms extends Record<string, AnyWgslData> = Record<string, never>,
+    TDynamic extends Record<string, AnyField> = Record<string, never>,
+    TStatic extends Record<string, AnyField> = Record<string, never>,
+    TUniforms extends Record<string, AnyField> = Record<string, never>,
 > {
     private _name: string;
     private _options: GeometryOptions;
-    private _root: TgpuRoot;
+    private _root: { device: GPUDevice };
     private _format: GPUTextureFormat;
     private _layoutConfig: InstanceLayoutConfig<TDynamic, TStatic> | null = null;
     private _uniformDefs: TUniforms = {} as TUniforms;
-    private _vertexFn: TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>> | null = null;
-    private _fragmentFn: TgpuFragmentFn<Record<string, AnyWgslData>, AnyWgslData> | null = null;
+    private _vertexFn: GpuShader<Record<string, AnyField>, Record<string, AnyField>> | null = null;
+    private _fragmentFn: GpuShader<Record<string, AnyField>, AnyField> | null = null;
     private _shaderFactory: ShaderFactory<TDynamic, TStatic, TUniforms> | null = null;
-    private _vertexVaryings: Record<string, AnyWgslData> | null = null;
+    private _vertexVaryings: Record<string, AnyField> | null = null;
     private _vertexFactory: ((ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => Function) | null = null;
     private _fragmentFactory: Function | null = null;
     private _declarativeShaders: DeclarativeShaders<TDynamic, TStatic, TUniforms> | null = null;
@@ -683,7 +699,7 @@ export class GeometryBuilder<
     private _canvas: HTMLCanvasElement;
     private _clearColor: [number, number, number, number];
 
-    constructor(name: string, options: GeometryOptions, root: TgpuRoot, format: GPUTextureFormat, canvas: HTMLCanvasElement, clearColor: [number, number, number, number]) {
+    constructor(name: string, options: GeometryOptions, root: { device: GPUDevice }, format: GPUTextureFormat, canvas: HTMLCanvasElement, clearColor: [number, number, number, number]) {
         this._name = name;
         this._options = options;
         this._root = root;
@@ -693,8 +709,8 @@ export class GeometryBuilder<
     }
 
     instanceLayout<
-        D extends Record<string, AnyWgslData>,
-        S extends Record<string, AnyWgslData>,
+        D extends Record<string, AnyField>,
+        S extends Record<string, AnyField>,
     >(layout: InstanceLayoutConfig<D, S> | GeometryDataLayout<D, S, TUniforms>): GeometryBuilder<D, S, TUniforms> {
         const next = this as unknown as GeometryBuilder<D, S, TUniforms>;
         if ('dataLayout' in layout) {
@@ -707,7 +723,7 @@ export class GeometryBuilder<
         return next;
     }
 
-    uniforms<U extends Record<string, AnyWgslData>>(defs: U): GeometryBuilder<TDynamic, TStatic, U> {
+    uniforms<U extends Record<string, AnyField>>(defs: U): GeometryBuilder<TDynamic, TStatic, U> {
         const next = this as unknown as GeometryBuilder<TDynamic, TStatic, U>;
         next._uniformDefs = defs;
         return next;
@@ -769,14 +785,14 @@ export class GeometryBuilder<
      */
     shaders(
         vertexOrFactoryOrConfig:
-            | TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>>
+            | GpuShader<Record<string, AnyField>, Record<string, AnyField>>
             | ShaderFactory<TDynamic, TStatic, TUniforms>
             | DeclarativeShaders<TDynamic, TStatic, TUniforms>,
-        fragment?: TgpuFragmentFn<Record<string, AnyWgslData>, AnyWgslData>,
+        fragment?: GpuShader<Record<string, AnyField>, AnyField>,
     ): this {
         if (fragment !== undefined) {
             // .shaders(vertexFn, fragmentFn)
-            this._vertexFn = vertexOrFactoryOrConfig as TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
+            this._vertexFn = vertexOrFactoryOrConfig as GpuShader<Record<string, AnyField>, Record<string, AnyField>>;
             this._fragmentFn = fragment;
         } else if (typeof vertexOrFactoryOrConfig === 'function') {
             // .shaders((ctx) => ({ vertex, fragment }))
@@ -803,9 +819,9 @@ export class GeometryBuilder<
      * )
      * ```
      */
-    vertexShader<V extends Record<string, AnyWgslData>>(
+    vertexShader<V extends Record<string, AnyField>>(
         varyings: V,
-        factory: (ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => (input: { vertexIndex: number; instanceIndex: number }) => Record<string, AnyWgslData>,
+        factory: (ctx: ShaderContext<TDynamic, TStatic, TUniforms>) => (input: { vertexIndex: number; instanceIndex: number }) => Record<string, AnyField>,
     ): this {
         this._vertexVaryings = varyings;
         this._vertexFactory = factory;
@@ -890,22 +906,22 @@ export class GeometryBuilder<
                 return base;
             };
 
-            // Attach runtime metadata — parses function source with Acorn + tinyest-for-wgsl.
-            // Vertex fn has (ctx, input) — strip the first param, its destructured names become externals.
-            // Pass `{ d, std }` as namespace aliases so bundler-renamed identifiers (e.g. `d10`, `std7`)
-            // are auto-detected by member-access matching and aliased to the right namespace object.
-            attachShaderMetadata(decl.vertex.fn, resolveExternals({}), true, { d, std });
-            attachShaderMetadata(decl.fragment.fn, resolveExternals({}), false, { d, std });
-
-            this._vertexFn = tgpu.vertexFn({
+            // Attach metadata so the facade can lower the body. A vertex fn has
+            // (ctx, input): strip the first param, and its destructured names
+            // resolve against the externals provider below.
+            const geoExpose = { uniforms: 'geo.uniforms', dynamic: 'geo.dynamic', statics: 'geo.statics' };
+            this._vertexFn = GpuShader.vertex({
                 in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
                 out: vertexOut,
-            } as Parameters<typeof tgpu.vertexFn>[0])(decl.vertex.fn as unknown as Parameters<ReturnType<typeof tgpu.vertexFn>>[0]) as TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
-
-            this._fragmentFn = tgpu.fragmentFn({
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, decl.vertex.fn as any);
+            this._fragmentFn = GpuShader.fragment({
                 in: fragmentIn,
                 out: d.vec4f,
-            } as Parameters<typeof tgpu.fragmentFn>[0])(decl.fragment.fn as unknown as Parameters<ReturnType<typeof tgpu.fragmentFn>>[0]) as TgpuFragmentFn<Record<string, AnyWgslData>, AnyWgslData>;
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, decl.fragment.fn as any);
         } else if (this._vertexFactory && this._fragmentFactory) {
             // Builder methods: .vertexShader().fragmentShader()
             const varyings = this._vertexVaryings ?? {};
@@ -916,16 +932,20 @@ export class GeometryBuilder<
                 fragmentIn[k] = v;
             }
 
+            const geoExpose = { uniforms: 'geo.uniforms', dynamic: 'geo.dynamic', statics: 'geo.statics' };
             const vertexBody = this._vertexFactory(lazyCtx);
-            this._vertexFn = tgpu.vertexFn({
+            this._vertexFn = GpuShader.vertex({
                 in: { vertexIndex: d.builtin.vertexIndex, instanceIndex: d.builtin.instanceIndex },
                 out: vertexOut,
-            } as Parameters<typeof tgpu.vertexFn>[0])(vertexBody as unknown as Parameters<ReturnType<typeof tgpu.vertexFn>>[0]) as TgpuVertexFn<Record<string, AnyWgslData>, Record<string, AnyWgslData>>;
-
-            this._fragmentFn = tgpu.fragmentFn({
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, vertexBody as any);
+            this._fragmentFn = GpuShader.fragment({
                 in: fragmentIn,
                 out: d.vec4f,
-            } as Parameters<typeof tgpu.fragmentFn>[0])(this._fragmentFactory as unknown as Parameters<ReturnType<typeof tgpu.fragmentFn>>[0]) as TgpuFragmentFn<Record<string, AnyWgslData>, AnyWgslData>;
+                bindings: { geo: layout },
+                expose: geoExpose,
+            } as any, this._fragmentFactory as any);
         }
 
         if (!this._vertexFn) throw new Error(`Geometry "${this._name}": vertex shader is required`);
@@ -945,7 +965,7 @@ export class GeometryBuilder<
         const StatStruct = Object.keys(this._layoutConfig.static).length > 0
             ? buildStructFromLayout(this._layoutConfig.static)
             : d.struct({ _pad: d.f32 });
-        const parsedUniformDefs: Record<string, AnyWgslData> = {};
+        const parsedUniformDefs: Record<string, AnyField> = {};
         for (const [key, val] of Object.entries(this._uniformDefs)) {
             parsedUniformDefs[key] = (val === d.f32 || val === d.vec2f || val === d.vec3f || val === d.vec4f) ? val : d.f32;
         }
@@ -954,40 +974,47 @@ export class GeometryBuilder<
             : d.struct({ _pad: d.f32 });
 
         // Buffers — if fromCompute() was called, reuse the compute buffer as dynamic data
+        const device = root.device;
         const dynamicBuffer = this._computeSource
             ? this._computeSource.kernel.getBuffer(this._computeSource.bufferName)
-            : root.createBuffer(d.arrayOf(DynStruct, maxInstances)).$usage('storage');
-        const staticBuffer = root.createBuffer(d.arrayOf(StatStruct, maxInstances)).$usage('storage');
-        const uniformBuffer = root.createBuffer(UniformStruct).$usage('uniform');
+            : createRawBuffer(device, d.arrayOf(DynStruct, maxInstances), 'storage');
+        const staticBuffer = createRawBuffer(device, d.arrayOf(StatStruct, maxInstances), 'storage');
+        const uniformBuffer = createRawBuffer(device, UniformStruct, 'uniform');
 
-        // Bind group — TypeGPU's createBindGroup has complex generics, cast required
-        const dataBindGroup = (root as unknown as { createBindGroup(layout: TgpuBindGroupLayout, entries: Record<string, unknown>): TgpuBindGroup })
-            .createBindGroup(dataLayout, {
-                uniforms: uniformBuffer,
-                dynamic: dynamicBuffer,
-                statics: staticBuffer,
-            });
+        const dataBgl = createGpuBindGroupLayout(device, dataLayout.toDescriptor());
+        const dataBindGroup = device.createBindGroup({
+            layout: dataBgl,
+            entries: [
+                { binding: 0, resource: { buffer: uniformBuffer } },
+                { binding: 1, resource: { buffer: dynamicBuffer } },
+                { binding: 2, resource: { buffer: staticBuffer } },
+            ],
+        });
 
-        // Pipeline — TypeGPU's createRenderPipeline has complex generics, cast required
-        const pipeline = (root as unknown as { createRenderPipeline(opts: Record<string, unknown>): TgpuRenderPipeline })
-            .createRenderPipeline({
-                vertex: this._vertexFn,
-                fragment: this._fragmentFn,
-                targets: {
+        const { code } = compileProgram([this._vertexFn as any, this._fragmentFn as any]);
+        const module = device.createShaderModule({ code, label: this._name });
+        const pipeline = device.createRenderPipeline({
+            label: this._name,
+            layout: device.createPipelineLayout({ bindGroupLayouts: [dataBgl] }),
+            vertex: { module },
+            fragment: {
+                module,
+                targets: [{
                     format: this._format,
                     blend: {
                         color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
                         alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
                     },
-                },
-                primitive: { topology: 'triangle-list' },
-            });
+                }],
+            },
+            primitive: { topology: 'triangle-list' },
+        });
 
         return new CustomGeometry<TDynamic, TStatic, TUniforms>(
-            this._name, root, maxInstances, geometryData,
+            this._name, device, maxInstances, geometryData,
             this._layoutConfig, uniformInitial,
-            dynamicBuffer as TgpuBuffer<AnyWgslData>, staticBuffer as TgpuBuffer<AnyWgslData>,
-            uniformBuffer as TgpuBuffer<AnyWgslData>,
+            dynamicBuffer, staticBuffer,
+            uniformBuffer, UniformStruct, StatStruct,
             pipeline, dataBindGroup,
             this._canvas, this._clearColor,
             !!this._computeSource,

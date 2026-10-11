@@ -1,4 +1,4 @@
-import type { AnyWgslData } from 'typegpu/data';
+type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 import { PooledCollection } from 'murow/core/collection';
 import type { MaterialId } from '../../ids';
 import { generateId, type Logger } from 'murow/core';
@@ -41,7 +41,7 @@ export class MaterialManager extends PooledCollection<MaterialId, MaterialHandle
      *
      * @returns the material handle, or `null` when the pool is full.
      */
-    create<const N extends string = string, U extends Record<string, AnyWgslData> = {}>(
+    create<const N extends string = string, U extends Record<string, AnyField> = {}>(
         spec: MaterialSpec & { name?: N; uniforms?: U },
     ): MaterialHandle<U, N> | null {
         const name = spec.name ?? (generateId({ prefix: 'mat_' }) as N);

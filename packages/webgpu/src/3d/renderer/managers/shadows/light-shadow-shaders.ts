@@ -1,16 +1,17 @@
-import { tgpu, d, std } from '../../../../shaders/typegpu';
-import { attachShaderMetadata } from '../../../../shaders/runtime-transpile';
+import { GpuBindGroupLayout, GpuShader, d, std } from '../../../../gpu';
+
+import type { GpuStruct } from 'murow/gpu/schema';
 import { DynamicMesh, SkinnedStaticMesh } from '../../../../core/types';
-import type { TgpuVertexFn, TgpuFragmentFn } from 'typegpu';
+
 
 /**
  * Skinned layout for a light shadow pass: the same per-light uniform the
  * non-skinned pass uses, plus the skinning buffers. The pass struct is the
  * caller's (spot/point) so both passes can bind the same buffer layout.
  */
-export function createSkinnedLightLayout(passUniform: unknown, maxInstances: number, maxBones: number) {
-    return tgpu.bindGroupLayout({
-        uniforms: { uniform: passUniform as never },
+export function createSkinnedLightLayout<P extends GpuStruct<any>>(passUniform: P, maxInstances: number, maxBones: number) {
+    return new GpuBindGroupLayout({
+        uniforms: { uniform: passUniform },
         dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
         staticInstances: { storage: d.arrayOf(SkinnedStaticMesh, maxInstances) },
         slotIndices: { storage: d.arrayOf(d.u32, maxInstances) },
@@ -19,23 +20,28 @@ export function createSkinnedLightLayout(passUniform: unknown, maxInstances: num
 }
 
 /** Skinned caster vertex: skin, then instance TRS, outputting world position. */
-export function createSkinnedLightVertex(layout: ReturnType<typeof createSkinnedLightLayout>): TgpuVertexFn {
-    const _WS = ['d', 'std', 'layout', 'mix', 'cos', 'sin', 'mul', 'mat4x4f'];
-    const fn = function(input: {
-        position: { x: number; y: number; z: number };
-        normal: { x: number; y: number; z: number };
-        uv: { x: number; y: number };
-        joints: { x: number; y: number; z: number; w: number };
-        weights: { x: number; y: number; z: number; w: number };
-        instanceIndex: number;
-    }) {
-        const slot = layout.$.slotIndices[input.instanceIndex];
-        const dyn = layout.$.dynamicInstances[slot];
-        const stat = layout.$.staticInstances[slot];
+export function createSkinnedLightVertex(layout: ReturnType<typeof createSkinnedLightLayout>): GpuShader {
+    return GpuShader.vertex(
+        {
+            in: {
+                position: d.location(0, d.vec3f),
+                normal: d.location(1, d.vec3f),
+                uv: d.location(2, d.vec2f),
+                joints: d.location(3, d.vec4u),
+                weights: d.location(4, d.vec4f),
+                instanceIndex: d.builtin.instanceIndex,
+            },
+            out: { pos: d.builtin.position, vWorld: d.vec3f },
+            bindings: { shadows: layout },
+        },
+        (input, { shadows }) => {
+        const slot = shadows.slotIndices[input.instanceIndex];
+        const dyn = shadows.dynamicInstances[slot];
+        const stat = shadows.staticInstances[slot];
         const boneOffset = stat.boneOffset;
         const j0 = input.joints.x, j1 = input.joints.y, j2 = input.joints.z, j3 = input.joints.w;
         const w0 = input.weights.x, w1 = input.weights.y, w2 = input.weights.z, w3 = input.weights.w;
-        const bm = layout.$.boneMatrices;
+        const bm = shadows.boneMatrices;
         const m0 = bm[(d.i32(boneOffset) + d.i32(j0))];
         const m1 = bm[(d.i32(boneOffset) + d.i32(j1))];
         const m2 = bm[(d.i32(boneOffset) + d.i32(j2))];
@@ -74,30 +80,20 @@ export function createSkinnedLightVertex(layout: ReturnType<typeof createSkinned
             std.add(std.mul(ry1.y, sxr), std.mul(ry1.z, cxr)),
         );
         const world = d.vec4f(std.add(rx1.x, dyn.currPosX), std.add(rx1.y, dyn.currPosY), std.add(rx1.z, dyn.currPosZ), 1.0);
-        const clip = std.mul((layout.$.uniforms as any).viewProjection, world);
+        const clip = std.mul((shadows.uniforms as any).viewProjection, world);
         return { pos: clip, vWorld: d.vec3f(world.x, world.y, world.z) };
-    };
-    attachShaderMetadata(fn as any, () => ({ d, std, layout }), false, { d, std, layout }, _WS);
-    return tgpu.vertexFn({
-        in: {
-            position: d.location(0, d.vec3f),
-            normal: d.location(1, d.vec3f),
-            uv: d.location(2, d.vec2f),
-            joints: d.location(3, d.vec4u),
-            weights: d.location(4, d.vec4f),
-            instanceIndex: d.builtin.instanceIndex,
         },
-        out: { pos: d.builtin.position, vWorld: d.vec3f },
-    } as any)(fn as any);
+    );
 }
 
 /** Fragment that stores linear distance / far from the light. */
-export function createLightDistanceFragment(layout: { $: { uniforms: { lightPosFar: { x: number; y: number; z: number; w: number } } } }): TgpuFragmentFn {
-    const fn = function(input: { vWorld: { x: number; y: number; z: number } }) {
-        const lp = layout.$.uniforms.lightPosFar;
+export function createLightDistanceFragment(layout: ReturnType<typeof createSkinnedLightLayout>): GpuShader {
+    return GpuShader.fragment(
+        { in: { vWorld: d.vec3f }, out: d.vec4f, bindings: { shadows: layout } },
+        (input, { shadows }) => {
+        const lp = shadows.uniforms.lightPosFar;
         const dist = std.length(d.vec3f(input.vWorld.x - lp.x, input.vWorld.y - lp.y, input.vWorld.z - lp.z)) / lp.w;
         return d.vec4f(dist, dist, dist, 1.0);
-    };
-    attachShaderMetadata(fn as any, () => ({ d, std, layout }), false, { d, std, layout });
-    return tgpu.fragmentFn({ in: { vWorld: d.vec3f }, out: d.vec4f } as any)(fn as any);
+        },
+    );
 }

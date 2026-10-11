@@ -1,4 +1,3 @@
-import type { TgpuRoot, TgpuBuffer } from 'typegpu';
 import type { SpriteDataLayout, SpriteTextureLayout } from '../internals/sprite-shader';
 import type { CameraManager2D } from '../managers/camera';
 
@@ -8,7 +7,7 @@ import type { CameraManager2D } from '../managers/camera';
  * cannot become a service locator.
  */
 export class Renderer2DCore {
-    root!: TgpuRoot;
+    root!: { device: GPUDevice };
     device!: GPUDevice;
     context!: GPUCanvasContext;
     format!: GPUTextureFormat;
@@ -32,10 +31,6 @@ export class Renderer2DCore {
     rawSlotIndexBuffer!: GPUBuffer;
 
     /** TypeGPU buffer handles, kept so `destroy` can release them. */
-    dynamicBuffer!: TgpuBuffer<any>;
-    staticBuffer!: TgpuBuffer<any>;
-    uniformBuffer!: TgpuBuffer<any>;
-    slotIndexBuffer!: TgpuBuffer<any>;
 
     /** Shared uniform block: mat3 padded to 12 floats, plus alpha and resolution. */
     readonly uniformData = new Float32Array(20);

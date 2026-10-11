@@ -53,6 +53,17 @@
       "import": "./dist/esm/core/*/index.js",
       "require": "./dist/cjs/core/*/index.js"
     },
+    "./gpu": {
+      "types": "./dist/types/gpu/index.d.ts",
+      "import": "./dist/esm/gpu/index.js",
+      "require": "./dist/cjs/gpu/index.js",
+      "default": "./dist/esm/gpu/index.js"
+    },
+    "./gpu/*": {
+      "types": "./dist/types/gpu/*/index.d.ts",
+      "import": "./dist/esm/gpu/*/index.js",
+      "require": "./dist/cjs/gpu/*/index.js"
+    },
     "./ecs": {
       "types": "./dist/types/ecs/index.d.ts",
       "import": "./dist/esm/ecs/index.js",
