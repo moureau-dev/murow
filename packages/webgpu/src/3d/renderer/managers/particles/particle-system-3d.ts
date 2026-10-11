@@ -1,7 +1,5 @@
-import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d as dRaw, std as stdRaw } from '../../../../gpu';
+import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d, std } from '../../../../gpu';
 
-const d: any = dRaw;
-const std: any = stdRaw;
 import { ComputeBuilder, type ComputeKernel } from '../../../../compute/compute-builder';
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotMap } from 'murow/core/slot-map';
@@ -264,7 +262,8 @@ export class ParticleSystem3D {
             })
             .shader(({ globalId }, { buffers }) => {
                 'use gpu';
-                const { particles, spawnRecords, frame } = buffers;
+                const { particles, spawnRecords } = buffers;
+                const frame = buffers.frame as any;
                 const i = globalId.x;
                 if (i >= frame.counts.y) { return; }
                 // @ts-ignore — TGSL uniform struct access

@@ -11,10 +11,8 @@
 // Use bundler-safe wraps so `d.X` / `std.X` accesses inside the shader
 // function body survive Rollup's namespace-member inlining (see
 // ../../shaders/typegpu.ts).
-import { d as dRaw, std as stdRaw } from '../../gpu';
+import { d, std } from '../../gpu';
 
-const d: any = dRaw;
-const std: any = stdRaw;
 import { ComputeBuilder, type ComputeKernel } from '../../compute/compute-builder';
 import { AnimComputeUniforms, InstanceAnimStateGPU } from '../../core/types';
 type GpuDeviceRef = { device: GPUDevice };
@@ -140,7 +138,7 @@ export function buildAnimationKernel(
                         const tLo = animF32[chDataOff + lo];
                         const tHi = animF32[chDataOff + hi];
                         let f = d.f32(time - time);
-                        if (tHi > tLo) { f = (time - tLo) / (tHi - tLo); }
+                        if (tHi > tLo) { f = d.f32((time - tLo) / (tHi - tLo)); }
                         const offA = valBase + lo * compCount;
                         const offB = valBase + hi * compCount;
 
@@ -248,7 +246,7 @@ export function buildAnimationKernel(
                             const ptLo = animF32[pchDataOff + prevLo];
                             const ptHi = animF32[pchDataOff + prevHi];
                             let pf = d.f32(time - time);
-                            if (ptHi > ptLo) { pf = (prevTime - ptLo) / (ptHi - ptLo); }
+                            if (ptHi > ptLo) { pf = d.f32((prevTime - ptLo) / (ptHi - ptLo)); }
                             const poffA = pvalBase + prevLo * prevCompCount;
                             const poffB = pvalBase + prevHi * prevCompCount;
 

@@ -2,7 +2,7 @@ import {
     compileProgram,
     createGpuBindGroupLayout,
     createRawBuffer,
-    d as dRaw,
+    d,
     type GpuBindGroupLayout,
 } from '../../../../gpu';
 import {
@@ -28,7 +28,6 @@ import {
     type SkinnedMeshDataLayout,
 } from '../../../shader';
 
-const d: any = dRaw;
 
 export interface MeshPipelinesOptions {
     root?: unknown;

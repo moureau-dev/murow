@@ -10,6 +10,7 @@
 import type { GpuType } from '../types';
 import type { IrStage } from '../ir/nodes';
 import type { GpuBindGroupLayout } from '../resources/bind-group';
+import type { BindingsOf, InputOf } from '../dsl/typed';
 
 /** A builtin input/output marker, for example the position output. */
 export interface ShaderBuiltin {
@@ -100,18 +101,27 @@ export class GpuShader<A = unknown, B = unknown> {
     }
 
     /** Define a vertex shader. */
-    static vertex(options: GpuShaderOptions & { out: Record<string, ShaderIODesc> }, body: ShaderBody): GpuShader {
+    static vertex<I extends Record<string, ShaderIODesc> = {}, B extends ShaderBindings = {}>(
+        options: GpuShaderOptions & { in?: I; out: Record<string, ShaderIODesc>; bindings?: B },
+        body: (input: InputOf<I>, bindings: BindingsOf<B>) => unknown,
+    ): GpuShader {
         // (kept as a record: vertex output structs are named)
         return new GpuShader('vertex', options, body);
     }
 
     /** Define a fragment shader. */
-    static fragment(options: GpuShaderOptions, body: ShaderBody): GpuShader {
+    static fragment<I extends Record<string, ShaderIODesc> = {}, B extends ShaderBindings = {}>(
+        options: GpuShaderOptions & { in?: I; bindings?: B },
+        body: (input: InputOf<I>, bindings: BindingsOf<B>) => unknown,
+    ): GpuShader {
         return new GpuShader('fragment', options, body);
     }
 
     /** Define a compute shader. */
-    static compute(options: GpuShaderOptions & { workgroup: readonly [number, number, number] }, body: ShaderBody): GpuShader {
+    static compute<I extends Record<string, ShaderIODesc> = {}, B extends ShaderBindings = {}>(
+        options: GpuShaderOptions & { in?: I; workgroup: readonly [number, number, number]; bindings?: B },
+        body: (input: InputOf<I>, bindings: BindingsOf<B>) => unknown,
+    ): GpuShader {
         return new GpuShader('compute', options, body);
     }
 }

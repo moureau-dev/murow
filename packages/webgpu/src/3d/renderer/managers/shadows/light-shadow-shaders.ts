@@ -1,17 +1,16 @@
-import { GpuBindGroupLayout, GpuShader, d as dRaw, std as stdRaw } from '../../../../gpu';
+import { GpuBindGroupLayout, GpuShader, d, std } from '../../../../gpu';
+import type { GpuStruct } from 'murow/gpu/schema';
 import { DynamicMesh, SkinnedStaticMesh } from '../../../../core/types';
 
-const d: any = dRaw;
-const std: any = stdRaw;
 
 /**
  * Skinned layout for a light shadow pass: the same per-light uniform the
  * non-skinned pass uses, plus the skinning buffers. The pass struct is the
  * caller's (spot/point) so both passes can bind the same buffer layout.
  */
-export function createSkinnedLightLayout(passUniform: unknown, maxInstances: number, maxBones: number) {
+export function createSkinnedLightLayout<P extends GpuStruct<any>>(passUniform: P, maxInstances: number, maxBones: number) {
     return new GpuBindGroupLayout({
-        uniforms: { uniform: passUniform as never },
+        uniforms: { uniform: passUniform },
         dynamicInstances: { storage: d.arrayOf(DynamicMesh, maxInstances) },
         staticInstances: { storage: d.arrayOf(SkinnedStaticMesh, maxInstances) },
         slotIndices: { storage: d.arrayOf(d.u32, maxInstances) },

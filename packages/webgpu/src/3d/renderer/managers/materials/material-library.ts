@@ -1,11 +1,9 @@
-import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d as dRaw, std as stdRaw, sizeOf } from '../../../../gpu';
+import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, createRawBuffer, d, std, sizeOf } from '../../../../gpu';
 import { lightContribution, tonemap } from '../../../../shaders/utils';
 
 type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 type Infer<T> = any;
 // The shader authoring DSL stays loose so bodies read naturally.
-const d: any = dRaw;
-const std: any = stdRaw;
 
 /** Pack a schema value to bytes for upload. */
 function pack(schema: any, value: unknown): Uint8Array {

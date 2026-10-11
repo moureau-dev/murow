@@ -18,11 +18,11 @@ export interface StructField {
 }
 
 /** Options for `new GpuStruct(...)`. */
-export interface GpuStructOptions {
+export interface GpuStructOptions<F = Record<string, Field<any, any>>> {
     /** Struct name used in emitted source. */
     readonly name: string;
     /** Fields in layout order. A record is laid out in key insertion order. */
-    readonly fields: readonly StructField[] | Record<string, Field<any, any>>;
+    readonly fields: readonly StructField[] | F;
     /** Packing rules. Defaults to std140. */
     readonly packing?: Packing;
 }
@@ -34,7 +34,9 @@ function normalizeFields(
     return Object.keys(fields).map((name) => ({ name, field: fields[name] }));
 }
 
-export class GpuStruct {
+export class GpuStruct<F = Record<string, Field<any, any>>> {
+    /** Compile-time-only record of field types. Never read at runtime. */
+    declare readonly __fields?: F;
     /** Struct name used in emitted source. */
     readonly name: string;
     /** Fields with their computed byte offsets, in layout order. */
@@ -53,11 +55,11 @@ export class GpuStruct {
     private readonly view: DataView;
     private _dirty = true;
 
-    constructor(options: GpuStructOptions) {
+    constructor(options: GpuStructOptions<F>) {
         this.name = options.name;
         this.packing = options.packing ?? Std140;
 
-        const named = normalizeFields(options.fields);
+        const named = normalizeFields(options.fields as Record<string, Field<any, any>> | readonly StructField[]);
         const layout = structLayout(named, this.packing);
 
         this.fields = layout.fields;
@@ -141,7 +143,7 @@ export class GpuStruct {
     }
 }
 
-/** Create a `GpuStruct` from its options. */
-export function gpuStruct(options: GpuStructOptions): GpuStruct {
-    return new GpuStruct(options);
+/** Create a `GpuStruct` from its options, preserving the field types. */
+export function gpuStruct<F extends Record<string, Field<any, any>>>(options: GpuStructOptions<F>): GpuStruct<F> {
+    return new GpuStruct<F>(options);
 }

@@ -1,7 +1,5 @@
-import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, d as dRaw, std as stdRaw } from '../../../../gpu';
+import { GpuBindGroupLayout, GpuShader, compileProgram, createGpuBindGroupLayout, d, std } from '../../../../gpu';
 
-const d: any = dRaw;
-const std: any = stdRaw;
 import { DynamicMesh, SkinnedStaticMesh, StaticMesh } from '../../../../core/types';
 import type { RendererCore } from '../../core/renderer-core';
 

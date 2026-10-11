@@ -41,6 +41,7 @@ import {
 } from '../ir/types';
 import { cast, construct, literal } from '../ir/builders';
 import { ShaderValue, toExpr, type ShaderInput } from './value';
+import type { TypedD } from './typed';
 
 /** Marker for a stage builtin such as `position` or `instance_index`. */
 export interface BuiltinMarker {
@@ -267,7 +268,7 @@ const builtins: Record<string, BuiltinMarker> = {
 };
 
 /** The unified data/value namespace. */
-export const d = {
+const dImpl = {
     f32: makeScalar('f32', f32Field),
     i32: makeScalar('i32', i32Field),
     u32: makeScalar('u32', u32Field),
@@ -315,7 +316,7 @@ export const d = {
      * Build a `GpuStruct` from a record of fields. A nested `GpuStruct` is
      * exposed as a field, so structs can compose.
      */
-    struct(fields: Record<string, Field<any, any> | GpuStruct>): GpuStruct {
+    struct<F extends Record<string, Field<any, any> | GpuStruct>>(fields: F): GpuStruct<F> {
         const normalized: Record<string, Field<any, any>> = {};
         for (const key of Object.keys(fields)) {
             const member = fields[key]!;
@@ -323,7 +324,7 @@ export const d = {
                 ? (structAsField(member) as Field<any, any>)
                 : member;
         }
-        return gpuStruct({ name: `Struct${structCount++}`, fields: normalized, packing: Std430 });
+        return gpuStruct({ name: `Struct${structCount++}`, fields: normalized, packing: Std430 }) as unknown as GpuStruct<F>;
     },
 
     /** Build a fixed-length array type descriptor. */
@@ -370,8 +371,11 @@ export const d = {
     },
 };
 
-d.v3f = d.vec3f;
-d.v4f = d.vec4f;
-d.v2f = d.vec2f;
-d.m3x3f = d.mat3x3f;
-d.m4x4f = d.mat4x4f;
+dImpl.v3f = dImpl.vec3f;
+dImpl.v4f = dImpl.vec4f;
+dImpl.v2f = dImpl.vec2f;
+dImpl.m3x3f = dImpl.mat3x3f;
+dImpl.m4x4f = dImpl.mat4x4f;
+
+/** The typed `d` namespace. */
+export const d: TypedD = dImpl as unknown as TypedD;

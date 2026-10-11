@@ -33,8 +33,8 @@ describe('wgslSpec', () => {
         const Material = gpuStruct({ name: 'Material', fields: { tint: vec4f } });
         const layout = new GpuBindGroupLayout({ material: { uniform: Material } });
         const frag = GpuShader.fragment(
-            { in: { vUV: vec('f32', 2) }, out: vec('f32', 4), bindings: { mat: layout } },
-            (input: { vUV: { x: number; y: number } }, { mat }: { mat: { material: { tint: { x: number } } } }) =>
+            { in: { vUV: d.vec2f }, out: vec('f32', 4), bindings: { mat: layout } },
+            (input, { mat }) =>
                 d.vec4f(mat.material.tint.x, input.vUV.x, input.vUV.y, 1),
         );
         const program = GpuProgram.link([frag]);

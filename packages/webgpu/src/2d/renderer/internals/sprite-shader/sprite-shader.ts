@@ -6,11 +6,9 @@
  *
  * NOTE: TGSL bodies must use `function` syntax, not arrow functions.
  */
-import { GpuBindGroupLayout, GpuShader, d as dRaw, std as stdRaw } from '../../../../gpu';
+import { GpuBindGroupLayout, GpuShader, d, std } from '../../../../gpu';
 import { DynamicSprite, StaticSprite, SpriteUniforms } from '../../../../core/types';
 
-const d: any = dRaw;
-const std: any = stdRaw;
 
 // --- Bind group layouts ---
 

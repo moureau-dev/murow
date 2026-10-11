@@ -1,11 +1,9 @@
-import { GpuBindGroupLayout, GpuShader, d as dRaw, std as stdRaw } from '../../../../gpu';
+import { GpuBindGroupLayout, GpuShader, d, std } from '../../../../gpu';
 import { lightContribution, tonemap } from '../../../../shaders/utils';
 import { call, f32 as f32Type, vec as vecType } from 'murow/gpu/ir';
 import { ShaderValue, toExpr, type ShaderInput } from 'murow/gpu/dsl';
 import { createTexturedMeshVertex, type MeshDataLayout } from '../../../shader';
 
-const d: any = dRaw;
-const std: any = stdRaw;
 import { ShadowUniforms } from '../shadows';
 import { SpotShadowUniforms } from '../shadows/spot-shadow-system';
 import { PointShadowUniforms } from '../shadows/point-shadow-system';
@@ -174,7 +172,7 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
                 const b3 = std.textureSampleLevel(mat.spotShadowMap, mat.spotSampler, std.add(suv, d.vec2f(st, st)), idx, 0.0).x;
                 const onc = std.select(zeroF, oneF, rdep > b0) + std.select(zeroF, oneF, rdep > b1) + std.select(zeroF, oneF, rdep > b2) + std.select(zeroF, oneF, rdep > b3);
                 const inb = std.select(zeroF, oneF, suv.x >= 0.0) * std.select(zeroF, oneF, suv.x <= 1.0) * std.select(zeroF, oneF, suv.y >= 0.0) * std.select(zeroF, oneF, suv.y <= 1.0);
-                sh = 1.0 - (onc / 4.0) * inb;
+                sh = d.f32(1.0 - (onc / 4.0) * inb);
             }
             const cc = std.mul(c, sh);
             acc = d.vec3f(acc.x + baseColor.x * cc.x, acc.y + baseColor.y * cc.y, acc.z + baseColor.z * cc.z);

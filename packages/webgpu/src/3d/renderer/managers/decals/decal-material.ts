@@ -1,8 +1,6 @@
-import { d as dRaw, std as stdRaw } from '../../../../gpu';
+import { d, std } from '../../../../gpu';
 import type { MaterialSpec } from '../materials/specs';
 
-const d: any = dRaw;
-const std: any = stdRaw;
 
 export interface DecalMaterialOptions {
     /** Atlas texture id from the AssetBucket. */

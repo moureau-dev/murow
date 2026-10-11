@@ -13,6 +13,7 @@ import { call, discardStmt, sample } from '../ir/builders';
 import { bool as boolType, u32 as u32Type, vec as vecType } from '../ir/types';
 import { combineType, scalarOf, ShaderValue, toExpr, vecOf, type ShaderInput } from './value';
 import { d } from './data';
+import type { TypedStd } from './typed';
 
 function value(node: IrExpr): ShaderValue {
     return new ShaderValue({ node });
@@ -34,7 +35,7 @@ function ternaryCall(name: string, a: ShaderInput, b: ShaderInput, c: ShaderInpu
 }
 
 /** Shader builtins and value constructors. */
-export const std = {
+const stdImpl = {
     ...d,
 
     add(a: ShaderInput, b: ShaderInput): ShaderValue {
@@ -270,3 +271,6 @@ export const std = {
         return discardStmt();
     },
 };
+
+/** The typed `std` namespace. */
+export const std: TypedStd = stdImpl as unknown as TypedStd;

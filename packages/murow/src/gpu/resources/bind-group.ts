@@ -85,7 +85,9 @@ function bindingKind(spec: BindingSpec): BindingKind {
  * A named, ordered bind group layout. Slots are bound by declaration order, so
  * the slot at index `i` is binding `i`.
  */
-export class GpuBindGroupLayout {
+export class GpuBindGroupLayout<S extends Record<string, BindingSpec> = Record<string, BindingSpec>> {
+    /** Compile-time-only record of binding specs. Never read at runtime. */
+    declare readonly __spec?: S;
     /** Bind group index, assigned when a program is linked. */
     group: number;
     /** Slots in declaration order. */
@@ -93,11 +95,11 @@ export class GpuBindGroupLayout {
 
     private readonly index: Record<string, number> = Object.create(null);
 
-    constructor(spec: Record<string, BindingSpec>, group = 0) {
+    constructor(spec: S, group = 0) {
         this.group = group;
         const slots: BindingSlot[] = [];
         for (const name of Object.keys(spec)) {
-            const entry = spec[name]!;
+            const entry = (spec as Record<string, BindingSpec>)[name]!;
             this.index[name] = slots.length;
             slots.push({
                 name,
