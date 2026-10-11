@@ -677,12 +677,21 @@ class Parser {
      * to `std` and `meshLayout2.$.uniforms` resolves to `meshLayout`.
      */
     private recoverExternal(name: string): unknown {
+        // Bundlers rename colliding free variables (for example `std` becomes
+        // `std2` or a short generated name). The `d`/`std` namespaces are always
+        // available to a body, so include them in the candidates alongside the
+        // registered externals.
         const externals = this.options.externals;
-        if (!externals) return undefined;
+        const candidates: Record<string, unknown> = {
+            d: externals?.d ?? dLib,
+            std: externals?.std ?? stdLib,
+            ...(externals ?? {}),
+        };
         // A bundler renames colliding free variables by appending a counter
         // (`counts` becomes `counts2`). Stripping the suffix recovers the name.
         const stripped = name.replace(/[0-9]+$/, '');
-        if (stripped && stripped !== name && externals[stripped] !== undefined) return externals[stripped];
+        if (stripped && stripped !== name && candidates[stripped] !== undefined) return candidates[stripped];
+        if (candidates[name] !== undefined) return candidates[name];
         const path: string[] = [];
         let i = this.pos;
         for (;;) {
@@ -709,15 +718,15 @@ class Parser {
             break;
         }
         if (path.length === 0) return undefined;
-        for (const key of Object.keys(externals)) {
-            let value: unknown = externals[key];
+        for (const key of Object.keys(candidates)) {
+            let value: unknown = candidates[key];
             let ok = true;
             for (const step of path) {
                 const next = memberNext(value, step);
                 if (!next.ok) { ok = false; break; }
                 value = next.value;
             }
-            if (ok && value !== undefined) return externals[key];
+            if (ok && value !== undefined) return candidates[key];
         }
         return undefined;
     }

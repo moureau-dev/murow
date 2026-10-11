@@ -41,4 +41,29 @@ describe('parseShaderBody externals', () => {
         ).code;
         expect(code).toContain('2.0');
     });
+
+    test('recovers a bundler-renamed std namespace by member path', () => {
+        const code = emitEntry(
+            parseShaderBody('(_v,_m) => sn.mul(2.0, 3.0)', { stage: 'fragment' }),
+            createTestBackend(),
+        ).code;
+        expect(code).toContain('2.0');
+        expect(code).toContain('*');
+    });
+
+    test('recovers a bundler-renamed d namespace by member path', () => {
+        const code = emitEntry(
+            parseShaderBody('(_v,_m) => zz.vec4f(1, 0, 0, 1)', { stage: 'fragment' }),
+            createTestBackend(),
+        ).code;
+        expect(code).toContain('vec4<f32>');
+    });
+
+    test('recovers a counter-suffixed std namespace', () => {
+        const code = emitEntry(
+            parseShaderBody('(_v,_m) => std2.sin(0.5)', { stage: 'fragment' }),
+            createTestBackend(),
+        ).code;
+        expect(code).toContain('sin');
+    });
 });
