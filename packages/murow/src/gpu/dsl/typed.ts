@@ -252,7 +252,6 @@ export interface TypedStd extends TypedD {
     textureSampleLevel(t: unknown, s: unknown, uv: Input, level: Input): SV<Vec<'f32', 4>>;
     textureSampleLevel(t: unknown, s: unknown, uv: Input, arrayIndex: Input, level: Input): SV<Vec<'f32', 4>>;
     discard(): unknown;
-    lightContribution(pos: Input, axis: Input, color: Input, params: Input, normal: Input, worldPos: Input): SV<Vec<'f32', 3>>;
     tonemap(color: Input): SV<Vec<'f32', 3>>;
 }
 

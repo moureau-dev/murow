@@ -9,7 +9,7 @@ backend is a target syntax plus a device factory, and everything else lives in
 - `syntax.ts` - `WgslSyntax`, the `TargetSyntax` for WGSL: type names, builtins,
   parameter and binding declarations, entry signatures, casts, sampling,
   literals, struct declarations, loops, and the preamble prefix.
-- Injecting helper source (noise, snoise, `lightContribution`, `tonemap`) — the
+- Injecting helper source (noise, snoise, `shadeLight`, `tonemap`) — the
   WGSL lives in `../shaders.ts` (`HELPER_WGSL`); the backend prepends a helper
   only when an entry calls it.
 - `backend/` - `wgslSpec` (a `GpuBackendSpec` for WGSL), `wgslIntrinsics`

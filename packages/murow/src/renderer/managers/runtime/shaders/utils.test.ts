@@ -6,12 +6,21 @@ const d = {
     vec3f: (x: number, y: number, z: number) => ({ x, y, z }),
     vec4f: (x: number, y: number, z: number, w: number) => ({ x, y, z, w }),
 };
-import { rotate2d, worldToClip2d, worldToClip3d, remap, scaleRotate2d, inverseLerp, lightContribution } from './utils';
+import { rotate2d, worldToClip2d, worldToClip3d, remap, scaleRotate2d, inverseLerp, shadeLight } from './utils';
 
 /** Point-light arg helpers: zero axis, innerCos=1, outerCos=-1 (cone always 1). */
 const POINT_AXIS = d.vec3f(0, 0, 0);
 function pointParams(intensity: number, range: number) {
     return d.vec4f(intensity, range, 1, -1);
+}
+
+/** Adapts the old flat args to the `shadeLight(light, surface)` shape. */
+function lightContribution(pos: any, dir: any, color: any, params: any, normal: any, worldPos: any) {
+    const isSpot = Math.abs(dir.x) + Math.abs(dir.y) + Math.abs(dir.z) > 1e-4;
+    return shadeLight(
+        { pos, dir, color, intensity: params.x, range: params.y, innerCos: params.z, outerCos: params.w ?? 0, kind: isSpot ? 2 : 1 },
+        { normal, worldPos },
+    );
 }
 
 describe('shader utils (CPU execution)', () => {

@@ -437,7 +437,7 @@ describe('preamble injection', () => {
 
     test('emits struct declarations before injected helpers', () => {
         const light = struct('Light', [field('intensity', f32())]);
-        const backend = new TestWgslBackend({ structs: [light], helpers: 'fn lightContribution() {}' });
+        const backend = new TestWgslBackend({ structs: [light], helpers: 'fn shadeLight() {}' });
         const compute = entry({
             stage: 'compute',
             params: [],
@@ -446,7 +446,7 @@ describe('preamble injection', () => {
         });
 
         const code = emitEntry(compute, backend).code;
-        expect(code.indexOf('struct Light')).toBeLessThan(code.indexOf('fn lightContribution'));
+        expect(code.indexOf('struct Light')).toBeLessThan(code.indexOf('fn shadeLight'));
     });
 });
 

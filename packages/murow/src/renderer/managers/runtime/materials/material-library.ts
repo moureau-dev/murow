@@ -4,7 +4,8 @@ import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent,
 
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
 
-import { lightContribution, tonemap } from '../shaders/utils';
+import { tonemap } from '../shaders/utils';
+import { std as engineStd } from '../gpu-ns';
 
 type AnyField = import('murow/gpu/schema').Field<any, any> | import('murow/gpu/schema').GpuStruct;
 type Infer<T> = any;
@@ -378,7 +379,7 @@ export class MaterialLibrary {
             textures,
         };
         const bindings = { mesh: meshLayout, mat: matLayout };
-        const helpers = { lightContribution, tonemap, noise: noiseFn, snoise: snoiseFn };
+        const helpers = { std: engineStd, tonemap, noise: noiseFn, snoise: snoiseFn };
 
         let vertex: GpuShader;
         let fragmentIn: Record<string, unknown>;

@@ -6,7 +6,7 @@
  * shader bodies call, also lower to a `murow/gpu` call node. The WGSL source for
  * those helpers is injected by the WebGPU backend when the call appears.
  */
-import { call, vec as vecType } from 'murow/gpu/ir';
+import { call, construct, vec as vecType } from 'murow/gpu/ir';
 import { ShaderValue, toExpr } from 'murow/gpu/dsl';
 import type { IrExpr } from 'murow/gpu/ir';
 
@@ -77,32 +77,69 @@ export function inverseLerp(min: number, max: number, value: number): number {
     return Math.min(1, Math.max(0, t));
 }
 
-/** Diffuse contribution of one point or spot light. */
-export function lightContribution(...args: any[]): any {
-    if (args.some(isIr)) {
+/** An interpolated point/spot light, as consumed by {@link shadeLight}. */
+export interface ShadeLight {
+    /** World-space light position. */
+    readonly pos: any;
+    /** Cone axis. Ignored when `kind` marks a point light. */
+    readonly dir: any;
+    /** Light color (rgb). */
+    readonly color: any;
+    readonly intensity: any;
+    readonly range: any;
+    readonly innerCos: any;
+    readonly outerCos: any;
+    /** 1 = point, 2 = spot. */
+    readonly kind: any;
+}
+
+/** A shaded surface point. */
+export interface ShadeSurface {
+    readonly normal: any;
+    readonly worldPos: any;
+}
+
+const LIGHT_KIND_SPOT = 2;
+
+/** Diffuse contribution of one point or spot light to a surface point. */
+export function shadeLight(light: ShadeLight | any, surface: ShadeSurface | any): any {
+    if (isIr(light?.pos) || isIr(surface?.normal)) {
+        const params = construct(vecType('f32', 4), [
+            toExpr(light.intensity),
+            toExpr(light.range),
+            toExpr(light.innerCos),
+            toExpr(light.outerCos),
+        ]);
         return new ShaderValue({
-            node: call(vecType('f32', 3), 'lightContribution', args.map(toExpr)),
+            node: call(vecType('f32', 3), 'shadeLight', [
+                light.pos,
+                light.dir,
+                light.color,
+                params,
+                light.kind,
+                surface.normal,
+                surface.worldPos,
+            ].map(toExpr)),
         });
     }
-    const [pos, axis, color, params, normal, worldPos] = args as [VecLike, VecLike, VecLike, VecLike, VecLike, VecLike];
-    const intensity = params.x;
-    const range = params.y;
-    const innerCos = params.z;
-    const outerCos = params.w ?? 0;
 
-    const toLight = { x: pos.x - worldPos.x, y: pos.y - worldPos.y, z: pos.z - worldPos.z };
+    const { pos, dir, color, intensity, range, innerCos, outerCos } = light as {
+        pos: VecLike; dir: VecLike; color: VecLike;
+        intensity: number; range: number; innerCos: number; outerCos: number;
+    };
+    const kind = (light as { kind?: number }).kind;
+    const isSpot = (kind ?? (length3(dir) > 0.0001 ? LIGHT_KIND_SPOT : 1)) > 1.5;
+
+    const toLight = { x: pos.x - surface.worldPos.x, y: pos.y - surface.worldPos.y, z: pos.z - surface.worldPos.z };
     const dist = length3(toLight);
-    const dir = normalize3(toLight);
-    const lambert = Math.max(dot3(normal, dir), 0);
+    const toLightDir = normalize3(toLight);
+    const normal = surface.normal as VecLike;
+    const lambert = Math.max(dot3(normal, toLightDir), 0);
     const atten = clamp(1 - dist / Math.max(range, 0.0001), 0, 1);
     const falloff = atten * atten;
 
-    const axisLen = length3(axis);
-    const isSpot = axisLen > 0.0001;
-    const safeAxis = isSpot ? axis : { x: 0, y: 0, z: 1 };
-    const cosAngle = dot3(normalize3(safeAxis), { x: -dir.x, y: -dir.y, z: -dir.z });
-    const spotCone = smoothstep(outerCos, innerCos, cosAngle);
-    const cone = isSpot ? spotCone : 1;
+    const cosAngle = dot3(normalize3(dir), { x: -toLightDir.x, y: -toLightDir.y, z: -toLightDir.z });
+    const cone = isSpot ? smoothstep(outerCos, innerCos, cosAngle) : 1;
     const scale = lambert * falloff * cone * intensity;
     return { x: color.x * scale, y: color.y * scale, z: color.z * scale };
 }

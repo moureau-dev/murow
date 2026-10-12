@@ -17,7 +17,7 @@ describe('engine material shaders lower through the gpu facade', () => {
         expect(code).toContain('@fragment');
         expect(code).toContain('fn fs_main(');
         expect(code).toContain('textureSample(');
-        expect(code).toContain('fn lightContribution(');
+        expect(code).toContain('fn shadeLight(');
         expect(code).toContain('fn tonemap(');
     });
 

@@ -644,41 +644,46 @@ class Parser {
             return this.parseObjectLiteral();
         }
         if (token.kind === 'ident') {
-            if (token.value === 'true') return literal(boolType(), true);
-            if (token.value === 'false') return literal(boolType(), false);
-            const known = this.locals[token.value];
-            if (known) return known;
-            if (token.value === 'd' || /^d\d+$/.test(token.value)) return { __namespace: 'd' };
-            if (token.value === 'std' || /^std\d+$/.test(token.value)) return { __namespace: 'std' };
-            if (token.value === this.namespaceParams || token.value === this.namespaceMaterial || token.value === this.namespaceStd) {
-                return { __namespace: token.value };
-            }
-            const destructured = this.destructured[token.value];
-            if (destructured) {
-                if (destructured === 'params') {
-                    const value = this.params[this.destructuredKey[token.value] ?? token.value];
-                    if (!value) throw this.error(`unknown input '${token.value}'`, token);
-                    return value;
-                }
-                if (destructured === 'material') {
-                    const value = this.material[this.destructuredKey[token.value] ?? token.value];
-                    if (value !== undefined) return value;
-                    // Otherwise fall through: the name may be a helper external.
-                } else {
-                    return this.member({ __namespace: 'std' }, token.value);
-                }
-            }
-            const exposedMaterial = this.material[token.value];
-            if (exposedMaterial !== undefined) return exposedMaterial;
-            const external = this.options.externals?.[token.value];
-            if (external !== undefined) return external;
-            const bound = this.options.bindings?.[token.value];
-            if (bound !== undefined) return bound;
-            const recovered = this.recoverExternal(token.value);
-            if (recovered !== undefined) return recovered;
-            throw this.error(`unknown identifier '${token.value}'`, token);
+            return this.resolveIdent(token);
         }
         throw this.error('unexpected token', token);
+    }
+
+    /** Resolve an identifier token to its value (locals, namespaces, externals). */
+    private resolveIdent(token: Token): unknown {
+        if (token.value === 'true') return literal(boolType(), true);
+        if (token.value === 'false') return literal(boolType(), false);
+        const known = this.locals[token.value];
+        if (known) return known;
+        if (token.value === 'd' || /^d\d+$/.test(token.value)) return { __namespace: 'd' };
+        if (token.value === 'std' || /^std\d+$/.test(token.value)) return { __namespace: 'std' };
+        if (token.value === this.namespaceParams || token.value === this.namespaceMaterial || token.value === this.namespaceStd) {
+            return { __namespace: token.value };
+        }
+        const destructured = this.destructured[token.value];
+        if (destructured) {
+            if (destructured === 'params') {
+                const value = this.params[this.destructuredKey[token.value] ?? token.value];
+                if (!value) throw this.error(`unknown input '${token.value}'`, token);
+                return value;
+            }
+            if (destructured === 'material') {
+                const value = this.material[this.destructuredKey[token.value] ?? token.value];
+                if (value !== undefined) return value;
+                // Otherwise fall through: the name may be a helper external.
+            } else {
+                return this.member({ __namespace: 'std' }, token.value);
+            }
+        }
+        const exposedMaterial = this.material[token.value];
+        if (exposedMaterial !== undefined) return exposedMaterial;
+        const external = this.options.externals?.[token.value];
+        if (external !== undefined) return external;
+        const bound = this.options.bindings?.[token.value];
+        if (bound !== undefined) return bound;
+        const recovered = this.recoverExternal(token.value);
+        if (recovered !== undefined) return recovered;
+        throw this.error(`unknown identifier '${token.value}'`, token);
     }
 
     /**
@@ -730,8 +735,8 @@ class Parser {
             break;
         }
         if (path.length === 0) return undefined;
-        // Bare-helper path: `renamedNs.lightContribution` where the helper is a
-        // flat external (`externals.lightContribution`), not a namespace member.
+        // Bare-helper path: `renamedNs.noise` where the helper is a flat
+        // external (`externals.noise`), not a namespace member.
         if (path.length === 1 && candidates[path[0]!] !== undefined) return { [path[0]!]: candidates[path[0]!] };
         for (const key of Object.keys(candidates)) {
             let value: unknown = candidates[key];
@@ -756,8 +761,13 @@ class Parser {
         while (!this.peekPunc('}')) {
             const key = this.next();
             if (key.kind !== 'ident') throw this.error('expected an object key', key);
-            this.expectPunc(':');
-            entries.push({ key: key.value, value: this.exprOf(this.parseExpression()) });
+            if (this.peekPunc(':')) {
+                this.next();
+                entries.push({ key: key.value, value: this.exprOf(this.parseExpression()) });
+            } else {
+                // Shorthand: `{ normal }` == `{ normal: normal }`.
+                entries.push({ key: key.value, value: this.exprOf(this.resolveIdent(key)) });
+            }
             if (this.peekPunc(',')) this.next();
         }
         this.expectPunc('}');
@@ -810,9 +820,9 @@ class Parser {
 
     private callValue(callee: unknown): unknown {
         this.expectPunc('(');
-        const args: IrExpr[] = [];
+        const args: unknown[] = [];
         while (!this.peekPunc(')')) {
-            args.push(this.exprOf(this.parseExpression()));
+            args.push(this.materializeArg(this.parseExpression()));
             if (this.peekPunc(',')) this.next();
         }
         this.expectPunc(')');
@@ -821,11 +831,27 @@ class Parser {
             if (args.length !== 1) throw this.error(`cast '${callee.__cast}' takes one argument`);
             const type = castType(callee.__cast);
             if (!type) throw this.error(`unknown cast 'd.${callee.__cast}'`);
-            return cast(type, args[0]!);
+            return cast(type, args[0] as IrExpr);
         }
-        if (isIntrinsic(callee)) return intrinsic(callee.__intrinsic, args);
-        if (typeof callee === 'function') return (callee as (...a: IrExpr[]) => unknown)(...args);
+        if (isIntrinsic(callee)) return intrinsic(callee.__intrinsic, args as IrExpr[]);
+        if (typeof callee === 'function') return (callee as (...a: unknown[]) => unknown)(...args);
         throw this.error('only std/d namespace calls and external functions are supported');
+    }
+
+    /**
+     * Turn a parsed argument into what a callee receives. Object literals become
+     * plain objects of materialized values, so helpers can take grouped
+     * arguments (`shadeLight(light, surface)`) instead of long positional lists.
+     */
+    private materializeArg(value: unknown): unknown {
+        if (value !== null && typeof value === 'object' && '__object' in value) {
+            const out: Record<string, unknown> = {};
+            for (const entry of (value as { __object: Array<{ key: string; value: unknown }> }).__object) {
+                out[entry.key] = this.exprOf(entry.value);
+            }
+            return out;
+        }
+        return this.exprOf(value);
     }
 
     // --- helpers -----------------------------------------------------------

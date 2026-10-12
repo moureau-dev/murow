@@ -146,27 +146,6 @@ export function snoiseExternal(uv: ShaderInput, res: ShaderInput): ShaderValue {
     return new ShaderValue({ node: call(f32Type(), 'snoise', [toExpr(uv), toExpr(res)]) });
 }
 
-/** Diffuse light contribution. */
-export function lightContributionExternal(
-    pos: ShaderInput,
-    axis: ShaderInput,
-    color: ShaderInput,
-    params: ShaderInput,
-    normal: ShaderInput,
-    worldPos: ShaderInput,
-): ShaderValue {
-    return new ShaderValue({
-        node: call(vecType('f32', 3), 'lightContribution', [
-            toExpr(pos),
-            toExpr(axis),
-            toExpr(color),
-            toExpr(params),
-            toExpr(normal),
-            toExpr(worldPos),
-        ]),
-    });
-}
-
 /** Reinhard tone map. */
 export function tonemapExternal(c: ShaderInput): ShaderValue {
     return new ShaderValue({ node: call(vecType('f32', 3), 'tonemap', [toExpr(c)]) });
@@ -186,7 +165,6 @@ export interface Externals {
     readonly textures: Textures;
     readonly noise: typeof noiseExternal;
     readonly snoise: typeof snoiseExternal;
-    readonly lightContribution: typeof lightContributionExternal;
     readonly tonemap: typeof tonemapExternal;
 }
 
@@ -200,7 +178,6 @@ export function createExternals(options: ExternalsOptions = {}): Externals {
         textures: new Textures({ bindings }),
         noise: noiseExternal,
         snoise: snoiseExternal,
-        lightContribution: lightContributionExternal,
         tonemap: tonemapExternal,
     };
 }

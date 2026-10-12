@@ -2,7 +2,7 @@ import { GpuBindGroupLayout, GpuShader } from 'murow/gpu';
 import { d, std } from '../gpu-ns';
 
 
-import { lightContribution, tonemap } from '../shaders/utils';
+import { tonemap } from '../shaders/utils';
 import { call, f32 as f32Type, vec as vecType } from 'murow/gpu/ir';
 import { ShaderValue, toExpr, type ShaderInput } from 'murow/gpu/dsl';
 import { createTexturedMeshVertex, type MeshDataLayout } from '../shader';
@@ -67,7 +67,7 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
             in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position },
             out: d.vec4f,
             bindings: { mesh: meshLayout, mat: matLayout },
-            helpers: { lightContribution, tonemap },
+            helpers: { std, tonemap },
         },
         (input, { mesh, mat }) => {
         const u = mesh.uniforms;
@@ -140,9 +140,15 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
         const a = u.alpha;
         for (let i = d.u32(0); i < count; i++) {
             const L = mesh.lights[i];
-            const pos = d.vec3f(std.mix(L.prevPosX, L.currPosX, a), std.mix(L.prevPosY, L.currPosY, a), std.mix(L.prevPosZ, L.currPosZ, a));
-            const axis = d.vec3f(std.mix(L.prevDirX, L.currDirX, a), std.mix(L.prevDirY, L.currDirY, a), std.mix(L.prevDirZ, L.currDirZ, a));
-            const c = lightContribution(pos, axis, d.vec3f(L.colorR, L.colorG, L.colorB), d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos), normal, worldPos);
+            const c = std.shadeLight(
+                {
+                    pos: d.vec3f(std.mix(L.prevPosX, L.currPosX, a), std.mix(L.prevPosY, L.currPosY, a), std.mix(L.prevPosZ, L.currPosZ, a)),
+                    dir: d.vec3f(std.mix(L.prevDirX, L.currDirX, a), std.mix(L.prevDirY, L.currDirY, a), std.mix(L.prevDirZ, L.currDirZ, a)),
+                    color: d.vec3f(L.colorR, L.colorG, L.colorB),
+                    intensity: L.intensity, range: L.range, innerCos: L.innerCos, outerCos: L.outerCos, kind: L.kind,
+                },
+                { normal, worldPos },
+            );
             // Per-light shadow (scalar factor, so no vec reassignment).
             const oneF = d.f32(1.0);
             const zeroF = d.f32(0.0);

@@ -61,7 +61,7 @@ export interface GpuShaderOptions {
      * injects their source when the call appears. Functions only, never
      * resources.
      */
-    readonly helpers?: Record<string, (...args: never[]) => unknown>;
+    readonly helpers?: Record<string, unknown>;
     /** Compute workgroup size. */
     readonly workgroup?: readonly [number, number, number];
 }
@@ -79,7 +79,7 @@ export class GpuShader<A = unknown, B = unknown> {
     /** Flat names resolved to layout slot paths. */
     readonly expose: Record<string, string | Record<string, string>>;
     /** Named helper functions. */
-    readonly helpers: Record<string, (...args: never[]) => unknown>;
+    readonly helpers: Record<string, unknown>;
     /** Workgroup size for compute. */
     readonly workgroup: readonly [number, number, number] | undefined;
     /** Source body. */

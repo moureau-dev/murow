@@ -9,7 +9,7 @@ import { GpuBindGroupLayout, GpuShader } from 'murow/gpu';
 import { d, std } from '../gpu-ns';
 
 import { DynamicMesh, StaticMesh, SkinnedStaticMesh, MeshUniforms, Light } from '../engine-core/types';
-import { lightContribution, tonemap } from '../shaders/utils';
+import { tonemap } from '../shaders/utils';
 
 // Stable local names: shader bodies are parsed from their source, so bundlers
 // must not rename `d`/`std` inside them.
@@ -148,7 +148,7 @@ export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataL
             in: { vNormal: d.vec3f, vColor: d.vec3f, vWorldPos: d.vec3f },
             out: d.vec4f,
             bindings: { mesh: meshLayout },
-            helpers: { lightContribution, tonemap },
+            helpers: { std, tonemap },
         },
         (input, { mesh }) => {
         const u = mesh.uniforms;
@@ -172,23 +172,14 @@ export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataL
         const a = u.alpha;
         for (let i = d.u32(0); i < count; i++) {
             const L = mesh.lights[i];
-            const pos = d.vec3f(
-                std.mix(L.prevPosX, L.currPosX, a),
-                std.mix(L.prevPosY, L.currPosY, a),
-                std.mix(L.prevPosZ, L.currPosZ, a),
-            );
-            const axis = d.vec3f(
-                std.mix(L.prevDirX, L.currDirX, a),
-                std.mix(L.prevDirY, L.currDirY, a),
-                std.mix(L.prevDirZ, L.currDirZ, a),
-            );
-            const c = lightContribution(
-                pos,
-                axis,
-                d.vec3f(L.colorR, L.colorG, L.colorB),
-                d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos),
-                normal,
-                worldPos,
+            const c = std.shadeLight(
+                {
+                    pos: d.vec3f(std.mix(L.prevPosX, L.currPosX, a), std.mix(L.prevPosY, L.currPosY, a), std.mix(L.prevPosZ, L.currPosZ, a)),
+                    dir: d.vec3f(std.mix(L.prevDirX, L.currDirX, a), std.mix(L.prevDirY, L.currDirY, a), std.mix(L.prevDirZ, L.currDirZ, a)),
+                    color: d.vec3f(L.colorR, L.colorG, L.colorB),
+                    intensity: L.intensity, range: L.range, innerCos: L.innerCos, outerCos: L.outerCos, kind: L.kind,
+                },
+                { normal, worldPos },
             );
             acc = d.vec3f(
                 acc.x + baseColor.x * c.x,
@@ -528,7 +519,7 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
             in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f },
             out: d.vec4f,
             bindings: { mesh: meshLayout, tex: texLayout },
-            helpers: { lightContribution, tonemap },
+            helpers: { std, tonemap },
         },
         (input, { mesh, tex }) => {
         const u = mesh.uniforms;
@@ -561,23 +552,14 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
         const a = u.alpha;
         for (let i = d.u32(0); i < count; i++) {
             const L = mesh.lights[i];
-            const pos = d.vec3f(
-                std.mix(L.prevPosX, L.currPosX, a),
-                std.mix(L.prevPosY, L.currPosY, a),
-                std.mix(L.prevPosZ, L.currPosZ, a),
-            );
-            const axis = d.vec3f(
-                std.mix(L.prevDirX, L.currDirX, a),
-                std.mix(L.prevDirY, L.currDirY, a),
-                std.mix(L.prevDirZ, L.currDirZ, a),
-            );
-            const c = lightContribution(
-                pos,
-                axis,
-                d.vec3f(L.colorR, L.colorG, L.colorB),
-                d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos),
-                normal,
-                worldPos,
+            const c = std.shadeLight(
+                {
+                    pos: d.vec3f(std.mix(L.prevPosX, L.currPosX, a), std.mix(L.prevPosY, L.currPosY, a), std.mix(L.prevPosZ, L.currPosZ, a)),
+                    dir: d.vec3f(std.mix(L.prevDirX, L.currDirX, a), std.mix(L.prevDirY, L.currDirY, a), std.mix(L.prevDirZ, L.currDirZ, a)),
+                    color: d.vec3f(L.colorR, L.colorG, L.colorB),
+                    intensity: L.intensity, range: L.range, innerCos: L.innerCos, outerCos: L.outerCos, kind: L.kind,
+                },
+                { normal, worldPos },
             );
             acc = d.vec3f(
                 acc.x + baseColor.x * c.x,
@@ -939,7 +921,7 @@ export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
             in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f },
             out: d.vec4f,
             bindings: { mesh: meshLayout },
-            helpers: { lightContribution, tonemap },
+            helpers: { std, tonemap },
         },
         (input, { mesh }) => {
         const u = mesh.uniforms;
@@ -960,23 +942,14 @@ export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
         const a = u.alpha;
         for (let i = d.u32(0); i < count; i++) {
             const L = mesh.lights[i];
-            const pos = d.vec3f(
-                std.mix(L.prevPosX, L.currPosX, a),
-                std.mix(L.prevPosY, L.currPosY, a),
-                std.mix(L.prevPosZ, L.currPosZ, a),
-            );
-            const axis = d.vec3f(
-                std.mix(L.prevDirX, L.currDirX, a),
-                std.mix(L.prevDirY, L.currDirY, a),
-                std.mix(L.prevDirZ, L.currDirZ, a),
-            );
-            const c = lightContribution(
-                pos,
-                axis,
-                d.vec3f(L.colorR, L.colorG, L.colorB),
-                d.vec4f(L.intensity, L.range, L.innerCos, L.outerCos),
-                normal,
-                worldPos,
+            const c = std.shadeLight(
+                {
+                    pos: d.vec3f(std.mix(L.prevPosX, L.currPosX, a), std.mix(L.prevPosY, L.currPosY, a), std.mix(L.prevPosZ, L.currPosZ, a)),
+                    dir: d.vec3f(std.mix(L.prevDirX, L.currDirX, a), std.mix(L.prevDirY, L.currDirY, a), std.mix(L.prevDirZ, L.currDirZ, a)),
+                    color: d.vec3f(L.colorR, L.colorG, L.colorB),
+                    intensity: L.intensity, range: L.range, innerCos: L.innerCos, outerCos: L.outerCos, kind: L.kind,
+                },
+                { normal, worldPos },
             );
             acc = d.vec3f(
                 acc.x + baseColor.x * c.x,

@@ -4,7 +4,6 @@ import {
     createLights,
     createMaterial,
     lights,
-    lightContributionExternal as lightContribution,
     material,
     noiseExternal as noise,
     scene,
@@ -112,12 +111,8 @@ describe('injected functions', () => {
         expect(b.type).toEqual(f32());
     });
 
-    test('lightContribution and tonemap return vec3 calls', () => {
+    test('tonemap returns a vec3 call', () => {
         const arg = new ShaderValue({ node: (lights as any)[0].currPosX.node });
-        const light = lightContribution(arg, arg, arg, arg, arg, arg).node as IrCall;
-        expect(light.name).toBe('lightContribution');
-        expect(light.type).toEqual(v3);
-
         const tone = tonemap(arg).node as IrCall;
         expect(tone.name).toBe('tonemap');
         expect(tone.type).toEqual(v3);

@@ -316,26 +316,23 @@ fn snoise(uv: vec3<f32>, res: f32) -> f32 {
 }`;
 
 /** Diffuse contribution of one point or spot light. */
-const LIGHT_CONTRIBUTION_WGSL = `
-fn lightContribution(pos: vec3<f32>, axis: vec3<f32>, color: vec3<f32>, params: vec4<f32>, normal: vec3<f32>, worldPos: vec3<f32>) -> vec3<f32> {
+const SHADE_LIGHT_WGSL = `
+fn shadeLight(pos: vec3<f32>, dir: vec3<f32>, color: vec3<f32>, params: vec4<f32>, kind: f32, normal: vec3<f32>, worldPos: vec3<f32>) -> vec3<f32> {
     let intensity = params.x;
     let range = params.y;
     let innerCos = params.z;
     let outerCos = params.w;
     let toLight = vec3<f32>(pos.x - worldPos.x, pos.y - worldPos.y, pos.z - worldPos.z);
-    let dist = length(toLight);
-    let dir = normalize(toLight);
-    let lambert = max(dot(normal, dir), 0.0);
-    let atten = clamp(1.0 - dist / max(range, 0.0001), 0.0, 1.0);
+    let toLightDir = normalize(toLight);
+    let lambert = max(dot(normal, toLightDir), 0.0);
+    let atten = clamp(1.0 - length(toLight) / max(range, 0.0001), 0.0, 1.0);
     let falloff = atten * atten;
-    let axisLen = length(axis);
-    let isSpot = axisLen > 0.0001;
-    let safeAxis = select(vec3<f32>(0.0, 0.0, 1.0), axis, isSpot);
-    let cosAngle = dot(normalize(safeAxis), vec3<f32>(-dir.x, -dir.y, -dir.z));
+    let isSpot = kind > 1.5;
+    let safeAxis = select(vec3<f32>(0.0, 0.0, 1.0), dir, isSpot);
+    let cosAngle = dot(normalize(safeAxis), vec3<f32>(-toLightDir.x, -toLightDir.y, -toLightDir.z));
     let spotCone = smoothstep(outerCos, innerCos, cosAngle);
     let cone = select(1.0, spotCone, isSpot);
-    let shadowFactor = 1.0;
-    let scale = lambert * falloff * cone * intensity * shadowFactor;
+    let scale = lambert * falloff * cone * intensity;
     return vec3<f32>(color.x * scale, color.y * scale, color.z * scale);
 }`;
 
@@ -352,7 +349,7 @@ export const WGSL = {
     sprite2d: SPRITE_2D_WGSL,
     noise: NOISE_WGSL,
     snoise: SNOISE_WGSL,
-    lightContribution: LIGHT_CONTRIBUTION_WGSL,
+    shadeLight: SHADE_LIGHT_WGSL,
     tonemap: TONEMAP_WGSL,
 };
 
@@ -360,6 +357,6 @@ export const WGSL = {
 export const HELPER_WGSL: Record<string, string> = {
     noise: WGSL.noise,
     snoise: WGSL.snoise,
-    lightContribution: WGSL.lightContribution,
+    shadeLight: WGSL.shadeLight,
     tonemap: WGSL.tonemap,
 };
