@@ -278,8 +278,8 @@ export class GameServer<
         };
 
         const peerOut: Entity[] = [];
-        for (const peer of this.peers.values()) {
-            if (peer.kicking !== null) continue;
+        this.peers.forEach((peer) => {
+            if (peer.kicking !== null) return;
 
             const source: ReadonlyArray<Entity> = peer.needsBaseline
                 ? computeBaseline()
@@ -328,7 +328,7 @@ export class GameServer<
 
             // Baseline peers always send (even empty) so they get a tick
             // header + clientAckTick. Established peers skip empty deltas.
-            if (peerOut.length === 0 && despawned.length === 0 && !peer.needsBaseline) continue;
+            if (peerOut.length === 0 && despawned.length === 0 && !peer.needsBaseline) return;
 
             const buf = encodeDelta(
                 this.world,
@@ -348,7 +348,7 @@ export class GameServer<
 
             peer.needsBaseline = false;
             this.emit('snapshot', { peer, tick: this.tickCounter, byteSize: framed.length });
-        }
+        });
 
         // Clear dirty for the next tick. Per-peer ack-driven resend on
         // packet loss is future work.
@@ -365,10 +365,11 @@ export class GameServer<
     }
 
     private anyNeedsBaseline(): boolean {
-        for (const peer of this.peers.values()) {
-            if (peer.kicking === null && peer.needsBaseline) return true;
-        }
-        return false;
+        let any = false;
+        this.peers.forEach((peer) => {
+            if (peer.kicking === null && peer.needsBaseline) any = true;
+        });
+        return any;
     }
 
     private handleIncoming(peer: InternalPeer, data: Uint8Array): void {
@@ -537,10 +538,10 @@ export class GameServer<
     }
 
     broadcastRpc<K extends keyof R & string>(name: K, payload: RpcPayload<R, K>): void {
-        for (const peer of this.peers.values()) {
-            if (peer.kicking !== null) continue;
+        this.peers.forEach((peer) => {
+            if (peer.kicking !== null) return;
             this.sendRpc(peer, name, payload);
-        }
+        });
     }
 
     /**
