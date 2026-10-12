@@ -8,6 +8,7 @@ import { u16 } from 'murow/core/binary-codec';
 import { defineRPC } from 'murow/protocol';
 import { Network } from '../network/base';
 import { encodeDelta } from '../codec/delta-codec';
+import { computeSchemaFingerprint } from '../codec/fingerprint';
 import { rateIncludes, type SyncSpec } from '../components/sync-spec';
 import type { DefinedIntents, IntentSchemaMap } from '../intents/define-intents';
 import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs';
@@ -27,6 +28,7 @@ const MSG_RPC = 0x81;
 const MSG_KICK = 0x82;
 const MSG_KICK_ACK = 0x83;
 const MSG_ASSIGN_ENTITY = 0x84;
+const MSG_SCHEMA = 0x85;
 
 // Client -> server frames.
 const CMSG_INTENT = 0x01;
@@ -60,7 +62,11 @@ export interface GameServerOptions<
         /** Ms before forcing transport close after a kick. Default 2000. */
         ackTimeout?: number;
     };
-    /** Optional schema fingerprint for component-layout drift checks. */
+    /**
+     * Schema fingerprint checked against each client. Defaults to one derived
+     * from the synced components; a mismatch fires the client's `'error'` with
+     * context `'schema-fingerprint'`.
+     */
     schemaFingerprint?: string;
     /** Optional diagnostics: `true` → console logger, or pass a `Logger`. */
     debug?: boolean | Logger;
@@ -117,6 +123,8 @@ export class GameServer<
     private scratch: number[] = [];
     private lastDt: number;
     private readonly log: Logger;
+    /** Stable fingerprint of the synced schema (or the `schemaFingerprint` option). */
+    readonly schemaFingerprint: string;
     private readonly dirtySeen: SlotSet;
     private readonly visibleScratch: SlotSet;
     private readonly baselineSeen: SlotSet;
@@ -169,6 +177,7 @@ export class GameServer<
         this.lastDt = opts.loop.ticker.intervalMs / 1000;
 
         this.discoverSyncedComponents();
+        this.schemaFingerprint = opts.schemaFingerprint ?? computeSchemaFingerprint(this.syncedComponents);
         this.wireTransport();
         this.wireLoop();
     }
@@ -206,6 +215,13 @@ export class GameServer<
             peerTransport.onMessage((data) => this.handleIncoming(peer, data));
             peerTransport.onClose?.(() => this.handleDisconnect(peer, 'transport-closed'));
             this.log.info('peer connected', { peerId });
+            {
+                const fp = new TextEncoder().encode(this.schemaFingerprint);
+                const frame = new Uint8Array(fp.length + 1);
+                frame[0] = MSG_SCHEMA;
+                frame.set(fp, 1);
+                peerTransport.send(frame);
+            }
             this.emit('connection', { peer });
         });
 

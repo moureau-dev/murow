@@ -386,11 +386,14 @@ new GameServer({
     priority: (e, world) => 0,// optional: higher sends first
   },
   kick: { ackTimeout: 2000 }, // ms before forcing close
+  schemaFingerprint: 'v1',     // optional: defaults to a fingerprint of the synced schema
   debug: true,                 // optional: true | Logger (default: no logging)
 });
 ```
 
 Defaults: `snapshot.rate = min(20, tickRate)`, `kick.ackTimeout = 2000`.
+
+`schemaFingerprint` is sent to each client on connect; if it does not match the client's, the client fires an `'error'` with context `'schema-fingerprint'` (a guard against client/server layout drift). Defaults to a fingerprint derived from the synced components, so a real drift is caught without configuring anything.
 
 `debug` accepts `true` (console `[net-server]` logger), a `murow/core/logger` `Logger`, or is omitted for no logging. It records connect/disconnect, kick, unknown-message, and AOI interest-leave events.
 </details>

@@ -443,3 +443,45 @@ describe('interest plugin model (independent, per component)', () => {
         expect(local(e4 as number)).toBeUndefined(); // only a team component, aoi sees it, team does not
     });
 });
+
+describe('schema fingerprint enforcement', () => {
+    const S = defineComponent('S', { schema: { x: f32 }, sync: networked({ rate: 'every-tick', interest: 'global' }) });
+
+    function setup(serverFp?: string, clientFp?: string) {
+        const intents = defineIntents({ noop: { x: f32 } });
+        const rpcs = defineRpcs({});
+        const transport = new MemoryServerTransport();
+        const server = new GameServer({
+            world: new World({ maxEntities: 8, components: [S] }),
+            loop: new GameLoop({ tickRate: 60, type: 'manual-server' }),
+            transport,
+            protocol: { intents, rpcs },
+            schemaFingerprint: serverFp,
+        });
+        const { client: ct } = transport.connectClient();
+        const errors: any[] = [];
+        const client = new GameClient({
+            world: new World({ maxEntities: 8, components: [S] }),
+            loop: new GameLoop({ tickRate: 60, type: 'manual-client' }),
+            transport: ct,
+            protocol: { intents, rpcs },
+            schemaFingerprint: clientFp,
+        });
+        client.on('error', (e: any) => errors.push(e));
+        return { errors, server };
+    }
+
+    test('mismatch fires a client error; matching/derived does not', async () => {
+        const bad = setup('server-v1', 'client-v2');
+        await flush();
+        expect(bad.errors.some((e) => e.context === 'schema-fingerprint')).toBe(true);
+
+        const derived = setup();
+        await flush();
+        expect(derived.errors.length).toBe(0);
+
+        const same = setup('same', 'same');
+        await flush();
+        expect(same.errors.length).toBe(0);
+    });
+});

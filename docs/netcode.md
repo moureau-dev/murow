@@ -151,6 +151,8 @@ Full snapshots of a thousand entities do not scale. `AoiGrid` filters each peer'
 
 Interest plugins are **independent, not composed**: each plugin is consulted against the candidate set on its own, and a component's `sync.interest` picks the one plugin that governs it. So one entity can ship different components to different peers (e.g. `Position` under an `AoiGrid`, a team-only component under a visibility plugin). A `'global'` component is never filtered and forces its entity into the snapshot — mark spatially-filtered components with the AOI plugin's name, not `'global'`, or they leak.
 
+On connect the server sends a **schema fingerprint** (derived from the synced components, or the `schemaFingerprint` option); a client whose schema differs fires an `'error'` with context `'schema-fingerprint'` — a cheap guard against client/server layout drift.
+
 Two bandwidth levers: `networked({ quantize: { x: { min, max, bits } } })` sends a field as an 8/16-bit integer over a range (store stays `f32`; e.g. a position `f32` → 2 bytes), and the server's `snapshot.maxBytesPerPeer` caps each peer's entity body, sending highest-`priority` entities first and deferring the rest to the next tick (they stay dirty).
 
 Both `GameServer` and `GameClient` accept an optional `debug?: boolean | Logger` (a `murow/core/logger` `Logger`, or `true` for the console logger) for connect/disconnect/kick/interest-leave diagnostics.

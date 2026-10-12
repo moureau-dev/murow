@@ -13,6 +13,7 @@ import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs'
 import type { DefinedPredictions } from '../predictions/define-predictions';
 import type { SyncSpec } from '../components/sync-spec';
 import { Logger } from 'murow/core/logger';
+import { computeSchemaFingerprint } from '../codec/fingerprint';
 import { SlotSet } from 'murow/core/slot-map';
 import { makeFieldsAccessor, makeMarkDirty, type PredictionContext } from '../ctx';
 
@@ -20,6 +21,7 @@ const MSG_SNAPSHOT = 0x80;
 const MSG_RPC = 0x81;
 const MSG_KICK = 0x82;
 const MSG_ASSIGN_ENTITY = 0x84;
+const MSG_SCHEMA = 0x85;
 const CMSG_INTENT = 0x01;
 const CMSG_RPC = 0x02;
 const CMSG_KICK_ACK = 0x03;
@@ -97,6 +99,12 @@ export interface GameClientOptions<
     now?: () => number;
     /** Optional diagnostics: `true` → console logger, or pass a `Logger`. */
     debug?: boolean | Logger;
+    /**
+     * Override the schema fingerprint the client expects from the server.
+     * Defaults to a fingerprint computed from the synced components; a mismatch
+     * fires an `'error'` with context `'schema-fingerprint'`.
+     */
+    schemaFingerprint?: string;
 }
 
 export class GameClient<
@@ -134,6 +142,8 @@ export class GameClient<
     private _rttMs: number | null = null;
     private now: () => number;
     private readonly log: Logger;
+    /** Fingerprint of the synced schema (or the `schemaFingerprint` option). */
+    readonly schemaFingerprint: string;
 
     /**
      * Local entity the server has assigned to this peer, or `null` if no
@@ -255,6 +265,7 @@ export class GameClient<
         });
 
         this.discoverSyncedComponents();
+        this.schemaFingerprint = opts.schemaFingerprint ?? computeSchemaFingerprint(this.syncedComponents);
         this.wireTransport();
         this.wireLoop();
     }
@@ -321,6 +332,17 @@ export class GameClient<
             }
             const view = new DataView(data.buffer, data.byteOffset + 1, 4);
             this.applyAssignment(view.getUint32(0, true));
+            return;
+        }
+        if (type === MSG_SCHEMA) {
+            const fp = new TextDecoder().decode(data.subarray(1));
+            if (fp !== this.schemaFingerprint) {
+                this.log.error('schema fingerprint mismatch', { server: fp, client: this.schemaFingerprint });
+                this.emit('error', {
+                    error: new Error(`schema fingerprint mismatch: server ${fp} != client ${this.schemaFingerprint}`),
+                    context: 'schema-fingerprint',
+                });
+            }
             return;
         }
         this.log.warn('unknown server message type', { type });
