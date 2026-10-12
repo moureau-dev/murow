@@ -10,8 +10,14 @@ export interface BufferedSnapshot {
     receivedAt: number;
     serverTick: number;
     entityIds: number[];
-    componentValuesByEntity: Map<number, Map<Component<any>, Record<string, number>>>;
+    componentValuesByEntity: Map<number, (Record<string, number> | null)[]>;
 }
+
+const entityValueAt = (
+    snap: BufferedSnapshot,
+    serverEid: number,
+    ci: number,
+): Record<string, any> | undefined => snap.componentValuesByEntity.get(serverEid)?.[ci] ?? undefined;
 
 function modeFor(c: Component<any>): InterpolationMode {
     const sync = c.__sync as SyncSpec | undefined;
@@ -186,19 +192,20 @@ export class SnapshotInterpolation {
             if (localEid === undefined) continue;
             if (shouldSkip(localEid)) continue;
 
-            for (const c of components) {
+            for (let ci = 0; ci < components.length; ci++) {
+                const c = components[ci]!;
                 let aIdx = aIndex;
-                let va = a.componentValuesByEntity.get(serverEid)?.get(c);
+                let va = entityValueAt(a, serverEid, ci);
                 while (va === undefined && aIdx > 0) {
                     aIdx--;
-                    va = tl.at(aIdx).sample.componentValuesByEntity.get(serverEid)?.get(c);
+                    va = entityValueAt(tl.at(aIdx).sample, serverEid, ci);
                 }
 
                 let bIdx = bIndex;
-                let vb = b.componentValuesByEntity.get(serverEid)?.get(c);
+                let vb = entityValueAt(b, serverEid, ci);
                 while (vb === undefined && bIdx < tl.length - 1) {
                     bIdx++;
-                    vb = tl.at(bIdx).sample.componentValuesByEntity.get(serverEid)?.get(c);
+                    vb = entityValueAt(tl.at(bIdx).sample, serverEid, ci);
                 }
 
                 if (va === undefined && vb === undefined) continue;
@@ -277,9 +284,10 @@ export class SnapshotInterpolation {
             if (shouldSkip(localEid)) continue;
             const comps = snap.componentValuesByEntity.get(serverEid);
             if (comps === undefined) continue;
-            for (const c of components) {
-                const v = comps.get(c);
-                if (v === undefined) continue;
+            for (let ci = 0; ci < components.length; ci++) {
+                const c = components[ci]!;
+                const v = comps[ci];
+                if (v == null) continue;
                 if (world.has(localEid, c)) world.update(localEid, c, v as any);
                 else world.add(localEid, c, v as any);
             }

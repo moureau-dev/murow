@@ -28,12 +28,12 @@ describe('slerp interpolation', () => {
         sync: networked({ rate: 'every-tick', interest: 'global', interp: 'slerp' }), // not a quat → lerp fallback
     });
 
-    function snap(tick: number, receivedAt: number, values: Record<string, number>, c: any): BufferedSnapshot {
+    function snap(tick: number, receivedAt: number, values: Record<string, number>): BufferedSnapshot {
         return {
             receivedAt,
             serverTick: tick,
             entityIds: [1],
-            componentValuesByEntity: new Map([[1, new Map([[c, values]])]]),
+            componentValuesByEntity: new Map([[1, [values]]]),
         };
     }
 
@@ -44,8 +44,8 @@ describe('slerp interpolation', () => {
 
         const map = new Map<number, number>([[1, e]]);
         const buf = new SnapshotInterpolation(map, 8, 0, 300);
-        buf.record(snap(0, 0, { x: 0, y: 0, z: 0, w: 1 }, Rotation));
-        buf.record(snap(1, 100, { x: 0, y: 0, z: Math.SQRT1_2, w: Math.SQRT1_2 }, Rotation));
+        buf.record(snap(0, 0, { x: 0, y: 0, z: 0, w: 1 }));
+        buf.record(snap(1, 100, { x: 0, y: 0, z: Math.SQRT1_2, w: Math.SQRT1_2 }));
 
         // now = 75 → render tick 0.75 between the two snapshots.
         buf.apply(world, 75, [Rotation], () => false);
@@ -64,8 +64,8 @@ describe('slerp interpolation', () => {
         world.add(e, Scale, { s: 0 });
         const map = new Map<number, number>([[1, e]]);
         const buf = new SnapshotInterpolation(map, 8, 0, 300);
-        buf.record(snap(0, 0, { s: 0 }, Scale));
-        buf.record(snap(1, 100, { s: 4 }, Scale));
+        buf.record(snap(0, 0, { s: 0 }));
+        buf.record(snap(1, 100, { s: 4 }));
         buf.apply(world, 75, [Scale], () => false);
         expect(world.get(e, Scale).s).toBeGreaterThan(0);
         expect(world.get(e, Scale).s).toBeLessThan(4);

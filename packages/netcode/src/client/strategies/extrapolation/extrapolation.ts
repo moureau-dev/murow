@@ -38,12 +38,13 @@ export function applyExtrapolation(
         const comps = newest.componentValuesByEntity.get(serverEid);
         if (comps === undefined) continue;
 
-        for (const c of components) {
-            const v = comps.get(c);
-            if (v === undefined) continue;
+        for (let ci = 0; ci < components.length; ci++) {
+            const c = components[ci]!;
+            const v = comps[ci];
+            if (v == null) continue;
 
             let toWrite: Record<string, number> = v;
-            const vp = prev?.componentValuesByEntity.get(serverEid)?.get(c);
+            const vp = prev?.componentValuesByEntity.get(serverEid)?.[ci] ?? undefined;
             if (vp !== undefined && k > 0) {
                 const out = scratch;
                 for (const fieldName of c.fieldNames as string[]) {

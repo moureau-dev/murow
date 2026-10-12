@@ -165,7 +165,7 @@ export interface DecodedDelta {
     entityIds: number[];
     serverEntityIds: number[];
     despawnedServerIds: number[];
-    valuesByServerEntity: Map<number, Map<Component<any>, Record<string, any>>>;
+    valuesByServerEntity: Map<number, (Record<string, any> | null)[]>;
 }
 
 export function decodeDelta(
@@ -191,7 +191,7 @@ export function decodeDelta(
 
     const localEntityIds: number[] = [];
     const serverEntityIds: number[] = [];
-    const valuesByServerEntity = new Map<number, Map<Component<any>, Record<string, any>>>();
+    const valuesByServerEntity = new Map<number, (Record<string, any> | null)[]>();
 
     for (let i = 0; i < entityCount; i++) {
         const serverEid = dv.getUint32(off, true); off += 4;
@@ -203,11 +203,13 @@ export function decodeDelta(
         }
 
         const present: Component<any>[] = [];
+        const presentIndex: number[] = [];
         for (let ci = 0; ci < components.length; ci++) {
             const wordIndex = ci >>> 5;
             const bitIndex = ci & 31;
             if ((mask[wordIndex] & (1 << bitIndex)) !== 0) {
                 present.push(components[ci]);
+                presentIndex.push(ci);
             }
         }
 
@@ -215,8 +217,9 @@ export function decodeDelta(
         localEntityIds.push(localEid);
 
         const applyToWorld = shouldApply(localEid);
-        const compMap = new Map<Component<any>, Record<string, any>>();
-        for (const c of present) {
+        const compMap: (Record<string, any> | null)[] = new Array(components.length).fill(null);
+        for (let pi = 0; pi < present.length; pi++) {
+            const c = present[pi]!;
             const update: Record<string, any> = {};
             const sync = (c as any).__sync;
             for (const fieldName of c.fieldNames as string[]) {
@@ -231,7 +234,7 @@ export function decodeDelta(
                     off += field.size;
                 }
             }
-            compMap.set(c, update);
+            compMap[presentIndex[pi]!] = update;
             if (applyToWorld) {
                 if (!world.has(localEid, c)) {
                     world.add(localEid, c, update as any);

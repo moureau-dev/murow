@@ -24,16 +24,16 @@ describe('SnapshotInterpolation', () => {
         tick: number,
         values: { serverEid: number; comp: Component<any>; value: Record<string, number> }[],
     ): BufferedSnapshot {
-        const m = new Map<number, Map<Component<any>, Record<string, number>>>();
+        const m = new Map<number, (Record<string, number> | null)[]>();
         const ids: number[] = [];
         for (const v of values) {
             if (!ids.includes(v.serverEid)) ids.push(v.serverEid);
-            let inner = m.get(v.serverEid);
-            if (inner === undefined) {
-                inner = new Map();
-                m.set(v.serverEid, inner);
+            let row = m.get(v.serverEid);
+            if (row === undefined) {
+                row = [];
+                m.set(v.serverEid, row);
             }
-            inner.set(v.comp, v.value);
+            row.push(v.value);
         }
         return { receivedAt, serverTick: tick, entityIds: ids, componentValuesByEntity: m };
     }

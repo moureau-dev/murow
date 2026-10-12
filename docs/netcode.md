@@ -676,7 +676,8 @@ interface DecodedDelta {
   entityIds: number[];                // local ids (post-ensureEntity)
   serverEntityIds: number[];          // ids as they were on the wire
   despawnedServerIds: number[];       // server ids to despawn locally
-  valuesByServerEntity: Map<number, Map<Component<any>, Record<string, any>>>;
+  valuesByServerEntity: Map<number, (Record<string, any> | null)[]>;
+  // row[ci] is the decoded value for `components[ci]` (same order as the decode call); null when absent.
 }
 ```
 

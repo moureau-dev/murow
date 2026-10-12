@@ -13,7 +13,7 @@ describe('HybridStrategy', () => {
             receivedAt,
             serverTick: tick,
             entityIds: [1],
-            componentValuesByEntity: new Map([[1, new Map([[P, { x }]])]]),
+            componentValuesByEntity: new Map([[1, [{ x }]]]),
         };
     }
 

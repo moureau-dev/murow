@@ -186,7 +186,10 @@ export class GameClient<
                     if (!this.predictedEntities.has(localEid)) continue;
                     const comps = decoded.valuesByServerEntity.get(serverEid);
                     if (comps === undefined) continue;
-                    for (const [c, value] of comps) {
+                    for (let ci = 0; ci < comps.length; ci++) {
+                        const c = this.syncedComponents[ci];
+                        const value = comps[ci];
+                        if (c === undefined || value == null) continue;
                         // Per-component snap dead-zone: a correction smaller than
                         // the component's `snapThreshold` keeps the predicted value
                         // (smooths) instead of hard-snapping.

@@ -312,13 +312,16 @@ describe('multiplayer end-to-end', () => {
         const localEid = client.assignedEntity!;
         const serverEid = [...(client as any).serverToLocal.entries()]
             .find(([, lid]) => lid === localEid)![0] as number;
+        const synced = (client as any).syncedComponents as Array<unknown>;
+        const row: (Record<string, number> | null)[] = new Array(synced.length).fill(null);
+        row[synced.indexOf(Velocity)] = { vx: 0, vy: 0 };
         const stubDelta = (clientAckTick: number) => ({
             tick: 0,
             clientAckTick,
             entityIds: [localEid],
             serverEntityIds: [serverEid],
             despawnedServerIds: [] as number[],
-            valuesByServerEntity: new Map([[serverEid, new Map([[Velocity, { vx: 0, vy: 0 }]])]]),
+            valuesByServerEntity: new Map([[serverEid, row]]),
         });
 
         (client as any).reconcile(stubDelta(sequenceAtPredict - 1));
