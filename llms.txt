@@ -2,13 +2,13 @@
 
 Murow is a TypeScript game engine for **server-authoritative multiplayer** games. It ships three packages from a single npm install (`murow`):
 
-- `murow` — core: ECS, game loop, input, audio, math, binary codecs, protocol primitives, transport-agnostic networking, renderer abstractions
-- `murow/webgpu` — concrete WebGPU 2D/3D renderer with compute shaders and a typed shader DSL (TypeGPU)
+- `murow` — core: ECS, game loop, input, audio, math, binary codecs, protocol primitives, transport-agnostic networking, renderer abstractions, the agnostic renderer managers, and the shader DSL/codegen (`murow/gpu`)
+- `murow/webgpu` — the WebGPU backend: it implements the agnostic renderer's backend ports (device, codegen target, presentation, `Skinning`, `Particles3D`)
 - `murow/netcode` — opinionated multiplayer layer (snapshots, prediction with rollback, interest plugins, lag compensation) built on top of the protocol + net primitives
 
 The `webgpu` and `netcode` subpaths are bundled with the `murow` package — `npm install murow` is the only install.
 
-**The engine is renderer-agnostic.** `murow` ships *abstract renderer contracts* + the asset pipeline (`AssetBucket`, `PrefabBucket`, `parseGltf`, `parseSpritesheet`, `SkeletalAnimation`) + CPU collision/picking (`Hitbox`, `HitboxLibrary`, `Raycaster`, `Ray3D`) — all pure CPU, usable on a headless server. `murow/webgpu` is the reference backend; you can write a Three.js / PixiJS / Babylon backend by subclassing `Base2DRenderer` / `Base3DRenderer`. The WebGPU backend handles GPU-side frame interpolation (lerp), frustum culling, distance-based animation culling, sparse-batched draw calls, glTF skinning, and instance recycling automatically — see "WebGPU Renderer" section.
+**The engine is renderer-agnostic.** `murow` ships *abstract renderer contracts* + the asset pipeline (`AssetBucket`, `PrefabBucket`, `parseGltf`, `parseSpritesheet`, `SkeletalAnimation`) + CPU collision/picking (`Hitbox`, `HitboxLibrary`, `Raycaster`, `Ray3D`) — all pure CPU, usable on a headless server. `murow/webgpu` is the reference backend; other backends implement the agnostic renderer's `RendererRuntime` port (device + shader-codegen target + presentation + the `Skinning`/`Particles3D` feature ports), and the shared managers run unchanged. The renderer handles GPU-side frame interpolation (lerp), frustum culling, distance-based animation culling, sparse-batched draw calls, glTF skinning, and instance recycling automatically — see "WebGPU Renderer" section.
 
 **This is not Unity, Three.js, PlayCanvas, or Phaser.** Do not apply patterns from those. Murow is **data-oriented**: an ECS World holds typed components in Structure-of-Arrays storage, a GameLoop drives systems at a fixed tick rate, and a renderer reads world state once per frame.
 
@@ -23,17 +23,20 @@ Before writing anything, internalize these — they are the patterns agents wron
 
 ## Architecture
 
-Murow is modular.
+Rendering is split into three layers:
 
-The core runtime does not require a particular renderer. Rendering integrations are separate modules that plug into the core's abstract renderer contracts (`Base2DRenderer` / `Base3DRenderer`).
+- **`murow/renderer/managers/runtime`** — the **agnostic renderer**: every manager (instances, materials, lights, shadows, decals, particles, camera, models, and the 2D sprites/sheets/geometry) plus the shader DSL and IR. No GPU API, no WGSL, no compute. It drives a `RendererRuntime` port.
+- **`murow/gpu`** — the GPU-common layer: schemas, the `d`/`std` shader DSL + IR, codegen (a `TargetSyntax` writes the shader text), resource descriptors, and the backend-neutral device model.
+- **`murow/webgpu`** — the WebGPU backend: implements `RendererRuntime` (`createPresentation`, `compile` via the WGSL target, `createRawBuffer`, `createBindGroupLayout`, `shaderSource`) and the compute feature ports (`Skinning`, `Particles3D`), then composes the shared managers via `RendererManagers` / `RendererManagers2D`.
+
+A different backend (WebGL, etc.) implements the **same** `RendererRuntime` port with its own device + `TargetSyntax`, and its own `Skinning`/`Particles3D` implementations (CPU or vertex when the API has no compute). The renderer and managers do not change.
 
 You can use Murow with:
 - **Murow's WebGPU renderer** (`murow/webgpu`) — the reference backend: 2D/3D, GPU frame interpolation, glTF skinning
-- **Three.js** — via a custom `Base3DRenderer` backend
-- **PixiJS** — via a custom `Base2DRenderer` backend
-- **custom rendering systems** — the core is pure CPU and runs headless
+- **a custom backend** — implement the `RendererRuntime` port (plus `Skinning`/`Particles3D` if you want the compute features)
+- **a custom rendering system** — the core is pure CPU and runs headless
 
-**Do not assume that `murow` implies use of `WebGPU3DRenderer`.** The ECS, game loop, input, asset pipeline, netcode, and server side are all renderer-independent and run without any GPU (servers, tests, simulation-only processes). Pick a renderer only when you actually draw — and if you draw with something other than WebGPU, subclass the matching `Base*Renderer` instead of reaching for a `WebGPU*Renderer`.
+**Do not assume that `murow` implies use of `WebGPU3DRenderer`.** The ECS, game loop, input, asset pipeline, netcode, and server side are all renderer-independent and run without any GPU (servers, tests, simulation-only processes). Pick a renderer only when you actually draw.
 
 ## AI GENERATION RULES
 
@@ -183,7 +186,7 @@ import { WebGPU3DRenderer } from "https://cdn.jsdelivr.net/npm/murow/dist/webgpu
 
 Pin a version for reproducibility: `https://cdn.jsdelivr.net/npm/murow@0.1.8/+esm` and `https://cdn.jsdelivr.net/npm/murow@0.1.8/dist/webgpu/esm/murow.webgpu.bundle.js`.
 
-**Use exactly these two URLs.** Do NOT import the renderer from `esm.sh` / `unpkg` / a generic `/murow/webgpu` ESM proxy — the webgpu subpath is a multi-file build with external `murow` imports, not a self-contained browser entry point. `murow.webgpu.bundle.js` exists specifically for direct browser use (all deps inlined so TypeGPU's `$internal` symbol crosses a single module boundary):
+**Use exactly these two URLs.** Do NOT import the renderer from `esm.sh` / `unpkg` / a generic `/murow/webgpu` ESM proxy — the webgpu subpath is a multi-file build with external `murow` imports, not a self-contained browser entry point. `murow.webgpu.bundle.js` exists specifically for direct browser use (all deps inlined into one self-contained module):
 
 ```js
 // ❌ Not a supported browser entry point
@@ -278,7 +281,7 @@ import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-webs
 import {
   WebGPU2DRenderer, WebGPU3DRenderer,
   Camera2D, Camera3D,
-  GeometryBuilder, ComputeBuilder, ComputeKernel,
+  GeometryBuilder,
   ParticleEmitter,
   Spritesheet, createTextureFromBitmap,
   SpriteAccessor, AnimationController, MorphAnimation,
@@ -2371,36 +2374,29 @@ The netcode layer assumes **ordered delivery**. WebSocket over TCP satisfies tha
 
 `murow` ships abstract renderer contracts and the asset pipeline. Everything here is **pure CPU** — no GPU, no canvas, no device. The `webgpu` (or any) backend is responsible for the upload step.
 
-### Implementing a custom backend (PixiJS, Three.js, Babylon, …)
-Subclass `Base2DRenderer` or `Base3DRenderer` and consume an `AssetBucket` to drive sizing and uploads:
+### Implementing a custom backend
+
+A backend implements the `RendererRuntime` port from `murow/renderer/managers/runtime` (device + `compile` + `createRawBuffer` + `createBindGroupLayout` + `createPresentation` + `shaderSource` + the `Skinning`/`Particles3D` feature ports) and composes the shared managers:
 
 ```ts
-import {
-  Base3DRenderer,
-  type AssetBucket,
-  type Renderer3DOptions,
-} from 'murow';
+import { RendererManagers } from 'murow/renderer/managers';
+import type { RendererRuntime } from 'murow/renderer/managers';
 
-class MyBackendRenderer extends Base3DRenderer {
-  constructor(canvas: HTMLCanvasElement, options: Renderer3DOptions & { assets?: AssetBucket }) {
-    super(canvas, options);
-    // Read options.assets — it's an AssetBucket, walk assets.prefabs.entries() to size GPU buffers
-  }
-  async init() {
-    const bucket = this._prefabs as AssetBucket | undefined;
-    if (bucket) {
-      await bucket.load();
-      for (const prefab of bucket.prefabs.entries()) {
-        // Upload each parsed prefab to your renderer's primitives
-      }
-    }
-  }
-  render(alpha: number) { /* draw with interpolation alpha */ }
-  destroy()             { /* cleanup */ }
-}
+const runtime: RendererRuntime = {
+  async createPresentation(canvas) { /* your device + canvas surface */ },
+  presentation: undefined as never,
+  compile(shaders) { /* codegen: emit GLSL/HLSL via your TargetSyntax */ },
+  createRawBuffer(schema, usage) { /* allocate */ },
+  createBindGroupLayout(descriptor) { /* allocate */ },
+  shaderSource(name) { return MY_SHADERS[name] ?? ''; },
+  skinning: mySkinning,     // compute, or a CPU/vertex implementation
+  particles: myParticles,
+};
+
+const managers = new RendererManagers({ runtime, core, camera, /* … */ });
 ```
 
-`@murow/webgpu` is the reference implementation. You only need to write a backend if WebGPU doesn't fit (older browsers, native target via Skia, integrating into an existing Three.js scene, etc.). Everything else in the engine — ECS, game loop, netcode — is renderer-independent.
+The 2D mirror is `RendererManagers2D`. The managers, ECS, asset pipeline, and netcode are identical regardless of backend.
 
 ### `AssetBucket` — primary entry point (wraps PrefabBucket + TextureBucket)
 
@@ -2810,7 +2806,7 @@ API:
 
 ## WebGPU Renderer (`murow/webgpu`)
 
-Concrete WebGPU 2D/3D renderer powered by **TypeGPU** (write WGSL in TypeScript with full type safety). Both renderers follow the same shape: `new` → `await init()` → drive instances → `render(alpha)`.
+Concrete WebGPU 2D/3D renderer. Shaders are authored in the `d`/`std` DSL and compiled to WGSL by the backend. Both renderers follow the same shape: `new` → `await init()` → drive instances → `render(alpha)`.
 
 ### What the renderer does automatically
 
@@ -2831,7 +2827,7 @@ You don't write any of this. The renderer handles it under the hood as long as y
 
 ### Managers and handles
 
-The renderer is a composition root: `new WebGPU3DRenderer(canvas, options)`, `init()`, `render(alpha)`, `storePreviousState()`, `destroy()`, `onResize`, and `worldToScreen` stay on it. Each subsystem, including `renderer.models` for mesh creation/loading and `renderer.compute` for compute kernels, is a manager reached off it:
+The renderer is a composition root: `new WebGPU3DRenderer(canvas, options)`, `init()`, `render(alpha)`, `storePreviousState()`, `destroy()`, `onResize`, and `worldToScreen` stay on it. Each subsystem, including `renderer.models` for mesh creation/loading, is a manager reached off it:
 
 | Manager | Creation | Returns |
 |---|---|---|
@@ -2944,7 +2940,7 @@ holo.setTexture('mask', 'smoke');    // re-bind any declared texture by name
 holo.destroy();                      // free the slot + uniform buffer
 ```
 
-`MaterialHandle<U>` (`U` = the `uniforms` schema; accessors typed with TypeGPU `Infer`):
+`MaterialHandle<U>` (`U` = the `uniforms` schema; accessors typed from the schema's inferred host type):
 
 | Member | Description |
 |---|---|
@@ -3096,7 +3092,7 @@ renderer.render(alpha);
 renderer.onResize((w, h) => { /* ... */ });
 ```
 
-`renderer.sprites` is a collection manager: `get(id)`, `has(id)`, `each(cb)`, `remove(id)`, `clear()`, `capacity`, `count`, and an `events` system. Sprites carry a versioned `id` and an `alive` flag; `sprite.destroy()` is idempotent and frees the slot. `renderer.sheets`, `renderer.geometry`, and `renderer.compute` are the other 2D managers.
+`renderer.sprites` is a collection manager: `get(id)`, `has(id)`, `each(cb)`, `remove(id)`, `clear()`, `capacity`, `count`, and an `events` system. Sprites carry a versioned `id` and an `alive` flag; `sprite.destroy()` is idempotent and frees the slot. `renderer.sheets` and `renderer.geometry` are the other 2D managers.
 
 ### Collection framework — `murow/core/collection`
 
@@ -3188,7 +3184,6 @@ const cube  = renderer.models.createCube({ size: 1 });
 const model = renderer.models.loadModel(rawModelData);          // raw geometry (ModelData), no bucket
 const gltf  = await renderer.models.loadGltf('https://example.com/model.glb', { animations: ['Idle'] });  // manual glTF path
 const up    = renderer.models.uploadParsedGltf(parsedGltf);     // GPU-upload an already-parsed glTF (CPU/GPU split)
-const k     = renderer.compute.create('name', { workgroupSize: 256 });   // compute kernel (see Compute Shaders)
 ```
 
 (`WebGPU2DRenderer` exposes the same `renderer.raycast` against sprite hitboxes, sorted topmost-first.)
@@ -3390,7 +3385,7 @@ class SpriteAccessor {
 
 ### Typed shader DSL — `d` and `std`
 
-`d` builds GPU data layouts; `std` is the WGSL math namespace usable inside compute/vertex/fragment closures. The renderer compiles your JS closures to WGSL via TypeGPU.
+`d` builds GPU data layouts; `std` is the WGSL math namespace usable inside compute/vertex/fragment closures. The backend compiles your JS closures to its target (WGSL on WebGPU).
 
 ```ts
 const Particle = d.struct({
@@ -3404,64 +3399,9 @@ const Particle = d.struct({
 - Composite: `d.struct({...})`, `d.arrayOf(type, length)`, `d.sizeOf(type)`
 - Math (same names as WGSL): `std.abs`, `std.min`, `std.max`, `std.saturate`, `std.step`, `std.length`, `std.distance`, `std.pow`, `std.sin`, `std.cos`, `std.normalize`, `std.reflect`, `std.refract`
 
-### Compute shaders — `ComputeBuilder` / `ComputeKernel`
+### Compute features
 
-```ts
-interface ComputeOptions {
-  workgroupSize: number | [number, number] | [number, number, number];
-}
-
-interface ComputeBufferDef {
-  storage?: AnyWgslData;                  // typed array data — use d.arrayOf(Struct, N)
-  uniform?: AnyWgslData;                  // uniform block — use d.struct({...})
-  readwrite?: boolean;                    // storage only; default false (read-only)
-  external?: TgpuBuffer<AnyWgslData>;     // bind an existing buffer
-}
-
-// ComputeInput passed to the shader closure as the second arg:
-interface ComputeInput {
-  globalId:      { x: number; y: number; z: number };
-  localId:       { x: number; y: number; z: number };
-  localIndex:    number;
-  workgroupId:   { x: number; y: number; z: number };
-  numWorkgroups: { x: number; y: number; z: number };
-}
-
-class ComputeKernel<TBuffers> {
-  write<K extends keyof TBuffers & string>(bufferName: K, data: unknown): void;
-  read(bufferName: keyof TBuffers & string): Promise<unknown>;
-  dispatch(countOrGroups: number | [number, number?, number?]): void;
-  encode(encoder: GPUCommandEncoder, countOrGroups: number | [number, number?, number?]): void;
-  getBuffer(bufferName: keyof TBuffers & string): TgpuBuffer<AnyWgslData>;
-  destroy(): void;
-}
-```
-
-Usage:
-
-```ts
-const compute = renderer.compute
-  .create('particle-physics', { workgroupSize: 256 })
-  .buffers({
-    particles: { storage: d.arrayOf(Particle, 10_000), readwrite: true },
-    config:    { uniform: d.struct({ deltaTime: d.f32, gravity: d.f32, count: d.u32 }) },
-  })
-  .shader(({ particles, config }, { globalId }) => {
-    const idx = globalId.x;
-    if (idx >= config.count) return;
-    const p = particles[idx];
-    p.velY = p.velY + config.gravity * config.deltaTime;
-    p.posY = p.posY + p.velY * config.deltaTime;
-  })
-  .build();
-
-compute.write('config',    { deltaTime: 1/60, gravity: 0.3, count: 10_000 });
-compute.write('particles', initialArray);
-compute.dispatch(10_000);                          // 1D dispatch
-compute.dispatch([10, 10]);                        // 2D dispatch
-const data = await compute.read('particles');      // round-trips to CPU
-compute.destroy();
-```
+Skeletal animation (`Skinning`) and GPU particles (`Particles3D`) are **backend ports** on `RendererRuntime`. `murow/webgpu` implements them with compute kernels; a backend without compute provides CPU/vertex implementations of the same interfaces. There is no public `renderer.compute` / `ComputeBuilder` API — the shared renderer only talks to the ports.
 
 ### Custom instanced geometry — `GeometryBuilder` / `CustomGeometry`
 
@@ -3642,7 +3582,7 @@ class MorphAnimation {
 - `createCube`, `createPlane`, `createGrid`, `createSphere`, `createCylinder`, `createCone` — individual geometry factory functions (e.g. `createCube({ size: 2, uv: 'cross' })`).
 - `DynamicSprite`, `StaticSprite`, `SpriteUniforms`, `DynamicInstance3D`, `StaticInstance3D`, `DynamicMesh`, `StaticMesh`, `SkinnedStaticMesh`, `MeshUniforms` — exported `d.struct` shapes the renderer uses internally. Use these if you want to pack data into the same format the renderer reads.
 
-### Shader util signatures (TypeGPU functions — call inside vertex/fragment closures)
+### Shader util signatures (DSL helpers — call inside vertex/fragment closures)
 
 ```ts
 rotate2d(point: d.v2f, angle: number): d.v2f;
@@ -3699,7 +3639,7 @@ inverseLerp(min: number, max: number, value: number): number;
 | Calling `server.on('intent', handler)` to implement gameplay | That event is **observe-only** telemetry. Gameplay belongs in `defineHandlers(intents, {...})`. Both can coexist |
 | Casting `world.fields(C)` results to specific typed arrays | Don't - the return type is precisely inferred from the schema (`f32 -> Float32Array`, `u8 -> Uint8Array`, etc.). Casts only mask bugs |
 | Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `instances.add({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
-| Expecting a skybox or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and a material system (`standard` / `unlit` / `emissive` / custom `shader`), but no skybox or PBR. Write a custom `Base3DRenderer` backend if you need more |
+| Expecting a skybox or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and a material system (`standard` / `unlit` / `emissive` / custom `shader`), but no skybox or PBR. Write a custom backend (implement the `RendererRuntime` port) if you need more |
 | `instances.add({ model: ... })` | The option key is `prefab`, not `model`. Use `instances.add({ prefab: assets.prefabs.get(id) })` |
 | `renderer.models.createCube({ size: 1 })` for the player / obstacles / ground | Declare reusable models as `AssetBucket` prefabs (`assets.prefabs.get('id')`) — the `renderer.models` factories are one-off/debug conveniences: no parallel load, no typed ids, no bucket GPU sizing |
 | `.prefabs(({ bucket }) => { bucket.add(...); })` — block body doesn't return the bucket | `textures()` / `prefabs()` callbacks MUST return the bucket: expression body (`({ bucket }) => bucket.add(...)`) or explicit `return bucket.add(...)`. A block that only calls `.add(...)` returns `undefined` and registers nothing |
@@ -3760,9 +3700,9 @@ export class Arena<T extends DriverType = 'client'> {
 
 ### Build tooling: no special plugin required
 
-The WebGPU renderer includes a **runtime transpiler** (`attachShaderMetadata`) that parses shader function source via `Function.toString()` and embeds the metadata TypeGPU needs — no build plugin necessary. This works in any bundler (Vite, esbuild, Webpack, Bun, even plain `<script type="module">` with an import map) and any framework (React, Vue, Svelte, Solid, vanilla HTML).
+The renderer parses shader bodies from their source (`Function.toString()`) at link time — no build plugin to install, and it works in any bundler (Vite, esbuild, Webpack, Bun, or a plain `<script type="module">` with an import map). Because bodies are parsed from source, do **not** enable identifier or syntax minification for bundles containing shader bodies; whitespace-only minification is fine.
 
-The old `unplugin-typegpu` Vite plugin is no longer required. The runtime transpiler is the default — just `import { WebGPU3DRenderer } from 'murow/webgpu'` and it works.
+Just `import { WebGPU3DRenderer } from 'murow/webgpu'`.
 
 The server side (`bun run server/index.ts`) never imports the renderer, so it has no WebGPU dependency at all.
 
