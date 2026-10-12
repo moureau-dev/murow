@@ -374,3 +374,72 @@ describe('per-peer snapshot budget', () => {
         void has;
     });
 });
+
+describe('interest plugin model (independent, per component)', () => {
+    const AoiC = defineComponent('AoiC', { schema: { v: f32 }, sync: networked({ rate: 'every-tick', interest: 'aoi' }) });
+    const TeamC = defineComponent('TeamC', { schema: { v: f32 }, sync: networked({ rate: 'every-tick', interest: 'team' }) });
+    const GlobalC = defineComponent('GlobalC', { schema: { v: f32 }, sync: networked({ rate: 'every-tick', interest: 'global' }) });
+    const MA = defineComponent('MA', { _p: f32 });
+    const MB = defineComponent('MB', { _p: f32 });
+
+    class Stub implements ServerPlugin {
+        constructor(readonly name: string, private readonly mark: any) {}
+        filterSnapshot(_p: any, world: World, dirty: ReadonlyArray<number>, out: number[]): void {
+            for (let i = 0; i < dirty.length; i++) if (world.has(dirty[i]!, this.mark)) out.push(dirty[i]!);
+        }
+    }
+
+    test('each component is governed by its own named plugin; global always ships', async () => {
+        const intents = defineIntents({ noop: { x: f32 } });
+        const rpcs = defineRpcs({});
+        const comps = [AoiC, TeamC, GlobalC, MA, MB];
+        const serverWorld = new World({ maxEntities: 32, components: comps });
+        const clientWorld = new World({ maxEntities: 32, components: comps });
+        const serverLoop = new GameLoop({ tickRate: 60, type: 'manual-server' });
+        const clientLoop = new GameLoop({ tickRate: 60, type: 'manual-client' });
+        const transport = new MemoryServerTransport();
+        const server = new GameServer({ world: serverWorld, loop: serverLoop, transport, protocol: { intents, rpcs }, snapshot: { rate: 60 } });
+        server.use(new Stub('aoi', MA));
+        server.use(new Stub('team', MB));
+        const { client: clientTransport } = transport.connectClient();
+        const client = new GameClient({ world: clientWorld, loop: clientLoop, transport: clientTransport, protocol: { intents, rpcs } });
+
+        const e1 = serverWorld.spawn(); // aoi sees (MA) → AoiC + GlobalC ship
+        serverWorld.add(e1, AoiC, { v: 1 });
+        serverWorld.add(e1, GlobalC, { v: 1 });
+        serverWorld.add(e1, MA, { _p: 0 });
+
+        const e2 = serverWorld.spawn(); // team sees (MB) → TeamC + GlobalC ship
+        serverWorld.add(e2, TeamC, { v: 2 });
+        serverWorld.add(e2, GlobalC, { v: 2 });
+        serverWorld.add(e2, MB, { _p: 0 });
+
+        const e3 = serverWorld.spawn(); // neither plugin sees → not sent (no global)
+        serverWorld.add(e3, AoiC, { v: 3 });
+        serverWorld.add(e3, TeamC, { v: 33 });
+
+        const e4 = serverWorld.spawn(); // aoi sees, but TeamC is team-governed → not sent (only TeamC, no global)
+        serverWorld.add(e4, TeamC, { v: 44 });
+        serverWorld.add(e4, MA, { _p: 0 });
+
+        serverLoop.step(1 / 60 + 0.001);
+        await flush();
+        clientLoop.step(1 / 60 + 0.001);
+        await flush();
+
+        const local = (sid: number) => (client as any).serverToLocal.get(sid);
+
+        const l1 = local(e1 as number)!;
+        expect(clientWorld.has(l1, AoiC)).toBe(true);
+        expect(clientWorld.has(l1, GlobalC)).toBe(true);
+        expect(clientWorld.has(l1, TeamC)).toBe(false);
+
+        const l2 = local(e2 as number)!;
+        expect(clientWorld.has(l2, TeamC)).toBe(true);
+        expect(clientWorld.has(l2, GlobalC)).toBe(true);
+        expect(clientWorld.has(l2, AoiC)).toBe(false);
+
+        expect(local(e3 as number)).toBeUndefined(); // neither plugin → excluded
+        expect(local(e4 as number)).toBeUndefined(); // only a team component, aoi sees it, team does not
+    });
+});

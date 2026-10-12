@@ -520,8 +520,11 @@ class TelemetryPlugin implements ServerPlugin {
   }
 
   filterSnapshot(peer, world, dirty, out) {
-    // Push entities visible to `peer` onto `out`. Plugins compose in
-    // registration order.
+    // Push entities this plugin deems visible to `peer` onto `out`. Each
+    // plugin is consulted independently against the candidate set (not
+    // composed); a component's `sync.interest` selects the plugin that
+    // governs it. `'global'` components bypass plugins and force their
+    // entity into the snapshot.
     for (const eid of dirty) out.push(eid);
   }
 }
