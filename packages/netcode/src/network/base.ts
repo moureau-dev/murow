@@ -20,6 +20,13 @@ export interface ServerEventPayloads<R extends RpcSchemaMap = RpcSchemaMap> {
     connection: { peer: Peer };
     /** A peer disconnected. */
     disconnection: { peer: Peer; reason: string };
+    /**
+     * A peer's transport dropped but its session (entity + ack cursor) is held
+     * for `reconnection.graceMs` so it can resume.
+     */
+    suspended: { peer: Peer; reason: string };
+    /** A peer reconnected and resumed its held session. */
+    reconnection: { peer: Peer };
     /** An intent arrived from a peer and dispatched to its handler. */
     intent: { peer: Peer; kind: number; name: string; payload: unknown; tick: number };
     /** Engine-level intent failure: decode error or unknown kind. */
@@ -37,6 +44,10 @@ export interface ClientEventPayloads<R extends RpcSchemaMap = RpcSchemaMap> {
     connected: {};
     /** Transport closed. */
     disconnected: { reason: string };
+    /** The server issued or confirmed this client's session token. */
+    session: { token: string; resumed: boolean };
+    /** A reconnect resumed a prior session; the server is re-baselining. */
+    reconnected: {};
     /** Server sent a kick frame; disconnect imminent. */
     kicked: { reason: string };
     /** A snapshot arrived. */

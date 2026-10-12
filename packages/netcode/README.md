@@ -371,6 +371,27 @@ time as `client.assignedEntity`. The same blocked send also emits an
 The client auto-marks the assigned entity as predicted, so
 reconciliation only rolls back state for entities the peer owns.
 
+### Reconnection
+
+Off by default; enable on both sides. The server holds a dropped peer's
+session (assigned entity + intent-ack cursor) for `reconnection.graceMs`
+(default 10000 ms). The client sends its token on connect so a reconnect
+resumes the same entity instead of being treated as a new peer.
+
+```ts
+const server = new GameServer({ world, loop, transport, protocol,
+  reconnection: { graceMs: 10000 } });
+const client = new GameClient({ world, loop, transport, protocol,
+  reconnection: true });   // or { token } to resume across a full reload
+```
+
+A held session fires server `'suspended'`; on resume the server fires
+`'reconnection'` (re-sending the assignment and a full baseline) and the
+client fires `'reconnected'`. `'disconnection'` fires only once the grace
+lapses (`reason: 'reconnect-timeout'`), on a kick, or when reconnection is
+off — so despawn the entity there, not on `'suspended'`. `client.sessionToken`
+exposes the token for persisting across reloads.
+
 ## Configuration
 
 <details>
@@ -547,6 +568,8 @@ narrow `emit` out, so only the engine fires engine events.
 ```ts
 server.on('connection',     ({ peer }) => { ... });
 server.on('disconnection',  ({ peer, reason }) => { ... });
+server.on('suspended',      ({ peer, reason }) => { ... });   // session held for resume
+server.on('reconnection',   ({ peer }) => { ... });           // session resumed
 server.on('intent',         ({ peer, name, payload, tick }) => { ... });
 server.on('intent-failed',  ({ peer, kind, reason }) => { ... });
 server.on('rpc',            ({ peer, name, args }) => { ... });
@@ -561,6 +584,8 @@ server.on('error',          ({ error, context }) => { ... });
 ```ts
 client.on('connected',    () => { ... });
 client.on('disconnected', ({ reason }) => { ... });
+client.on('session',      ({ token, resumed }) => { ... });
+client.on('reconnected',  () => { ... });
 client.on('kicked',       ({ reason }) => { ... });
 client.on('snapshot',     ({ tick, byteSize }) => { ... });
 client.on('rpc',          ({ name, payload }) => { ... });

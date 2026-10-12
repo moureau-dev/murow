@@ -29,11 +29,13 @@ const MSG_KICK = 0x82;
 const MSG_KICK_ACK = 0x83;
 const MSG_ASSIGN_ENTITY = 0x84;
 const MSG_SCHEMA = 0x85;
+const MSG_SESSION = 0x86;
 
 // Client -> server frames.
 const CMSG_INTENT = 0x01;
 const CMSG_RPC = 0x02;
 const CMSG_KICK_ACK = 0x03;
+const CMSG_RESUME = 0x04;
 
 export interface GameServerOptions<
     I extends IntentSchemaMap,
@@ -62,6 +64,12 @@ export interface GameServerOptions<
         /** Ms before forcing transport close after a kick. Default 2000. */
         ackTimeout?: number;
     };
+    /**
+     * Hold a dropped peer's session (assigned entity + intent-ack cursor) so a
+     * reconnecting client can resume it instead of being treated as new.
+     * `graceMs` is how long it is held. Off by default.
+     */
+    reconnection?: { graceMs?: number };
     /**
      * Schema fingerprint checked against each client. Defaults to one derived
      * from the synced components; a mismatch fires the client's `'error'` with
@@ -93,6 +101,14 @@ interface InternalPeer extends Peer {
     intentQueue: { sequence: number; payload: Uint8Array }[];
     /** Server entities currently visible to this peer (interest-aware). */
     visible: SlotSet;
+    /** Resume token for this peer's session. */
+    token: string;
+    /** True once the resume handshake resolved (resumed or treated as new). */
+    resolved: boolean;
+    /** True when this connection resumed a held session. */
+    resumed: boolean;
+    /** Timer that resolves the handshake when no resume frame arrives. */
+    handshakeTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export class GameServer<
@@ -140,11 +156,20 @@ export class GameServer<
     private readonly syncedWireSize: number[][] = [];
     private budgetBytes = 0;
     private priorityFn: ((entity: Entity, world: World) => number) | null = null;
+    private reconnection: { graceMs: number } | null = null;
+    private nextSession = 0;
+    private readonly sessionSalt = Math.random().toString(36).slice(2, 10);
+    private readonly sessions = new Map<
+        string,
+        { entity: Entity | -1; lastAckedClientTick: number; timer: ReturnType<typeof setTimeout> }
+    >();
 
     constructor(opts: GameServerOptions<I, R>) {
         super([
             'connection',
             'disconnection',
+            'suspended',
+            'reconnection',
             'intent',
             'intent-failed',
             'rpc',
@@ -172,6 +197,7 @@ export class GameServer<
         const effectiveSnapshotRate = Math.min(requestedSnapshotRate, tickRate);
         this.snapshotEvery = Math.max(1, Math.round(tickRate / effectiveSnapshotRate));
         this.kickAckTimeout = opts.kick?.ackTimeout ?? 2000;
+        this.reconnection = opts.reconnection ? { graceMs: opts.reconnection.graceMs ?? 10000 } : null;
         this.budgetBytes = opts.snapshot?.maxBytesPerPeer ?? 0;
         this.priorityFn = opts.snapshot?.priority ?? null;
         this.lastDt = opts.loop.ticker.intervalMs / 1000;
@@ -210,6 +236,10 @@ export class GameServer<
                 needsBaseline: true,
                 intentQueue: [],
                 visible: new SlotSet(this.world.getMaxEntities()),
+                token: '',
+                resolved: false,
+                resumed: false,
+                handshakeTimer: null,
             };
             this.peers.set(peerId, peer);
             peerTransport.onMessage((data) => this.handleIncoming(peer, data));
@@ -222,7 +252,11 @@ export class GameServer<
                 frame.set(fp, 1);
                 peerTransport.send(frame);
             }
-            this.emit('connection', { peer });
+            if (this.reconnection !== null) {
+                peer.handshakeTimer = setTimeout(() => this.resolveHandshake(peer, ''), 250);
+            } else {
+                this.resolveHandshake(peer, '');
+            }
         });
 
         this.transport.onDisconnection((peerId) => {
@@ -232,11 +266,75 @@ export class GameServer<
         });
     }
 
+    /**
+     * Resolve the resume handshake. With a token matching a held session the
+     * peer keeps its entity and ack cursor (`reconnection`); otherwise it is a
+     * new peer (`connection`). Sends the client its session token either way.
+     */
+    private resolveHandshake(peer: InternalPeer, token: string): void {
+        if (peer.resolved) return;
+        peer.resolved = true;
+        if (peer.handshakeTimer !== null) {
+            clearTimeout(peer.handshakeTimer);
+            peer.handshakeTimer = null;
+        }
+
+        const session = token !== '' ? this.sessions.get(token) : undefined;
+        if (session !== undefined) {
+            clearTimeout(session.timer);
+            this.sessions.delete(token);
+            peer.token = token;
+            peer.resumed = true;
+            peer.entity = session.entity;
+            peer.lastAckedClientTick = session.lastAckedClientTick;
+            peer.needsBaseline = true;
+            peer.visible.clear();
+            if (this.reconnection !== null) this.sendSession(peer);
+            this.sendAssign(peer);
+            this.log.info('peer reconnected', { peerId: peer.peerId, entity: peer.entity });
+            this.emit('reconnection', { peer });
+            return;
+        }
+
+        peer.token = `${this.sessionSalt}${this.nextSession++}`;
+        peer.resumed = false;
+        if (this.reconnection !== null) this.sendSession(peer);
+        this.emit('connection', { peer });
+    }
+
+    private sendSession(peer: InternalPeer): void {
+        const bytes = new TextEncoder().encode(peer.token);
+        const frame = new Uint8Array(bytes.length + 2);
+        frame[0] = MSG_SESSION;
+        frame[1] = peer.resumed ? 1 : 0;
+        frame.set(bytes, 2);
+        peer.transport.send(frame);
+    }
+
     private handleDisconnect(peer: InternalPeer, reason: string): void {
         if (!this.peers.has(peer.peerId)) return;
         if (peer.kicking !== null) clearTimeout(peer.kicking.timer);
+        if (peer.handshakeTimer !== null) clearTimeout(peer.handshakeTimer);
         this.peers.delete(peer.peerId);
         for (const plugin of this.plugins) plugin.onDisconnect?.(peer);
+
+        if (this.reconnection !== null && reason !== 'kicked' && peer.resolved && peer.entity !== -1) {
+            const token = peer.token;
+            const timer = setTimeout(() => {
+                this.sessions.delete(token);
+                this.log.info('peer reconnect timed out', { peerId: peer.peerId });
+                this.emit('disconnection', { peer, reason: 'reconnect-timeout' });
+            }, this.reconnection.graceMs);
+            this.sessions.set(token, {
+                entity: peer.entity,
+                lastAckedClientTick: peer.lastAckedClientTick,
+                timer,
+            });
+            this.log.info('peer suspended', { peerId: peer.peerId, reason });
+            this.emit('suspended', { peer, reason });
+            return;
+        }
+
         this.log.info('peer disconnected', { peerId: peer.peerId, reason });
         this.emit('disconnection', { peer, reason });
     }
@@ -534,6 +632,14 @@ export class GameServer<
             return;
         }
 
+        if (!peer.resolved) {
+            if (type === CMSG_RESUME) {
+                this.resolveHandshake(peer, new TextDecoder().decode(data.subarray(1)));
+                return;
+            }
+            this.resolveHandshake(peer, '');
+        }
+
         if (type === CMSG_INTENT) {
             if (data.length < 5) {
                 this.emit('intent-failed', { peer, kind: -1, reason: 'decode-error' });
@@ -663,12 +769,16 @@ export class GameServer<
         const internal = this.peers.get(peer.peerId);
         if (internal === undefined) return;
         internal.entity = entityId;
+        this.sendAssign(internal);
+    }
 
-        // Frame: [MSG_ASSIGN_ENTITY][serverEntityId: u32]
+    /** Frame: [MSG_ASSIGN_ENTITY][serverEntityId: u32] */
+    private sendAssign(peer: InternalPeer): void {
+        if (peer.entity === -1) return;
         const frame = new Uint8Array(1 + 4);
         frame[0] = MSG_ASSIGN_ENTITY;
-        new DataView(frame.buffer).setUint32(1, entityId >>> 0, true);
-        internal.transport.send(frame);
+        new DataView(frame.buffer).setUint32(1, peer.entity >>> 0, true);
+        peer.transport.send(frame);
     }
 
     sendRpc<K extends keyof R & string>(peer: Peer, name: K, payload: RpcPayload<R, K>): void {

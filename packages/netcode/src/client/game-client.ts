@@ -23,9 +23,11 @@ const MSG_RPC = 0x81;
 const MSG_KICK = 0x82;
 const MSG_ASSIGN_ENTITY = 0x84;
 const MSG_SCHEMA = 0x85;
+const MSG_SESSION = 0x86;
 const CMSG_INTENT = 0x01;
 const CMSG_RPC = 0x02;
 const CMSG_KICK_ACK = 0x03;
+const CMSG_RESUME = 0x04;
 
 const PING_RPC = defineRPC({ method: '__murow_ping', schema: { ts: u16 } });
 const PONG_RPC = defineRPC({ method: '__murow_pong', schema: { ts: u16 } });
@@ -67,6 +69,13 @@ export interface GameClientOptions<
         /** Max buffered unacked predictions kept for rollback. Default 64. */
         bufferSize?: number;
     };
+    /**
+     * Resume this client's server session after a transport drop, instead of
+     * being treated as a new peer. Pass the token from a prior session
+     * (`client.sessionToken`) to resume across a full reload; the live client
+     * reuses it automatically on reconnect.
+     */
+    reconnection?: boolean | { token?: string };
     now?: () => number;
     /** Optional diagnostics: `true` → console logger, or pass a `Logger`. */
     debug?: boolean | Logger;
@@ -103,6 +112,8 @@ export class GameClient<
     private rng: SimpleRNG;
     private lastDt: number;
     private predictedEntities = new Set<Entity>();
+    private _sessionToken = '';
+    private resumeEnabled = false;
     /** Set when MSG_ASSIGN_ENTITY lands before the matching spawn. */
     private pendingAssignedServerEid: number | null = null;
     /** Spawns discovered during a decode, emitted once values are written. */
@@ -137,6 +148,8 @@ export class GameClient<
         super([
             'connected',
             'disconnected',
+            'session',
+            'reconnected',
             'kicked',
             'snapshot',
             'rpc',
@@ -151,6 +164,11 @@ export class GameClient<
         this.reconcileCtx = { decoded: null, resetEntities: new SlotSet(this.world.getMaxEntities()) };
         this.loop = opts.loop;
         this.transport = opts.transport;
+        {
+            const rc = opts.reconnection;
+            this.resumeEnabled = rc !== undefined && rc !== false;
+            if (typeof rc === 'object' && rc.token !== undefined) this._sessionToken = rc.token;
+        }
         this.intents = opts.protocol.intents;
         this.rpcs = opts.protocol.rpcs;
         const reg = this.rpcs.registry as any;
@@ -254,7 +272,11 @@ export class GameClient<
     }
 
     private wireTransport(): void {
-        this.transport.onOpen?.(() => { this.log.info('connected'); this.emit('connected', {}); });
+        this.transport.onOpen?.(() => {
+            this.log.info('connected');
+            this.emit('connected', {});
+            if (this.resumeEnabled) this.sendResume();
+        });
         this.transport.onMessage((data) => this.handleIncoming(data));
         this.transport.onClose(() => { this.log.info('disconnected'); this.emit('disconnected', { reason: 'transport-closed' }); });
         this.transport.onError?.((error: Error) => this.emit('error', { error, context: 'transport' }));
@@ -275,6 +297,26 @@ export class GameClient<
             this.localTick++;
             this.lastDt = deltaTime;
         });
+    }
+
+    /** The current session token, learned from the server or supplied via options. */
+    get sessionToken(): string {
+        return this._sessionToken;
+    }
+
+    private sendResume(): void {
+        const bytes = new TextEncoder().encode(this._sessionToken);
+        const frame = new Uint8Array(bytes.length + 1);
+        frame[0] = CMSG_RESUME;
+        frame.set(bytes, 1);
+        this.transport.send(frame);
+    }
+
+    private handleSession(data: Uint8Array): void {
+        const resumed = data.length >= 2 && data[1] === 1;
+        this._sessionToken = new TextDecoder().decode(data.subarray(2));
+        this.emit('session', { token: this._sessionToken, resumed });
+        if (resumed) this.emit('reconnected', {});
     }
 
     private handleIncoming(data: Uint8Array): void {
@@ -307,6 +349,10 @@ export class GameClient<
             }
             const view = new DataView(data.buffer, data.byteOffset + 1, 4);
             this.applyAssignment(view.getUint32(0, true));
+            return;
+        }
+        if (type === MSG_SESSION) {
+            this.handleSession(data);
             return;
         }
         if (type === MSG_SCHEMA) {

@@ -251,7 +251,36 @@ server.on('disconnection', ({ peer }) => {
 
 If the assignment frame lands before the matching spawn, the client buffers it and resolves on the spawn.
 
-**There is no session-resume or reconnect API.** A dropped connection is a new peer with a new identity. A reconnect means: connect again, the server spawns a fresh entity and calls `assignEntity` again, and the client re-syncs from scratch because every networked entity arrives through `'spawn'` in the snapshot stream. If you need continuity across a reconnect — same player, same inventory — you must persist that on the server yourself and re-apply it when the new peer connects, and you must reconcile the old entity (despawn it) manually. The engine does not do it for you.
+### Reconnection
+
+Opt in on both sides. The server holds a dropped peer's session — its assigned
+entity and intent-ack cursor — for `reconnection.graceMs` (default 10000 ms);
+the client presents its token on connect so a reconnect resumes the session
+instead of spawning a new peer.
+
+```ts
+const server = new GameServer({ world, loop, transport, protocol,
+  reconnection: { graceMs: 10000 } });
+const client = new GameClient({ world, loop, transport, protocol,
+  reconnection: true });
+```
+
+On transport open the client sends its token — `client.sessionToken`, learned
+from the server, or supplied as `reconnection: { token }` to resume across a
+full reload. The server answers `'reconnection'` (resumed) or `'connection'`
+(new), re-sends the assignment and a full baseline, and the client fires
+`'reconnected'`.
+
+Server-side, a session is *held* on `'suspended'` and only finalized on
+`'disconnection'` — which fires when the grace lapses (`reason:
+'reconnect-timeout'`), on a kick, or when reconnection is off. Keep the entity
+alive on `'suspended'`; despawn on `'disconnection'`.
+
+```ts
+server.on('suspended',    ({ peer }) => { /* keep peer.entity alive */ });
+server.on('reconnection', ({ peer }) => { /* migrate per-peer state */ });
+server.on('disconnection',({ peer }) => { if (peer.entity !== -1) world.despawn(peer.entity); });
+```
 
 The server also enforces liveness: `kick.ackTimeout` (default 2000 ms) force-closes a transport that stops acking, and `server.kick(peer, reason)` soft-kicks gracefully.
 
