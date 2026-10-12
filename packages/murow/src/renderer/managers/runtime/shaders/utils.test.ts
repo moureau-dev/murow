@@ -1,5 +1,11 @@
 import { test, expect, describe } from 'bun:test';
-import * as d from 'typegpu/data';
+
+// Plain CPU vector literals: the utils under test run on the CPU data path.
+const d = {
+    vec2f: (x: number, y: number) => ({ x, y }),
+    vec3f: (x: number, y: number, z: number) => ({ x, y, z }),
+    vec4f: (x: number, y: number, z: number, w: number) => ({ x, y, z, w }),
+};
 import { rotate2d, worldToClip2d, worldToClip3d, remap, scaleRotate2d, inverseLerp, lightContribution } from './utils';
 
 /** Point-light arg helpers: zero axis, innerCos=1, outerCos=-1 (cone always 1). */

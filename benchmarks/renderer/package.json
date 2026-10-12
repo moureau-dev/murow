@@ -13,7 +13,6 @@
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "typescript": "^5.0.0",
-    "unplugin-typegpu": "^0.10.2",
     "vite": "^5.0.0",
     "@moureau/basebox": "0.0.35"
   }
