@@ -29,6 +29,7 @@ async function main() {
             packages: 'external',
             minifyWhitespace: true,
             minifyIdentifiers: true,
+            minifySyntax: false,
             bundle: true,
         }),
         build({
@@ -40,6 +41,7 @@ async function main() {
             packages: 'external',
             minifyWhitespace: true,
             minifyIdentifiers: true,
+            minifySyntax: false,
             bundle: true,
         }),
         // Single-file bundle for CDN use — all deps inlined so TypeGPU's
