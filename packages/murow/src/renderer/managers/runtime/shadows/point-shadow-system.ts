@@ -4,7 +4,7 @@ import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent,
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
 
 import { DynamicMesh, StaticMesh } from '../engine-core/types';
-import type { RendererCore } from '../core/renderer-core';
+import type { RendererCore } from '../core/3d/renderer-core';
 import type { ShadowDrawBatch, ShadowModelLike } from './shadow-system';
 import { createSkinnedLightLayout, createSkinnedLightVertex, createLightDistanceFragment } from './light-shadow-shaders';
 

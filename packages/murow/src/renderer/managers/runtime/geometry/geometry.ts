@@ -1,7 +1,7 @@
 import type { RendererRuntime } from '../backend';
 import type { ClearColor } from 'murow/renderer';
 import { GeometryBuilder, type GeometryOptions } from '../geometry-builder/geometry-builder';
-import type { Renderer2DCore } from '../_2d/core';
+import type { Renderer2DCore } from '../core/2d';
 
 /**
  * GeometryManager is the public facade for creating custom instanced 2D

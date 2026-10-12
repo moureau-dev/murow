@@ -7,7 +7,7 @@ import type { InstanceManager } from '../instances';
 import type { MaterialManager } from '../materials';
 import type { LightManager } from '../lights';
 import type { CameraManager } from '../camera/3d';
-import type { RendererCore } from '../core/renderer-core';
+import type { RendererCore } from '../core/3d/renderer-core';
 import { Frustum } from '../internals/frustum';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../engine-core/types';

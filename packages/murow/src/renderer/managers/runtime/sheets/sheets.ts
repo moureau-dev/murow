@@ -9,8 +9,8 @@ import type {
 } from 'murow/renderer';
 import { parseSpritesheet } from 'murow/renderer';
 import { Spritesheet, createTextureFromBitmap } from '../spritesheet/spritesheet';
-import type { Renderer2DCore } from '../_2d/core';
-import type { SheetId } from '../_2d/ids';
+import type { Renderer2DCore } from '../core/2d';
+import type { SheetId } from '../ids';
 
 /**
  * SpritesheetManager uploads parsed spritesheets and owns their GPU bind groups.

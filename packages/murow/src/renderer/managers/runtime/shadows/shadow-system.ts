@@ -4,7 +4,7 @@ import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent,
 import { GpuBindGroupLayout, GpuShader, d, std } from 'murow/gpu';
 
 import { DynamicMesh, SkinnedStaticMesh, StaticMesh } from '../engine-core/types';
-import type { RendererCore } from '../core/renderer-core';
+import type { RendererCore } from '../core/3d/renderer-core';
 
 /** Light-space matrix + tunables, shared by the shadow pass and receivers. */
 export const ShadowUniforms = d.struct({
