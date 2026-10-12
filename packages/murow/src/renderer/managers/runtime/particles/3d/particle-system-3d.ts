@@ -339,7 +339,7 @@ export class ParticleSystem3D {
             },
             (input, { buf }) => {
             // Explicit LOD 0: mipmaps average across atlas cells and dilute alpha.
-            const sampled = std.textureSampleLevel(buf.tex, buf.sampler, d.vec2f(input.uv.x, input.uv.y), 0.0);
+            const sampled = std.textureSampleLevel(buf.tex, buf.sampler, input.uv, 0.0);
             const dd = std.length(d.vec2f(input.uv.x * 2.0 - 1.0, input.uv.y * 2.0 - 1.0));
             const disc = d.vec4f(1.0, 1.0, 1.0, std.smoothstep(1.0, 0.15, dd));
             const base = std.mix(disc, sampled, buf.material.useTexture);

@@ -153,8 +153,8 @@ export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataL
         (input, { mesh }) => {
         const u = mesh.uniforms;
         const baseColor = input.vColor;
-        const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
-        const normal = std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z));
+        const worldPos = input.vWorldPos;
+        const normal = std.normalize(input.vNormal);
 
         // Fixed directional light (the engine's classic look) + ambient.
         const lightDir = std.normalize(d.vec3f(u.lightDirX, u.lightDirY, u.lightDirZ));
@@ -532,14 +532,14 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
         },
         (input, { mesh, tex }) => {
         const u = mesh.uniforms;
-        const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
-        const normal = std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z));
+        const worldPos = input.vWorldPos;
+        const normal = std.normalize(input.vNormal);
 
         // Sample texture, multiply by instance color (tint)
         const texColor = std.textureSample(
             tex.modelTexture,
             tex.modelSampler,
-            d.vec2f(input.vUV.x, input.vUV.y),
+            input.vUV,
         );
 
         const baseColor = d.vec3f(
@@ -944,8 +944,8 @@ export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
         (input, { mesh }) => {
         const u = mesh.uniforms;
         const baseColor = input.vColor;
-        const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
-        const normal = std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z));
+        const worldPos = input.vWorldPos;
+        const normal = std.normalize(input.vNormal);
 
         const lightDir = std.normalize(d.vec3f(u.lightDirX, u.lightDirY, u.lightDirZ));
         const diff = std.max(std.dot(normal, lightDir), 0.0) * u.lightDirIntensity;

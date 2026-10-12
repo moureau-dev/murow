@@ -79,10 +79,10 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
             std.mul(std.mul(tex.y, input.vColor.y), m.colorG),
             std.mul(std.mul(tex.z, input.vColor.z), m.colorB),
         );
-        const worldPos = d.vec3f(input.vWorldPos.x, input.vWorldPos.y, input.vWorldPos.z);
+        const worldPos = input.vWorldPos;
         // Flip the normal on back faces so double-sided/unculled surfaces light correctly.
         const normal = std.mul(
-            std.normalize(d.vec3f(input.vNormal.x, input.vNormal.y, input.vNormal.z)),
+            std.normalize(input.vNormal),
             std.select(d.vec3f(-1.0, -1.0, -1.0), d.vec3f(1.0, 1.0, 1.0), input.frontFacing),
         );
 
