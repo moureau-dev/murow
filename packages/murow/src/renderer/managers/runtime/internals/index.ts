@@ -9,3 +9,4 @@ export * from './clip-resync-coordinator';
 export * from './raycast';
 export * from './resize-controller';
 export * from './animation-controller';
+export * from './sprite-shader';
