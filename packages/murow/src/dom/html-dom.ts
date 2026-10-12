@@ -56,6 +56,12 @@ export interface SpawnOptions {
     /** Extra scale multiplier on top of the distance scale. Default 1. */
     readonly scale?: number;
     /**
+     * Seconds before the node auto-recycles, advanced by `update(dt)`. Omit to
+     * keep the node until `remove()` is called. Use this instead of
+     * `setTimeout(() => node.remove(), ms)` for popups like damage numbers.
+     */
+    readonly lifetime?: number;
+    /**
      * Let this node receive pointer events (`onclick`, hover, ...). Overrides the
      * overlay default. The node's element is the hit target; add listeners to it.
      */
@@ -74,6 +80,7 @@ export class HtmlNode {
     private readonly pos: [number, number, number] = [0, 0, 0];
     private rotationValue: 'camera' | readonly [number, number, number] = 'camera';
     private scaleValue = 1;
+    private lifetimeValue = Number.POSITIVE_INFINITY;
 
     /** @internal */
     constructor(anchor: HTMLDivElement) {
@@ -114,6 +121,18 @@ export class HtmlNode {
     }
     set scale(value: number) {
         this.scaleValue = value;
+    }
+
+    /**
+     * Remaining lifetime in seconds, advanced by `HTMLDom.update(dt)`.
+     * `Infinity` (the default) means the node lives until `remove()`. Assign a
+     * number to set or reset it.
+     */
+    get lifetime(): number {
+        return this.lifetimeValue;
+    }
+    set lifetime(seconds: number) {
+        this.lifetimeValue = seconds;
     }
 
     /** Move the node to a world position. */
@@ -187,6 +206,7 @@ export class HtmlOverlay {
         node.active = true;
         node.rotation = options.rotation ?? 'camera';
         node.scale = options.scale ?? 1;
+        node.lifetime = options.lifetime ?? Number.POSITIVE_INFINITY;
         node.position = options.position;
         node.anchor.style.display = 'block';
         const interactive = options.interactive ?? this.interactive;
@@ -288,15 +308,25 @@ export class HTMLDom {
     }
 
     /**
-     * Reposition every live node. Call on `loop.render` normally, or on
-     * `loop.tick` when `refreshRate` is set (after rendering).
+     * Advance node lifetimes and reposition every live node. Call on
+     * `loop.render` normally, or on `loop.tick` when `refreshRate` is set (after
+     * rendering). Pass the frame delta in seconds so `lifetime` nodes expire.
      */
-    update(): void {
+    update(dt = 0): void {
         const out = this.scratch;
-        for (const node of this.live) {
+        for (let i = 0; i < this.live.length; ) {
+            const node = this.live[i]!;
+            if (Number.isFinite(node.lifetime)) {
+                node.lifetime -= dt;
+                if (node.lifetime <= 0) {
+                    node.remove();
+                    continue;
+                }
+            }
             if (!this.renderer.worldToScreen(node.position[0], node.position[1], node.position[2], out)) {
                 node.anchor.style.display = 'none';
                 node.snapNext = true;
+                i++;
                 continue;
             }
             const depth = out[2] > 1e-4 ? out[2] : 1e-4;
@@ -319,6 +349,7 @@ export class HTMLDom {
             } else {
                 node.anchor.style.transform = transform;
             }
+            i++;
         }
     }
 

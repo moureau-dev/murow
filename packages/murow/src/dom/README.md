@@ -15,12 +15,12 @@ import { HTMLDom } from 'murow/dom';
 const dom = new HTMLDom({ renderer, budget: 32 });      // renderer.worldToScreen(...)
 const dmg = dom.createOverlay({ selector: 'template#dmg', maxChildren: 8 });
 
-const node = dmg.spawn({ position: [x, y, z] });         // anchor at spawn
+const node = dmg.spawn({ position: [x, y, z], lifetime: 1 });  // anchor, recycled after 1s
 node.element.textContent = '42';                          // mutate the clone
 node.moveTo(x, y, z);                                     // follow the model
 
-// once per frame, after rendering:
-dom.update();
+// once per frame, after rendering (dt advances lifetimes):
+dom.update(dt);
 ```
 
 - `new HTMLDom({ renderer, budget?, container?, referenceDepth?, minScale?, maxScale?, refreshRate? })`
@@ -30,13 +30,15 @@ dom.update();
 - `dom.createOverlay({ selector, maxChildren?, interactive? })` clones `selector`
   (a `<template>`'s first child, or the element itself) per spawn, up to
   `maxChildren` live nodes. `interactive` is the default for every node.
-- `overlay.spawn({ position, rotation?, scale?, interactive? })` returns an
+- `overlay.spawn({ position, rotation?, scale?, lifetime?, interactive? })` returns an
   `HtmlNode`. `rotation` defaults to `'camera'` (billboard). The node is
-  positioned by `renderer.worldToScreen`. `interactive` overrides the overlay
-  default.
-- `dom.update()` repositions every live node and scales it by distance
-  (`referenceDepth / depth`, clamped). Call it once per frame. If you pass
-  `refreshRate`, call it on `loop.tick` instead (see below).
+  positioned by `renderer.worldToScreen`. `lifetime` (seconds) auto-recycles the
+  node once `update(dt)` has advanced past it; omit it to keep the node until
+  `remove()`. `interactive` overrides the overlay default.
+- `dom.update(dt = 0)` advances node lifetimes, then repositions every live node
+  and scales it by distance (`referenceDepth / depth`, clamped). Call it once per
+  frame, passing the frame delta in seconds. If you pass `refreshRate`, call it on
+  `loop.tick` instead (see below).
 
 `HtmlNode`:
 
@@ -46,6 +48,7 @@ dom.update();
 | `position` | World position, as a live getter/setter (`node.position = [x, y, z]`). |
 | `rotation` | `'camera'` (billboard). |
 | `scale` | Extra multiplier on top of the distance scale. |
+| `lifetime` | Remaining seconds; `Infinity` lives until `remove()`. Assign to set/reset. |
 | `moveTo(x, y, z)` | Move the anchor. |
 | `setText(text)` | Set the element's text. |
 | `snap()` | Jump to the position on the next `update()` instead of tweening. |
@@ -61,13 +64,28 @@ run on `loop.tick` — the compositor lerps between ticks.
 
 ```ts
 const dom = new HTMLDom({ renderer, refreshRate: loop.ticker.rate });
-loop.events.on('tick', () => dom.update());
+loop.events.on('tick', ({ deltaTime }) => dom.update(deltaTime));
 ```
 
 This cuts DOM writes at the cost of a small drift: CSS lerps the screen position
 linearly, while the scene interpolates in world space and re-projects. Call
 `node.snap()` after a teleport so the label does not slide across the screen. It
 also does not reduce the number of elements animated, only the JavaScript work.
+
+## Lifetimes
+
+Popups like damage numbers should not be cleaned up with `setTimeout` — that
+spawns a timer per node and runs outside the loop. Give the node a `lifetime`
+(seconds) at spawn instead; `update(dt)` counts it down and recycles the node
+when it elapses, on the same tick that moves it:
+
+```ts
+const dmg = dom.createOverlay({ selector: 'template#dmg' });
+dmg.spawn({ position: [x, y, z], lifetime: 1 });   // gone after 1s, no timer
+```
+
+`node.lifetime` is the remaining seconds; assign a finite number to cap a node,
+or `Infinity` to let it live until `remove()` (the default).
 
 ## Interactivity
 

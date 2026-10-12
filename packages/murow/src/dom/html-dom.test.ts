@@ -95,6 +95,26 @@ describe('HTMLDom', () => {
         expect(node.element.textContent).toBe('42');
     });
 
+    test('lifetime expires the node once update(dt) accumulates past it', () => {
+        const dom = new HTMLDom({ renderer: new FakeProjector() });
+        const overlay = dom.createOverlay({ selector: 'template#dmg' });
+        overlay.spawn({ position: [0, 0, 1], lifetime: 1 });
+        expect(overlay.size).toBe(1);
+        dom.update(0.6);
+        expect(overlay.size).toBe(1);
+        dom.update(0.6);
+        expect(overlay.size).toBe(0);
+        expect(dom.size).toBe(0);
+    });
+
+    test('nodes without a lifetime persist across updates', () => {
+        const dom = new HTMLDom({ renderer: new FakeProjector() });
+        const overlay = dom.createOverlay({ selector: 'template#dmg' });
+        overlay.spawn({ position: [0, 0, 1] });
+        dom.update(100);
+        expect(overlay.size).toBe(1);
+    });
+
     test('update positions+scales the anchor, clamped', () => {
         const dom = new HTMLDom({ renderer: new FakeProjector(), minScale: 0.5, maxScale: 2.5 });
         const node = dom.createOverlay({ selector: 'template#dmg' }).spawn({ position: [1, 2, 4] });
