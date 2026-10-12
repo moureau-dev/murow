@@ -411,7 +411,7 @@ new GameClient({
 });
 ```
 
-Defaults: `strategy = new SnapshotInterpolationStrategy()` (`delay = 100`,
+Defaults: `strategy = { kind: 'snapshot-interpolation' }` (`delay = 100`,
 `staleWindow = delay * 2 + 100`, `maxDesync = 500`, `maxBridgeGap = 250`),
 `prediction.bufferSize = 64`.
 

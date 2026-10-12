@@ -481,22 +481,19 @@ server.on('error',          ({ error, context })                => {});
 ### `GameClient`
 
 ```ts
-interface SnapshotInterpolationStrategy {
-  kind: 'snapshot-interpolation';
-  delay?: number;         // ms behind newest snapshot. Default 100
-  staleWindow?: number;   // ms gap before history dropped. Default delay*2 + 100
-  maxDesync?: number;     // ms desync past which the play-out clock hard-snaps instead of warping. Default 500
-  maxBridgeGap?: number;  // largest data gap (ms) held instead of interpolated across. Default 250
-}
-
-type PeerRenderStrategy = SnapshotInterpolationStrategy;   // extrapolation / rollback strategies will slot in here
+// How snapshots become rendered peer state: a `kind` + that strategy's options.
+type PeerRenderStrategyConfig =
+  | { kind: 'snapshot-interpolation'; delay?: number; staleWindow?: number; maxDesync?: number; maxBridgeGap?: number }
+  | { kind: 'extrapolation';          maxExtrapolationMs?: number }
+  | { kind: 'hybrid';                 delay?: number; maxExtrapolationMs?: number; staleWindow?: number; maxDesync?: number; maxBridgeGap?: number };
+// ...or a `PeerRenderStrategy` instance (subclass record/apply/clear + tuners) for a custom strategy.
 
 interface GameClientOptions<I, R> {
   world: World;
   loop: GameLoop<any>;
   transport: TransportAdapter;
   protocol: { intents: DefinedIntents<I>; rpcs: DefinedRpcs<R> };
-  strategy?: PeerRenderStrategy;
+  strategy?: PeerRenderStrategyConfig | PeerRenderStrategy;
   prediction?: {
     bufferSize?: number;   // max unacked predictions for rollback. Default 64
   };
@@ -525,10 +522,10 @@ class GameClient<I, R> {
   setMaxBridgeGap(ms: number): void;
 
   // Exposed for runtime tuning; the tuning example retunes it from measured RTT in the 'pong' handler.
-  readonly interpBuffer: InterpolationBuffer;
+  readonly interpBuffer: PeerRenderStrategy;
 }
 
-class InterpolationBuffer {
+abstract class PeerRenderStrategy {
   setDelay(delayMs: number): void;          // same as client.setInterpolationDelay
   setStaleWindow(staleWindowMs: number): void;
   setMaxDesync(maxDesyncMs: number): void;
