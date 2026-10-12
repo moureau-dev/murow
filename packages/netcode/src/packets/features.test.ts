@@ -8,7 +8,7 @@ import { defineRpcs } from '../rpcs/define-rpcs';
 import { definePredictions } from '../predictions/define-predictions';
 import { GameServer } from '../server/game-server';
 import { GameClient } from '../client/game-client';
-import { SnapshotInterpolation, type BufferedSnapshot } from '../client/strategies/snapshot-interpolation';
+import { SnapshotInterpolation, type BufferedSnapshot } from '../client/strategies';
 import { encodeDelta, decodeDelta } from '../codec/delta-codec';
 import { networked } from '../components/sync-spec';
 import type { ServerPlugin } from '../server/plugins/plugin';

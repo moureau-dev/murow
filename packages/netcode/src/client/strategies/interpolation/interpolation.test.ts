@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 import { f32 } from 'murow/core/binary-codec';
 import { defineComponent, World, type Component } from 'murow/ecs';
-import { networked } from '../../components/sync-spec';
-import { SnapshotInterpolation, type BufferedSnapshot } from './snapshot-interpolation';
+import { networked } from '../../../components/sync-spec';
+import { SnapshotInterpolation, type BufferedSnapshot } from './interpolation';
 
 describe('SnapshotInterpolation', () => {
     const Position = defineComponent('Position', {

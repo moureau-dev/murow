@@ -411,27 +411,26 @@ new GameClient({
 });
 ```
 
-Defaults: `strategy = { kind: 'snapshot-interpolation', delay: 100 }`,
-`staleWindow = delay * 2 + 100`, `maxDesync = 500`, `maxBridgeGap = 250`,
+Defaults: `strategy = new SnapshotInterpolationStrategy()` (`delay = 100`,
+`staleWindow = delay * 2 + 100`, `maxDesync = 500`, `maxBridgeGap = 250`),
 `prediction.bufferSize = 64`.
 
-- `strategy.kind`: peer-rendering strategy. Only
-  `'snapshot-interpolation'` ships today; extrapolation and rollback
-  will slot in here.
-- `delay`: ms behind newest snapshot the buffer renders (snapshot-interp
-  strategy only).
-- `staleWindow`: max ms gap between snapshots before history is dropped
-  as stale. Tuned for the normal cadence + jitter slop.
-- `maxDesync`: desync past which the play-out clock hard-snaps instead of
-  warping, ms. Scaled by tick rate internally.
-- `maxBridgeGap`: largest data gap a peer may have before its value is
-  held instead of interpolated across, ms. Smaller gaps are bridged.
+- `strategy`: a `{ kind, ...opts }` config (or a `PeerRenderStrategy` instance
+  for a custom one) — how received snapshots become rendered peer state. Three
+  kinds ship: **`'snapshot-interpolation'`** (default; render behind newest),
+  **`'extrapolation'`** (dead reckoning at `now`, capped by
+  `maxExtrapolationMs`), and **`'hybrid'`** (interpolate when a snapshot is
+  ahead, extrapolate the starved tail — the production default). Extend the
+  exported `PeerRenderStrategy` base class to add one.
+- `delay`: ms behind newest snapshot the buffer renders.
+- `staleWindow`: max ms gap between snapshots before history is dropped as stale.
+- `maxDesync`: desync past which the play-out clock hard-snaps instead of warping, ms.
+- `maxBridgeGap`: largest data gap held instead of bridged, ms.
 - `bufferSize`: max buffered unacked predictions kept for rollback.
 
-`delay`, `staleWindow`, `maxDesync`, and `maxBridgeGap` are all tunable
-at runtime via `client.setInterpolationDelay(ms)`,
-`client.setMaxDesync(ms)`, `client.setMaxBridgeGap(ms)`, and
-`client.interpBuffer.setStaleWindow(ms)`.
+`delay`, `staleWindow`, `maxDesync`, and `maxBridgeGap` are tunable at runtime
+via `client.setInterpolationDelay(ms)`, `client.setMaxDesync(ms)`,
+`client.setMaxBridgeGap(ms)`, and `client.interpBuffer.setStaleWindow(ms)`.
 </details>
 
 <details>

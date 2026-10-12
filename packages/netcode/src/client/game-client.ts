@@ -7,7 +7,8 @@ import type { TransportAdapter } from 'murow/net';
 import { defineRPC } from 'murow/protocol';
 import { Network } from '../network/base';
 import { decodeDelta, type DecodedDelta } from '../codec/delta-codec';
-import { SnapshotInterpolation } from './strategies/snapshot-interpolation';
+import { SnapshotInterpolationStrategy, PeerRenderStrategy, createStrategy } from './strategies';
+import type { PeerRenderStrategyConfig } from './strategies';
 import type { DefinedIntents, IntentPayload, IntentSchemaMap } from '../intents/define-intents';
 import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs';
 import type { DefinedPredictions } from '../predictions/define-predictions';
@@ -39,42 +40,11 @@ interface PredictedIntent {
 }
 
 /**
- * Snapshot interpolation strategy. The client holds the last few
- * snapshots and renders peer entities `delay` ms behind newest, lerping
- * between the two snapshots straddling that past time. This is the
- * Source-engine model and the right default for action games, MMOs,
- * MOBAs, and `.io` titles.
+ * Peer-render strategies (how received snapshots become rendered peer state)
+ * live in `./strategies`. `SnapshotInterpolationStrategy` is the default; a
+ * strategy `create()`s a `PeerRenderer` from a shared context. Local-player
+ * rendering is driven by `prediction` (a separate axis).
  */
-export interface SnapshotInterpolationStrategy {
-    kind: 'snapshot-interpolation';
-    /** Snapshot interpolation delay, ms. Default 100. */
-    delay?: number;
-    /**
-     * Max ms between snapshots before history is dropped as stale.
-     * Defaults to `delay * 2 + 100`.
-     */
-    staleWindow?: number;
-    /**
-     * Desync past which the play-out clock snaps instead of warping, ms.
-     * Scaled by tick rate internally. Default 500.
-     */
-    maxDesync?: number;
-    /**
-     * Largest data gap a peer may have before its value is held instead of
-     * interpolated across, ms. Smaller gaps are bridged. Default 250.
-     */
-    maxBridgeGap?: number;
-}
-
-/**
- * How peer entities are rendered on the client. Local-player rendering
- * is driven by `prediction` (separate axis) and is independent of the
- * peer strategy.
- *
- * Today only `snapshot-interpolation` ships. Extrapolation and rollback
- * variants will slot in here without protocol changes.
- */
-export type PeerRenderStrategy = SnapshotInterpolationStrategy;
 
 export interface GameClientOptions<
     I extends IntentSchemaMap,
@@ -88,10 +58,11 @@ export interface GameClientOptions<
         rpcs: DefinedRpcs<R>;
     };
     /**
-     * Peer-rendering strategy. Defaults to snapshot interpolation with
-     * a 100 ms delay.
+     * Peer-rendering strategy: a `{ kind, ...opts }` config (see
+     * `PeerRenderStrategyConfig`) or a `PeerRenderStrategy` instance. Defaults
+     * to `{ kind: 'snapshot-interpolation', delay: 100 }`.
      */
-    strategy?: PeerRenderStrategy;
+    strategy?: PeerRenderStrategyConfig | PeerRenderStrategy;
     prediction?: {
         /** Max buffered unacked predictions kept for rollback. Default 64. */
         bufferSize?: number;
@@ -138,7 +109,7 @@ export class GameClient<
     private deferredSpawns: { entity: Entity; components: Record<string, unknown>; assigned: boolean }[] = [];
     /** Resolved local entity for the server's assignment. Default for sendIntent. */
     private _assignedEntity: Entity | null = null;
-    interpBuffer: SnapshotInterpolation;
+    interpBuffer: PeerRenderStrategy;
     private _rttMs: number | null = null;
     private now: () => number;
     private readonly log: Logger;
@@ -185,9 +156,6 @@ export class GameClient<
         const reg = this.rpcs.registry as any;
         if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
         if (!reg.has(PONG_RPC.method)) reg.register(PONG_RPC);
-        const strategy: PeerRenderStrategy = opts.strategy ?? { kind: 'snapshot-interpolation' };
-        const interpolationDelay = strategy.delay ?? 100;
-        const staleWindowMs = strategy.staleWindow ?? interpolationDelay * 2 + 100;
         this.predictionBufferSize = opts.prediction?.bufferSize ?? 64;
         this.rng = new SimpleRNG(1);
         this.log = Logger.resolve(opts.debug, 'net-client');
@@ -195,15 +163,19 @@ export class GameClient<
         this.now = opts.now ?? (() => performance.now());
 
         // 16 slots covers ~800ms at 20Hz.
-        this.interpBuffer = new SnapshotInterpolation(
-            this.serverToLocal,
-            16,
-            interpolationDelay,
-            staleWindowMs,
-            strategy.maxDesync,
-            opts.loop.ticker.intervalMs,
-            strategy.maxBridgeGap,
-        );
+        const strategy = opts.strategy;
+        this.interpBuffer =
+            strategy === undefined
+                ? new SnapshotInterpolationStrategy()
+                : strategy instanceof PeerRenderStrategy
+                    ? strategy
+                    : createStrategy(strategy);
+        this.interpBuffer.bind({
+            serverToLocal: this.serverToLocal,
+            now: this.now,
+            tickIntervalMs: opts.loop.ticker.intervalMs,
+            capacity: 16,
+        });
 
         this.reconciler = new Reconciler({
             bufferSize: this.predictionBufferSize,

@@ -2,7 +2,9 @@ import { lerp } from 'murow/core/lerp';
 import { Timeline } from 'murow/core/timeline';
 import { SlewClock } from 'murow/core/clock';
 import type { Component, Entity, World } from 'murow/ecs';
-import type { SyncSpec, InterpolationMode } from '../../components/sync-spec';
+import type { SyncSpec, InterpolationMode } from '../../../components/sync-spec';
+import { PeerRenderStrategy } from '../strategy';
+import type { PeerRenderContext } from '../strategy';
 
 export interface BufferedSnapshot {
     receivedAt: number;
@@ -282,5 +284,75 @@ export class SnapshotInterpolation {
                 else world.add(localEid, c, v as any);
             }
         }
+    }
+}
+
+/** Options for {@link SnapshotInterpolationStrategy}. */
+export interface SnapshotInterpolationOptions {
+    /** Snapshot interpolation delay, ms. Default 100. */
+    delay?: number;
+    /** Max ms between snapshots before history is dropped. Default `delay * 2 + 100`. */
+    staleWindow?: number;
+    /** Desync past which the play-out clock snaps instead of warping, ms. Default 500. */
+    maxDesync?: number;
+    /** Largest data gap held instead of bridged, ms. Default 250. */
+    maxBridgeGap?: number;
+    /** Snapshot ring capacity. Defaults to the context capacity. */
+    capacity?: number;
+}
+
+/**
+ * The default peer-render strategy: renders peer entities `delay` ms behind
+ * newest, interpolating between the snapshots straddling that past time. The
+ * Source-engine model, right for action games, MMOs, MOBAs, and `.io` titles.
+ *
+ * Pass an instance as `GameClient`'s `strategy`; the client binds the context.
+ */
+export class SnapshotInterpolationStrategy extends PeerRenderStrategy {
+    private inner: SnapshotInterpolation | null = null;
+
+    constructor(private readonly options: SnapshotInterpolationOptions = {}) {
+        super();
+    }
+
+    protected override onBind(ctx: PeerRenderContext): void {
+        const delay = this.options.delay ?? 100;
+        const staleWindow = this.options.staleWindow ?? delay * 2 + 100;
+        this.delay = delay;
+        this.inner = new SnapshotInterpolation(
+            ctx.serverToLocal,
+            this.options.capacity ?? ctx.capacity,
+            delay,
+            staleWindow,
+            this.options.maxDesync,
+            ctx.tickIntervalMs,
+            this.options.maxBridgeGap,
+        );
+    }
+
+    record(snapshot: BufferedSnapshot): void {
+        this.inner?.record(snapshot);
+    }
+
+    apply(world: World, now: number, components: Component<any>[], shouldSkip: (entity: Entity) => boolean): void {
+        this.inner?.apply(world, now, components, shouldSkip);
+    }
+
+    clear(): void {
+        this.inner?.clear();
+    }
+
+    override setDelay(ms: number): void {
+        this.delay = ms;
+        this.inner?.setDelay(ms);
+    }
+    override setMaxDesync(ms: number): void {
+        this.inner?.setMaxDesync(ms);
+    }
+    override setMaxBridgeGap(ms: number): void {
+        this.inner?.setMaxBridgeGap(ms);
+    }
+    override setStaleWindow(ms: number): void {
+        this.inner?.setStaleWindow(ms);
     }
 }
