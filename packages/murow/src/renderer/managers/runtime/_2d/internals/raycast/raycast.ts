@@ -18,7 +18,7 @@ type Opts = RaycastOptions<SpriteHandle>;
 
 export type RaycastState2D = HitBuffer<SpriteHandle, Point>;
 
-export class WebGPURaycast2D extends Raycast<SpriteHandle, Point, Camera2D> {
+export class Raycast2D extends Raycast<SpriteHandle, Point, Camera2D> {
     readonly state: RaycastState2D = new HitBuffer<SpriteHandle, Point>(2);
 
     private resultBuffer: BufferedHit<SpriteHandle, Point>[] = [];

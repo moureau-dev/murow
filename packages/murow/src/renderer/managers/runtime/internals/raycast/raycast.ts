@@ -18,7 +18,7 @@ type Opts = RaycastOptions<MeshInstanceHandle>;
 
 export type RaycastState = HitBuffer<MeshInstanceHandle, Point>;
 
-export class WebGPURaycast3D extends Raycast<MeshInstanceHandle, Point, Camera3D> {
+export class Raycast3D extends Raycast<MeshInstanceHandle, Point, Camera3D> {
     readonly state: RaycastState = new HitBuffer<MeshInstanceHandle, Point>(3);
 
     private resultBuffer: BufferedHit<MeshInstanceHandle, Point>[] = [];

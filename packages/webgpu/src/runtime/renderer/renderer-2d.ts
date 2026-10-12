@@ -16,7 +16,7 @@ import type { RawDevice, RawTextureFormat } from 'murow/gpu';
 import { d } from '../../gpu';
 import { runtime } from '../runtime';
 import type { RendererRuntime } from 'murow/renderer/managers';
-import { Renderer2DCore, CameraEffectStack, DynamicSprite, StaticSprite, SpriteUniforms, createSpriteLayout, createTextureLayout, createSpriteVertex, createSpriteFragment, WebGPURaycast2D, RaycastController2D, CameraManager2D, SpriteManager, SpritesheetManager, GeometryManager, setPrefab2DHandle } from 'murow/renderer/managers/runtime';
+import { Renderer2DCore, CameraEffectStack, DynamicSprite, StaticSprite, SpriteUniforms, createSpriteLayout, createTextureLayout, createSpriteVertex, createSpriteFragment, Raycast2D, RaycastController2D, CameraManager2D, SpriteManager, SpritesheetManager, GeometryManager, setPrefab2DHandle } from 'murow/renderer/managers/runtime';
 import { BaseRenderer } from 'murow/renderer';
 import type {
     AssetBucket,
@@ -73,7 +73,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     /** Custom geometry facade. */
     geometry!: GeometryManager;
     /** 2D picking facade. */
-    raycast!: WebGPURaycast2D;
+    raycast!: Raycast2D;
 
     private resizeObserver: ResizeObserver | null = null;
     private readonly resizeCallbacks: ((width: number, height: number) => void)[] = [];
@@ -201,7 +201,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
             this.uploadPrefabBucket(this._prefabs);
         }
 
-        this.raycast = new WebGPURaycast2D(new RaycastController2D({
+        this.raycast = new Raycast2D(new RaycastController2D({
             camera: this.camera,
             eachSprite: this.sprites.eachSprite.bind(this.sprites),
             resolveHitbox: this.sprites.resolveHitbox.bind(this.sprites),

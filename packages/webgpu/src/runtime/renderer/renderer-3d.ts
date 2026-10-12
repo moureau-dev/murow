@@ -32,7 +32,7 @@ import type { RendererRuntime } from 'murow/renderer/managers';
 import { CameraEffectStack } from 'murow/renderer/managers/runtime';
 import {
     ResizeController,
-    WebGPURaycast3D,
+    Raycast3D,
     MeshPipelines,
     SkeletalRuntime,
     SkinCull,
@@ -97,7 +97,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private readonly skinCull: SkinCull;
 
     readonly camera: CameraManager;
-    raycast!: WebGPURaycast3D;
+    raycast!: Raycast3D;
     /** Names auto-assigned to internal (decal) materials that have none. */
     private decalMaterialSeq = 0;
     private lastRenderTime = 0;

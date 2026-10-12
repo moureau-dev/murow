@@ -25,7 +25,7 @@ import {
     ModelsManager,
 } from './runtime';
 import { TextureRegistry, ModelLibrary, SkeletalRuntime, SkinCull } from './runtime/internals';
-import { MainPass, RaycastController, WebGPURaycast3D } from './runtime/internals';
+import { MainPass, RaycastController, Raycast3D } from './runtime/internals';
 import type { RendererCore } from './runtime/core';
 import { DEFAULT_CAPACITIES } from './runtime/defaults';
 
@@ -59,7 +59,7 @@ export class RendererManagers {
     readonly shadows!: ShadowManager;
     readonly decals!: DecalManager;
     readonly mainPass!: MainPass;
-    readonly raycast!: WebGPURaycast3D;
+    readonly raycast!: Raycast3D;
     readonly interpolators!: unknown[];
 
     constructor(private readonly deps: RendererManagersDeps) {
@@ -207,7 +207,7 @@ export class RendererManagers {
             getSkinModel: (index) => deps.core.models.skinnedModel(index),
             materialName: (id) => materialLibrary.nameOf(id),
         });
-        this.raycast = new WebGPURaycast3D(new RaycastController({
+        this.raycast = new Raycast3D(new RaycastController({
             camera: deps.camera,
             eachInstance: this.instances.eachInstance.bind(this.instances),
             resolveHitbox: this.instances.resolveHitbox.bind(this.instances),
