@@ -3675,7 +3675,12 @@ export class Arena<T extends DriverType = 'client'> {
 
 ### Build tooling: no special plugin required
 
-The renderer parses shader bodies from their source (`Function.toString()`) at link time — no build plugin to install, and it works in any bundler (Vite, esbuild, Webpack, Bun, or a plain `<script type="module">` with an import map). Keep identifier and syntax minification off in bundles that contain shader bodies.
+The renderer parses shader bodies from their source (`Function.toString()`) at link time — no build plugin to install, and it works in any bundler (Vite, esbuild, Webpack, Bun, or a plain `<script type="module">` with an import map).
+
+Identifier minification is **safe**; syntax minification is **not**. A syntax minifier folds statements — `if (c) discard;` into `c && discard;`, comma sequences, ternary chains — which corrupts the parsed bodies. Keep syntax folding off for any bundle containing shader bodies:
+
+- esbuild: `minifyWhitespace: true, minifyIdentifiers: true, minifySyntax: false`
+- Vite / Webpack / terser: make sure the syntax-level pass (esbuild `minifySyntax`, terser `compress`) does not rewrite shader code. Note Vite's default `build.minify: 'esbuild'` includes it.
 
 Just `import { WebGPU3DRenderer } from 'murow/webgpu'`.
 

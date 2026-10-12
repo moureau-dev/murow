@@ -22,6 +22,8 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d } from 'murow/webgpu';
 import { GameServer, GameClient, defineIntents } from 'murow/netcode';
 ```
 
+The renderer reads shader bodies from their source at link time, so **identifier minification is fine but syntax minification is not** (statement folding corrupts shader bodies). Keep it off in bundles that contain shaders — esbuild: `minifyWhitespace: true, minifyIdentifiers: true, minifySyntax: false`. Note Vite's default `build.minify: 'esbuild'` enables syntax folding.
+
 ## Quick Examples
 
 <details>

@@ -16,6 +16,8 @@ Then import from `murow/webgpu`:
 import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 ```
 
+Shader bodies are parsed from their source at link time, so no build plugin is needed, but **identifier minification is safe while syntax minification is not** (statement folding corrupts the parsed bodies). Keep syntax folding off in bundles containing shaders — esbuild `minifySyntax: false`. Vite's default `build.minify: 'esbuild'` includes it.
+
 ## Features
 
 ### Core

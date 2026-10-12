@@ -87,6 +87,8 @@ import { WebGPU2DRenderer, WebGPU3DRenderer } from 'murow/webgpu';
 
 See [WebGPU README](../webgpu/README.md) for full documentation.
 
+Shader bodies are parsed from their source at link time, so **identifier minification is safe but syntax minification is not** (statement folding corrupts the parsed bodies). Keep syntax folding off in bundles containing shaders — esbuild `minifySyntax: false`. Vite's default `build.minify: 'esbuild'` includes it.
+
 ### [Netcode](../netcode) — Multiplayer layer
 Opinionated multiplayer layer built on the `Protocol` and `Network`
 primitives above. Adds snapshot-based state sync, client-side prediction
