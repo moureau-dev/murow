@@ -7,7 +7,7 @@ import type { ServerTransportAdapter, TransportAdapter } from 'murow/net';
 import { u16 } from 'murow/core/binary-codec';
 import { defineRPC } from 'murow/protocol';
 import { Network } from '../network/base';
-import { encodeDelta } from '../codec/delta-codec';
+import { SnapshotEncoder, buildDeltaSchema } from '../codec/delta-codec';
 import { computeSchemaFingerprint } from '../codec/fingerprint';
 import { rateIncludes, type SyncSpec } from '../components/sync-spec';
 import type { DefinedIntents, IntentSchemaMap } from '../intents/define-intents';
@@ -98,7 +98,9 @@ interface InternalPeer extends Peer {
      * entities haven't mutated this tick.
      */
     needsBaseline: boolean;
-    intentQueue: { sequence: number; payload: Uint8Array }[];
+    /** Incoming intents, as two parallel arrays (no per-intent object). */
+    intentSeqs: number[];
+    intentPayloads: Uint8Array[];
     /** Server entities currently visible to this peer (interest-aware). */
     visible: SlotSet;
     /** Resume token for this peer's session. */
@@ -156,6 +158,13 @@ export class GameServer<
     private readonly syncedWireSize: number[][] = [];
     private budgetBytes = 0;
     private priorityFn: ((entity: Entity, world: World) => number) | null = null;
+    private encoder!: SnapshotEncoder;
+    private currentPeer: InternalPeer | null = null;
+    private currentCandidates: Entity[] | null = null;
+    private interestBuilt = false;
+    /** Reused encoder callback (one closure for all peers); reads `currentPeer`. */
+    private readonly encoderInclude = (eid: number, c: Component<any>): boolean =>
+        this.includeFor(this.currentPeer!, eid, c);
     private reconnection: { graceMs: number } | null = null;
     private nextSession = 0;
     private readonly sessionSalt = Math.random().toString(36).slice(2, 10);
@@ -222,6 +231,9 @@ export class GameServer<
             });
             this.syncedWireSize.push(sizes);
         }
+        this.encoder = new SnapshotEncoder(
+            buildDeltaSchema(this.world, this.syncedComponents, this.syncedNumMaskWords),
+        );
     }
 
     private wireTransport(): void {
@@ -234,7 +246,8 @@ export class GameServer<
                 lastAckedClientTick: 0,
                 pendingBySequence: new Map<number, Uint8Array>(),
                 needsBaseline: true,
-                intentQueue: [],
+                intentSeqs: [],
+                intentPayloads: [],
                 visible: new SlotSet(this.world.getMaxEntities()),
                 token: '',
                 resolved: false,
@@ -358,18 +371,22 @@ export class GameServer<
     private drainIntentQueues(): void {
         this.peers.forEach((peer) => {
             if (peer.kicking !== null) {
-                peer.intentQueue.length = 0;
+                peer.intentSeqs.length = 0;
+                peer.intentPayloads.length = 0;
                 peer.pendingBySequence.clear();
                 return;
             }
 
-            for (let i = 0; i < peer.intentQueue.length; i++) {
-                const entry = peer.intentQueue[i];
-                if (entry.sequence <= peer.lastAckedClientTick) continue;
-                if (peer.pendingBySequence.has(entry.sequence)) continue;
-                peer.pendingBySequence.set(entry.sequence, entry.payload);
+            const seqs = peer.intentSeqs;
+            const payloads = peer.intentPayloads;
+            for (let i = 0; i < seqs.length; i++) {
+                const seq = seqs[i]!;
+                if (seq <= peer.lastAckedClientTick) continue;
+                if (peer.pendingBySequence.has(seq)) continue;
+                peer.pendingBySequence.set(seq, payloads[i]!);
             }
-            peer.intentQueue.length = 0;
+            seqs.length = 0;
+            payloads.length = 0;
 
             while (peer.pendingBySequence.has(peer.lastAckedClientTick + 1)) {
                 const nextSequence = peer.lastAckedClientTick + 1;
@@ -409,11 +426,10 @@ export class GameServer<
             });
         }
 
-        const despawnedView = this.world.getDespawned();
-        const despawned: number[] = despawnedView.length > 0 ? Array.from(despawnedView) : [];
-        if (despawned.length > 0) this.world.flushDespawned();
+        const hadDespawn = this.world.getDespawned().length > 0;
+        if (hadDespawn) this.world.flushDespawned();
 
-        if (this.scratch.length === 0 && despawned.length === 0 && !this.anyNeedsBaseline()) {
+        if (this.scratch.length === 0 && !hadDespawn && !this.anyNeedsBaseline()) {
             return;
         }
         this.retainDirty.clear();
@@ -453,36 +469,12 @@ export class GameServer<
             }
             for (let i = 0; i < source.length; i++) candidates.push(source[i]!);
 
-            // Per-plugin visible sets, each computed against the candidate set.
-            // A component's `interest` selects the plugin that governs it;
-            // `'global'` means "not filtered". Built lazily.
-            let built = false;
-            const interestAllows = (eid: Entity, c: Component<any>): boolean => {
-                const rule = (c.__sync as SyncSpec).interest;
-                if (rule === 'global') return true;
-                if (!built) {
-                    this.ensureInterestSets();
-                    const out = this.interestOut;
-                    for (let i = 0; i < this.plugins.length; i++) {
-                        const set = this.interestSets[i]!;
-                        set.clear();
-                        const plugin = this.plugins[i]!;
-                        if (plugin.filterSnapshot === undefined) continue;
-                        out.length = 0;
-                        plugin.filterSnapshot(peer, this.world, candidates, out);
-                        for (let k = 0; k < out.length; k++) set.add(out[k]!);
-                    }
-                    built = true;
-                }
-                const idx = this.interestIndex[rule as string];
-                return idx === undefined ? true : this.interestSets[idx]!.has(eid);
-            };
-
-            const include = (eid: Entity, c: Component<any>): boolean =>
-                this.world.has(eid, c)
-                && interestAllows(eid, c)
-                && (peer.needsBaseline
-                    || rateIncludes((c.__sync as SyncSpec).rate, this.world.isDirty(eid, c), this.tickCounter));
+            // Per-plugin visible sets build lazily on first use this peer, via
+            // this.interestAllows. `currentCandidates` feeds the plugins;
+            // `currentPeer` feeds the reused encoder callback.
+            this.interestBuilt = false;
+            this.currentCandidates = candidates;
+            this.currentPeer = peer;
 
             // Interest-visible entities this tick → the peer's new visibility set.
             const vis = this.visibleScratch;
@@ -490,7 +482,7 @@ export class GameServer<
             for (let i = 0; i < candidates.length; i++) {
                 const eid = candidates[i]!;
                 for (const c of this.syncedComponents) {
-                    if (this.world.has(eid, c) && interestAllows(eid, c)) { vis.add(eid); break; }
+                    if (this.world.has(eid, c) && this.interestAllows(peer, eid, c)) { vis.add(eid); break; }
                 }
             }
 
@@ -520,7 +512,7 @@ export class GameServer<
             for (let i = 0; i < source.length; i++) {
                 const eid = source[i]!;
                 for (const c of this.syncedComponents) {
-                    if (include(eid, c)) { peerOut.push(eid); break; }
+                    if (this.includeFor(peer, eid, c)) { peerOut.push(eid); break; }
                 }
             }
 
@@ -534,7 +526,7 @@ export class GameServer<
                 for (let i = 0; i < peerOut.length; i++) {
                     const eid = peerOut[i]!;
                     eids.push(eid);
-                    bytesArr.push(this.entityBytes(eid, include));
+                    bytesArr.push(this.entityBytes(eid));
                     pri.push(this.priorityFn ? this.priorityFn(eid, this.world) : 0);
                     order.push(i);
                 }
@@ -557,24 +549,19 @@ export class GameServer<
             // header + clientAckTick. Established peers skip empty deltas.
             if (peerOut.length === 0 && this.peerDespawned.length === 0 && !peer.needsBaseline) return;
 
-            const buf = encodeDelta(
+            const frame = this.encoder.encode(
                 this.world,
                 this.tickCounter,
                 peerOut as number[],
-                this.syncedComponents,
-                this.syncedNumMaskWords,
                 this.peerDespawned,
                 peer.lastAckedClientTick,
-                include,
+                this.encoderInclude,
             );
-
-            const framed = new Uint8Array(buf.length + 1);
-            framed[0] = MSG_SNAPSHOT;
-            framed.set(buf, 1);
-            peer.transport.send(framed);
+            frame[0] = MSG_SNAPSHOT;
+            peer.transport.send(frame);
 
             peer.needsBaseline = false;
-            this.emit('snapshot', { peer, tick: this.tickCounter, byteSize: framed.length });
+            this.emit('snapshot', { peer, tick: this.tickCounter, byteSize: frame.length });
         });
 
         // Clear dirty for the next tick. Per-peer ack-driven resend on
@@ -603,7 +590,41 @@ export class GameServer<
     }
 
     /** Wire size (bytes) of one entity's shipping components for a peer. */
-    private entityBytes(eid: Entity, include: (e: Entity, c: Component<any>) => boolean): number {
+    /**
+     * Whether the component's interest rule admits `eid` for `peer`. Per-plugin
+     * visible sets are built once per peer, from `currentCandidates`.
+     */
+    private interestAllows(peer: InternalPeer, eid: Entity, c: Component<any>): boolean {
+        const rule = (c.__sync as SyncSpec).interest;
+        if (rule === 'global') return true;
+        if (!this.interestBuilt) {
+            this.ensureInterestSets();
+            const out = this.interestOut;
+            const candidates = this.currentCandidates!;
+            for (let i = 0; i < this.plugins.length; i++) {
+                const set = this.interestSets[i]!;
+                set.clear();
+                const plugin = this.plugins[i]!;
+                if (plugin.filterSnapshot === undefined) continue;
+                out.length = 0;
+                plugin.filterSnapshot(peer, this.world, candidates, out);
+                for (let k = 0; k < out.length; k++) set.add(out[k]!);
+            }
+            this.interestBuilt = true;
+        }
+        const idx = this.interestIndex[rule as string];
+        return idx === undefined ? true : this.interestSets[idx]!.has(eid);
+    }
+
+    private includeFor(peer: InternalPeer, eid: Entity, c: Component<any>): boolean {
+        return this.world.has(eid, c)
+            && this.interestAllows(peer, eid, c)
+            && (peer.needsBaseline
+                || rateIncludes((c.__sync as SyncSpec).rate, this.world.isDirty(eid, c), this.tickCounter));
+    }
+
+    private entityBytes(eid: Entity): number {
+        const include = this.encoderInclude;
         let bytes = 4 + this.syncedNumMaskWords * 4;
         for (let ci = 0; ci < this.syncedComponents.length; ci++) {
             const c = this.syncedComponents[ci]!;
@@ -647,7 +668,8 @@ export class GameServer<
             }
             const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
             const sequence = dv.getUint32(1, true);
-            peer.intentQueue.push({ sequence, payload: data.subarray(5) });
+            peer.intentSeqs.push(sequence);
+            peer.intentPayloads.push(data.subarray(5));
             return;
         }
         if (type === CMSG_RPC) {

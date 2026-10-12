@@ -37,7 +37,7 @@ function onSnapshot(snapshot: ServerSnapshot) {
 
 - `record(sequence, cmd)`: append a command (pushed in ascending sequence).
 - `dropThrough(sequence)`: drop every entry with sequence <= the confirmed one.
-- `pending()`: the still-unconfirmed commands, in order.
+- `pending()`: the still-unconfirmed commands, in order. The array is internal and reused across calls, so do not retain it.
 - `size`, `clear()`.
 
 ### Reconciler

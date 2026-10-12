@@ -4,36 +4,63 @@
  * removes everything the authority has confirmed.
  */
 export class PredictionLog<Cmd> {
-    private entries: { sequence: number; cmd: Cmd }[] = [];
+    /** Live window is `[head, sequences.length)`. Parallel arrays: no per-record object. */
+    private sequences: number[] = [];
+    private cmds: Cmd[] = [];
+    private head = 0;
+    /** Reused return buffer for `pending()` — valid only until the next call. */
+    private readonly scratch: Cmd[] = [];
 
     constructor(private capacity: number = 64) {}
 
     get size(): number {
-        return this.entries.length;
+        return this.sequences.length - this.head;
     }
 
     /** Record a command with its sequence. Commands must be recorded in ascending sequence. */
     record(sequence: number, cmd: Cmd): void {
-        this.entries.push({ sequence, cmd });
-        while (this.entries.length > this.capacity) this.entries.shift();
+        this.sequences.push(sequence);
+        this.cmds.push(cmd);
+        if (this.sequences.length - this.head > this.capacity) {
+            this.head++;
+            this.reclaim();
+        }
     }
 
     /** Drop every entry with sequence <= the confirmed sequence. */
     dropThrough(sequence: number): void {
-        let cut = 0;
-        while (cut < this.entries.length && this.entries[cut].sequence <= sequence) cut++;
-        if (cut > 0) this.entries.splice(0, cut);
+        const len = this.sequences.length;
+        while (this.head < len && this.sequences[this.head]! <= sequence) this.head++;
+        this.reclaim();
     }
 
-    /** The commands still awaiting confirmation, in order. */
+    /**
+     * The commands still awaiting confirmation, in order. The returned array is
+     * internal and reused across calls — do not retain it.
+     */
     pending(): Cmd[] {
-        const out = new Array<Cmd>(this.entries.length);
-        for (let i = 0; i < this.entries.length; i++) out[i] = this.entries[i].cmd;
+        const out = this.scratch;
+        out.length = 0;
+        for (let i = this.head; i < this.cmds.length; i++) out.push(this.cmds[i]!);
         return out;
     }
 
     clear(): void {
-        this.entries.length = 0;
+        this.sequences.length = 0;
+        this.cmds.length = 0;
+        this.head = 0;
+    }
+
+    /** Drop the consumed prefix; reset when everything is consumed. */
+    private reclaim(): void {
+        if (this.head === 0) return;
+        if (this.head === this.sequences.length) {
+            this.clear();
+        } else if (this.head >= 64) {
+            this.sequences.splice(0, this.head);
+            this.cmds.splice(0, this.head);
+            this.head = 0;
+        }
     }
 }
 
