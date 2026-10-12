@@ -17,12 +17,20 @@ import type { SheetId } from '../ids';
  * Sheet ids are versioned; the batcher's sheet field and the bind-group table
  * are indexed by the decoded slot.
  */
+export interface SpritesheetManagerOptions {
+    core: Renderer2DCore;
+}
+
 export class SpritesheetManager {
     private readonly allocator = new GenerationAllocator(SparseBatcher.MAX_SHEETS);
     private readonly sheets: (Spritesheet | null)[] = new Array(SparseBatcher.MAX_SHEETS).fill(null);
     private readonly bindGroups: (RawBindGroup | null)[] = new Array(SparseBatcher.MAX_SHEETS).fill(null);
 
-    constructor(private readonly core: Renderer2DCore) {}
+    private readonly core: Renderer2DCore;
+
+    constructor(options: SpritesheetManagerOptions) {
+        this.core = options.core;
+    }
 
     /** Parse a spritesheet source and upload it to the GPU. */
     async load(source: SpritesheetSource): Promise<SpritesheetHandle> {

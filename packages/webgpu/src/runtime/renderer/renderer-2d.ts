@@ -16,6 +16,7 @@ import type { RawDevice, RawTextureFormat } from 'murow/gpu';
 import { d } from '../../gpu';
 import { runtime } from '../runtime';
 import type { RendererRuntime } from 'murow/renderer/managers';
+import { RendererManagers2D } from 'murow/renderer/managers';
 import { Renderer2DCore, CameraEffectStack, DynamicSprite, StaticSprite, SpriteUniforms, createSpriteLayout, createTextureLayout, createSpriteVertex, createSpriteFragment, Raycast2D, RaycastController2D, CameraManager2D, SpriteManager, SpritesheetManager, GeometryManager, setPrefab2DHandle } from 'murow/renderer/managers/runtime';
 import { BaseRenderer } from 'murow/renderer';
 import type {
@@ -182,14 +183,19 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         });
 
         // Managers
-        this.sheets = new SpritesheetManager(this.core);
-        this.sprites = new SpriteManager({
+        const managers = new RendererManagers2D({
             core: this.core,
-            capacity: this.maxSprites,
+            runtime: this.runtime,
+            canvas: this.canvas,
             logger: this.logger,
+            camera: this.core.camera,
+            maxSprites: this.maxSprites,
             prefabs: this._prefabs,
+            getClearColor: () => this._clearColor,
         });
-        this.geometry = new GeometryManager(this.core, this.runtime, this.canvas, () => this._clearColor);
+        this.sheets = managers.sheets;
+        this.sprites = managers.sprites;
+        this.geometry = managers.geometry;
         this.cameraEffects = new CameraEffectStack({
             runtime: this.runtime,
             root: this.core.root,
