@@ -1,4 +1,5 @@
 import { SimpleRNG } from 'murow/core/simple-rng';
+import { SlotSet } from 'murow/core/slot-map';
 import type { Component, Entity, World } from 'murow/ecs';
 import type { GameLoop } from 'murow/game';
 import type { ServerTransportAdapter, TransportAdapter } from 'murow/net';
@@ -93,6 +94,10 @@ export class GameServer<
     private syncedComponents: Component<any>[] = [];
     private syncedNumMaskWords = 1;
     private snapshotEvery: number;
+    /** One reused visibility set per plugin (indexed by registration order). */
+    private interestSets: SlotSet[] = [];
+    private interestIndex: Record<string, number> = Object.create(null);
+    private readonly interestOut: Entity[] = [];
     private tickCounter = 0;
     private kickAckTimeout: number;
     private rng: SimpleRNG;
@@ -284,22 +289,26 @@ export class GameServer<
             // full source set. A component's `interest` selects the plugin that
             // governs it; `'global'` means "not filtered". Built lazily, since
             // most components carry `'global'`.
-            let perPlugin: Map<string, Set<Entity>> | null = null;
+            let built = false;
             const interestAllows = (eid: Entity, c: Component<any>): boolean => {
                 const rule = (c.__sync as SyncSpec).interest;
                 if (rule === 'global') return true;
-                if (perPlugin === null) {
-                    perPlugin = new Map();
-                    const out: Entity[] = [];
-                    for (const plugin of this.plugins) {
+                if (!built) {
+                    this.ensureInterestSets();
+                    const out = this.interestOut;
+                    for (let i = 0; i < this.plugins.length; i++) {
+                        const set = this.interestSets[i]!;
+                        set.clear();
+                        const plugin = this.plugins[i]!;
                         if (plugin.filterSnapshot === undefined) continue;
                         out.length = 0;
                         plugin.filterSnapshot(peer, this.world, source, out);
-                        perPlugin.set(plugin.name, new Set(out));
+                        for (let k = 0; k < out.length; k++) set.add(out[k]!);
                     }
+                    built = true;
                 }
-                const set = perPlugin.get(rule as string);
-                return set === undefined ? true : set.has(eid);
+                const idx = this.interestIndex[rule as string];
+                return idx === undefined ? true : this.interestSets[idx]!.has(eid);
             };
 
             const include = (eid: Entity, c: Component<any>): boolean =>
@@ -344,6 +353,15 @@ export class GameServer<
         // Clear dirty for the next tick. Per-peer ack-driven resend on
         // packet loss is future work.
         this.world.clearAllDirty();
+    }
+
+    /** (Re)build the per-plugin visibility sets when the plugin list changes. */
+    private ensureInterestSets(): void {
+        if (this.interestSets.length === this.plugins.length) return;
+        const max = this.world.getMaxEntities();
+        this.interestSets = this.plugins.map(() => new SlotSet(max));
+        this.interestIndex = Object.create(null);
+        for (let i = 0; i < this.plugins.length; i++) this.interestIndex[this.plugins[i]!.name] = i;
     }
 
     private anyNeedsBaseline(): boolean {
