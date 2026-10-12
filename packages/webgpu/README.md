@@ -52,7 +52,7 @@ import { WebGPU2DRenderer, WebGPU3DRenderer, d, std } from 'murow/webgpu';
 <summary><strong>2D Sprites</strong></summary>
 
 ```typescript
-import { AssetBucket } from 'murow';
+import { AssetBucket, GameLoop } from 'murow';
 import { WebGPU2DRenderer } from 'murow/webgpu';
 
 const assets = new AssetBucket('2d')
@@ -69,13 +69,16 @@ await assets.load();
 const renderer = new WebGPU2DRenderer(canvas, { assets, maxInstances: 10000 });
 await renderer.init();
 
+const loop = new GameLoop({ tickRate: 20 });
+loop.on('pre-tick', () => { renderer.storePreviousState(); });
+loop.on('render', ({ alpha }) => { renderer.render(alpha); });
+
 const player = renderer.sprites.add({
   sheet: assets.prefabs.get('characters'),
   sprite: 0,
   position: [400, 300],
 });
 player.x = 500; // Direct buffer writes
-renderer.render(alpha);
 ```
 
 `renderer.sprites` is a collection manager (`get`, `has`, `each`, `remove`, `clear`, `capacity`, `count`, `events`); sprites carry a versioned `id` and an `alive` flag, and `sprite.destroy()` is idempotent. `renderer.sheets` and `renderer.geometry` are the other 2D managers.
