@@ -14,6 +14,37 @@ import type { Component, World } from 'murow/ecs';
 
 const HEADER_BYTES = 4 + 4 + 2 + 2;
 
+export interface QuantSpec {
+    readonly min: number;
+    readonly max: number;
+    readonly bits?: 8 | 16;
+}
+
+interface ResolvedQuant {
+    readonly min: number;
+    readonly max: number;
+    readonly maxInt: number;
+    readonly bytes: number;
+}
+
+function resolveQuant(sync: unknown, fieldName: string): ResolvedQuant | null {
+    const spec = (sync as { quantize?: Record<string, QuantSpec> } | undefined)?.quantize?.[fieldName];
+    if (spec === undefined) return null;
+    const bits = spec.bits ?? 16;
+    return { min: spec.min, max: spec.max, maxInt: (1 << bits) - 1, bytes: bits / 8 };
+}
+
+function quantPack(value: number, q: ResolvedQuant): number {
+    let i = Math.round(((value - q.min) / (q.max - q.min)) * q.maxInt);
+    if (i < 0) i = 0;
+    else if (i > q.maxInt) i = q.maxInt;
+    return i;
+}
+
+function quantUnpack(i: number, q: ResolvedQuant): number {
+    return q.min + (i / q.maxInt) * (q.max - q.min);
+}
+
 export function encodeDelta(
     world: World,
     tick: number,
@@ -24,9 +55,40 @@ export function encodeDelta(
     clientAckTick: number = 0,
     includeComponent: (entity: number, component: Component<any>) => boolean = () => true,
 ): Uint8Array {
-    const perEntityMasks: Uint32Array[] = new Array(entities.length);
     const perEntityBitmaskBytes = numMaskWords * 4;
 
+    // Pre-resolve per-component metadata once: field arrays, schema, whether
+    // every field is a single-element scalar, and the per-field wire size
+    // (quantized fields shrink; the store stays full-width).
+    const componentFieldArrays: (Record<string, any>)[] = new Array(components.length);
+    const componentSchemas: (Record<string, any>)[] = new Array(components.length);
+    const componentAllScalar: boolean[] = new Array(components.length);
+    const componentQuants: (ResolvedQuant | null)[][] = new Array(components.length);
+    const componentWireSizes: number[][] = new Array(components.length);
+    const maxEntities = world.getMaxEntities();
+    for (let ci = 0; ci < components.length; ci++) {
+        const c = components[ci];
+        const fieldArrays = world.fields(c) as Record<string, any>;
+        componentFieldArrays[ci] = fieldArrays;
+        componentSchemas[ci] = c.schema as Record<string, any>;
+        const fieldNames = c.fieldNames as string[];
+        const sync = (c as any).__sync;
+        const quants: (ResolvedQuant | null)[] = new Array(fieldNames.length);
+        const wireSizes: number[] = new Array(fieldNames.length);
+        let allScalar = true;
+        for (let fi = 0; fi < fieldNames.length; fi++) {
+            const fname = fieldNames[fi];
+            const q = resolveQuant(sync, fname);
+            quants[fi] = q;
+            wireSizes[fi] = q ? q.bytes : (c.schema as any)[fname].size;
+            if (fieldArrays[fname].length !== maxEntities) allScalar = false;
+        }
+        componentQuants[ci] = quants;
+        componentWireSizes[ci] = wireSizes;
+        componentAllScalar[ci] = allScalar;
+    }
+
+    const perEntityMasks: Uint32Array[] = new Array(entities.length);
     let bodyBytes = 0;
     for (let i = 0; i < entities.length; i++) {
         const eid = entities[i];
@@ -36,10 +98,9 @@ export function encodeDelta(
             const c = components[ci];
             if (!world.has(eid, c)) continue;
             if (!includeComponent(eid, c)) continue;
-            const wordIndex = ci >>> 5;
-            const bitIndex = ci & 31;
-            mask[wordIndex] |= 1 << bitIndex;
-            componentBytes += c.size;
+            mask[ci >>> 5] |= 1 << (ci & 31);
+            const ws = componentWireSizes[ci];
+            for (let fi = 0; fi < ws.length; fi++) componentBytes += ws[fi];
         }
         perEntityMasks[i] = mask;
         bodyBytes += 4 + perEntityBitmaskBytes + componentBytes;
@@ -55,71 +116,36 @@ export function encodeDelta(
     dv.setUint16(off, entities.length, true); off += 2;
     dv.setUint16(off, despawned.length, true); off += 2;
 
-    // Pre-resolve per-component metadata so the hot inner loop avoids
-    // re-allocating a Readonly<T> view via `world.get(eid, c)` for every
-    // entity. Each component gets:
-    //   - fieldArrays: the typed-array bundle (world.fields(c))
-    //   - allScalar: true if every field is single-element-per-entity, so
-    //                we can read via `fieldArrays[name][eid]` directly.
-    //                false if any field is composite (vec/string) - in
-    //                which case we fall back to `world.get` for that
-    //                component (still allocation-free thanks to the
-    //                ComponentStore reusable-object pattern).
-    const componentFieldArrays: (Record<string, any>)[] = new Array(components.length);
-    const componentSchemas: (Record<string, any>)[] = new Array(components.length);
-    const componentAllScalar: boolean[] = new Array(components.length);
-    const maxEntities = world.getMaxEntities();
-    for (let ci = 0; ci < components.length; ci++) {
-        const c = components[ci];
-        const fieldArrays = world.fields(c) as Record<string, any>;
-        componentFieldArrays[ci] = fieldArrays;
-        componentSchemas[ci] = c.schema as Record<string, any>;
-        let allScalar = true;
-        for (let fi = 0; fi < c.fieldNames.length; fi++) {
-            const fname = c.fieldNames[fi] as string;
-            if (fieldArrays[fname].length !== maxEntities) {
-                allScalar = false;
-                break;
-            }
-        }
-        componentAllScalar[ci] = allScalar;
-    }
-
     for (let i = 0; i < entities.length; i++) {
         const eid = entities[i];
         const mask = perEntityMasks[i];
 
         dv.setUint32(off, eid >>> 0, true); off += 4;
-
         for (let w = 0; w < numMaskWords; w++) {
             dv.setUint32(off, mask[w], true); off += 4;
         }
 
         for (let ci = 0; ci < components.length; ci++) {
-            const wordIndex = ci >>> 5;
-            const bitIndex = ci & 31;
-            if ((mask[wordIndex] & (1 << bitIndex)) === 0) continue;
+            if ((mask[ci >>> 5] & (1 << (ci & 31))) === 0) continue;
 
             const c = components[ci];
             const fieldArrays = componentFieldArrays[ci];
             const schema = componentSchemas[ci];
+            const quants = componentQuants[ci];
             const fieldNames = c.fieldNames as string[];
+            const data = componentAllScalar[ci] ? null : (world.get(eid, c) as Record<string, unknown>);
 
-            if (componentAllScalar[ci]) {
-                // Fast path: direct typed-array reads per field.
-                for (let fi = 0; fi < fieldNames.length; fi++) {
-                    const fieldName = fieldNames[fi];
+            for (let fi = 0; fi < fieldNames.length; fi++) {
+                const fieldName = fieldNames[fi];
+                const value = componentAllScalar[ci] ? fieldArrays[fieldName][eid] : data![fieldName];
+                const q = quants[fi];
+                if (q !== null) {
+                    const iv = quantPack(value as number, q);
+                    if (q.bytes === 1) { dv.setUint8(off, iv); off += 1; }
+                    else { dv.setUint16(off, iv, true); off += 2; }
+                } else {
                     const field = schema[fieldName];
-                    field.write(dv, off, fieldArrays[fieldName][eid]);
-                    off += field.size;
-                }
-            } else {
-                // Composite-field fallback: assemble the value via world.get.
-                const data = world.get(eid, c) as Record<string, unknown>;
-                for (let fi = 0; fi < fieldNames.length; fi++) {
-                    const fieldName = fieldNames[fi];
-                    const field = schema[fieldName];
-                    field.write(dv, off, data[fieldName]);
+                    field.write(dv, off, value);
                     off += field.size;
                 }
             }
@@ -192,10 +218,18 @@ export function decodeDelta(
         const compMap = new Map<Component<any>, Record<string, any>>();
         for (const c of present) {
             const update: Record<string, any> = {};
+            const sync = (c as any).__sync;
             for (const fieldName of c.fieldNames as string[]) {
-                const field = (c.schema as any)[fieldName];
-                update[fieldName] = field.read(dv, off);
-                off += field.size;
+                const q = resolveQuant(sync, fieldName);
+                if (q !== null) {
+                    const iv = q.bytes === 1 ? dv.getUint8(off) : dv.getUint16(off, true);
+                    off += q.bytes;
+                    update[fieldName] = quantUnpack(iv, q);
+                } else {
+                    const field = (c.schema as any)[fieldName];
+                    update[fieldName] = field.read(dv, off);
+                    off += field.size;
+                }
             }
             compMap.set(c, update);
             if (applyToWorld) {

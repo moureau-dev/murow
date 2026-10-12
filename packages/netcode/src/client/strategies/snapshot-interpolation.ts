@@ -68,6 +68,7 @@ export class SnapshotInterpolation {
     private timeline: Timeline<BufferedSnapshot>;
     private clock = new SlewClock();
     private smoothedTickRateMs: number;
+    private readonly seenScratch = new Set<number>();
     private nominalTickMs: number;
     delay: number;
     maxDesync: number;
@@ -169,7 +170,8 @@ export class SnapshotInterpolation {
         const a = tl.at(aIndex).sample;
         const b = tl.at(bIndex).sample;
 
-        const seen = new Set<number>();
+        const seen = this.seenScratch;
+        seen.clear();
         for (const eid of a.entityIds) seen.add(eid);
         for (const eid of b.entityIds) seen.add(eid);
 

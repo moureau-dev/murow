@@ -47,6 +47,14 @@ export interface GameServerOptions<
     snapshot?: {
         /** Snapshots per second. Clamped to tickRate. Default 20. */
         rate?: number;
+        /**
+         * Soft per-peer byte cap for the entity body. When set, entities are
+         * sent highest-priority first until the cap is reached; ones that do
+         * not fit stay dirty and ship on a later tick.
+         */
+        maxBytesPerPeer?: number;
+        /** Entity priority for the byte cap (higher sends first). Default: all equal. */
+        priority?: (entity: Entity, world: World) => number;
     };
     kick?: {
         /** Ms before forcing transport close after a kick. Default 2000. */
@@ -114,6 +122,16 @@ export class GameServer<
     private readonly baselineSeen: SlotSet;
     private readonly peerDespawned: number[] = [];
     private readonly candidates: number[] = [];
+    private readonly budgetEids: number[] = [];
+    private readonly budgetBytesArr: number[] = [];
+    private readonly budgetPri: number[] = [];
+    private readonly budgetOrder: number[] = [];
+    private readonly byPriDesc = (a: number, b: number): number => this.budgetPri[b]! - this.budgetPri[a]!;
+    private readonly retainDirty: SlotSet;
+    /** Per-synced-component, per-field wire size in bytes (quantization-aware). */
+    private readonly syncedWireSize: number[][] = [];
+    private budgetBytes = 0;
+    private priorityFn: ((entity: Entity, world: World) => number) | null = null;
 
     constructor(opts: GameServerOptions<I, R>) {
         super([
@@ -135,6 +153,7 @@ export class GameServer<
         this.dirtySeen = new SlotSet(this.world.getMaxEntities());
         this.visibleScratch = new SlotSet(this.world.getMaxEntities());
         this.baselineSeen = new SlotSet(this.world.getMaxEntities());
+        this.retainDirty = new SlotSet(this.world.getMaxEntities());
 
         const reg = this.rpcs.registry as any;
         if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
@@ -145,6 +164,8 @@ export class GameServer<
         const effectiveSnapshotRate = Math.min(requestedSnapshotRate, tickRate);
         this.snapshotEvery = Math.max(1, Math.round(tickRate / effectiveSnapshotRate));
         this.kickAckTimeout = opts.kick?.ackTimeout ?? 2000;
+        this.budgetBytes = opts.snapshot?.maxBytesPerPeer ?? 0;
+        this.priorityFn = opts.snapshot?.priority ?? null;
         this.lastDt = opts.loop.ticker.intervalMs / 1000;
 
         this.discoverSyncedComponents();
@@ -158,6 +179,14 @@ export class GameServer<
             if (c.__sync !== undefined) this.syncedComponents.push(c);
         }
         this.syncedNumMaskWords = Math.max(1, Math.ceil(this.syncedComponents.length / 32));
+        for (const c of this.syncedComponents) {
+            const sync = (c as any).__sync as { quantize?: Record<string, { bits?: 8 | 16 }> } | undefined;
+            const sizes = (c.fieldNames as string[]).map((f) => {
+                const q = sync?.quantize?.[f];
+                return q ? (q.bits ?? 16) / 8 : (c.schema as any)[f].size;
+            });
+            this.syncedWireSize.push(sizes);
+        }
     }
 
     private wireTransport(): void {
@@ -273,6 +302,7 @@ export class GameServer<
         if (this.scratch.length === 0 && despawned.length === 0 && !this.anyNeedsBaseline()) {
             return;
         }
+        this.retainDirty.clear();
 
         // Built lazily; only if at least one peer needs a baseline.
         let baseline: Entity[] | null = null;
@@ -380,6 +410,35 @@ export class GameServer<
                 }
             }
 
+            // Per-peer byte budget: keep the highest-priority entities that
+            // fit; dropped ones stay dirty and ship on a later tick.
+            if (this.budgetBytes > 0 && peerOut.length > 0) {
+                const eids = this.budgetEids; eids.length = 0;
+                const bytesArr = this.budgetBytesArr; bytesArr.length = 0;
+                const pri = this.budgetPri; pri.length = 0;
+                const order = this.budgetOrder; order.length = 0;
+                for (let i = 0; i < peerOut.length; i++) {
+                    const eid = peerOut[i]!;
+                    eids.push(eid);
+                    bytesArr.push(this.entityBytes(eid, include));
+                    pri.push(this.priorityFn ? this.priorityFn(eid, this.world) : 0);
+                    order.push(i);
+                }
+                order.sort(this.byPriDesc);
+                let used = 0;
+                peerOut.length = 0;
+                for (let i = 0; i < order.length; i++) {
+                    const idx = order[i]!;
+                    const b = bytesArr[idx]!;
+                    if (peerOut.length > 0 && used + b > this.budgetBytes) {
+                        this.retainDirty.add(eids[idx]!);
+                        continue;
+                    }
+                    used += b;
+                    peerOut.push(eids[idx]!);
+                }
+            }
+
             // Baseline peers always send (even empty) so they get a tick
             // header + clientAckTick. Established peers skip empty deltas.
             if (peerOut.length === 0 && this.peerDespawned.length === 0 && !peer.needsBaseline) return;
@@ -407,6 +466,17 @@ export class GameServer<
         // Clear dirty for the next tick. Per-peer ack-driven resend on
         // packet loss is future work.
         this.world.clearAllDirty();
+        if (this.retainDirty.size > 0) {
+            const rd = this.retainDirty.denseBuffer;
+            const rn = this.retainDirty.size;
+            for (let i = 0; i < rn; i++) {
+                const eid = rd[i]!;
+                for (const c of this.syncedComponents) {
+                    if (this.world.has(eid, c)) this.world.markDirty(eid, (c as any).__worldIndex);
+                }
+            }
+            this.retainDirty.clear();
+        }
     }
 
     /** (Re)build the per-plugin visibility sets when the plugin list changes. */
@@ -416,6 +486,18 @@ export class GameServer<
         this.interestSets = this.plugins.map(() => new SlotSet(max));
         this.interestIndex = Object.create(null);
         for (let i = 0; i < this.plugins.length; i++) this.interestIndex[this.plugins[i]!.name] = i;
+    }
+
+    /** Wire size (bytes) of one entity's shipping components for a peer. */
+    private entityBytes(eid: Entity, include: (e: Entity, c: Component<any>) => boolean): number {
+        let bytes = 4 + this.syncedNumMaskWords * 4;
+        for (let ci = 0; ci < this.syncedComponents.length; ci++) {
+            const c = this.syncedComponents[ci]!;
+            if (!this.world.has(eid, c) || !include(eid, c)) continue;
+            const sizes = this.syncedWireSize[ci]!;
+            for (let fi = 0; fi < sizes.length; fi++) bytes += sizes[fi]!;
+        }
+        return bytes;
     }
 
     private anyNeedsBaseline(): boolean {

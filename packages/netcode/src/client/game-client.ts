@@ -13,6 +13,7 @@ import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs'
 import type { DefinedPredictions } from '../predictions/define-predictions';
 import type { SyncSpec } from '../components/sync-spec';
 import { Logger } from 'murow/core/logger';
+import { SlotSet } from 'murow/core/slot-map';
 import { makeFieldsAccessor, makeMarkDirty, type PredictionContext } from '../ctx';
 
 const MSG_SNAPSHOT = 0x80;
@@ -110,7 +111,7 @@ export class GameClient<
 
     private predictionMap: DefinedPredictions<I>['map'] | null = null;
     private predictionBufferSize: number;
-    private reconciler: Reconciler<PredictedIntent, { decoded: DecodedDelta; resetEntities: Set<Entity> }>;
+    private reconciler: Reconciler<PredictedIntent, { decoded: DecodedDelta; resetEntities: SlotSet }>;
 
     private localTick = 0;
     private intentSequence = 0;
@@ -166,6 +167,7 @@ export class GameClient<
             'error',
         ]);
         this.world = opts.world;
+        this.reconcileCtx = { decoded: null, resetEntities: new SlotSet(this.world.getMaxEntities()) };
         this.loop = opts.loop;
         this.transport = opts.transport;
         this.intents = opts.protocol.intents;
@@ -413,11 +415,12 @@ export class GameClient<
      * Rewind predicted entities to authoritative state, drop predictions
      * the server has acked, replay the rest on top.
      */
+    private readonly reconcileCtx: { decoded: DecodedDelta | null; resetEntities: SlotSet };
+
     private reconcile(decoded: DecodedDelta): void {
-        this.reconciler.reconcile(decoded.clientAckTick, {
-            decoded,
-            resetEntities: new Set<Entity>(),
-        });
+        this.reconcileCtx.decoded = decoded;
+        this.reconcileCtx.resetEntities.clear();
+        this.reconciler.reconcile(decoded.clientAckTick, this.reconcileCtx as { decoded: DecodedDelta; resetEntities: SlotSet });
     }
 
     private handleRpc(payload: Uint8Array): void {

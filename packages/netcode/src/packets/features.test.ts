@@ -9,6 +9,7 @@ import { definePredictions } from '../predictions/define-predictions';
 import { GameServer } from '../server/game-server';
 import { GameClient } from '../client/game-client';
 import { SnapshotInterpolation, type BufferedSnapshot } from '../client/strategies/snapshot-interpolation';
+import { encodeDelta, decodeDelta } from '../codec/delta-codec';
 import { networked } from '../components/sync-spec';
 import type { ServerPlugin } from '../server/plugins/plugin';
 import { AoiGrid } from '../server/plugins/aoi-grid';
@@ -280,5 +281,96 @@ describe('AOI enter/leave', () => {
 
         const after = (client as any).serverToLocal.get(enemy as number);
         expect(after === undefined || !clientWorld.has(after, Pos)).toBe(true);
+    });
+});
+
+describe('wire quantization', () => {
+    const Q = defineComponent('Q', {
+        schema: { x: f32, y: f32 },
+        sync: networked({
+            rate: 'every-tick', interest: 'global',
+            quantize: { x: { min: -100, max: 100, bits: 16 }, y: { min: -100, max: 100, bits: 16 } },
+        }),
+    });
+    const R = defineComponent('R', {
+        schema: { x: f32, y: f32 },
+        sync: networked({ rate: 'every-tick', interest: 'global' }),
+    });
+
+    test('round-trips within the quantization step and shrinks the wire', () => {
+        const enc = (C: any, val: Record<string, number>) => {
+            const w = new World({ maxEntities: 4, components: [C] });
+            const e = w.spawn();
+            w.add(e, C, val);
+            const buf = encodeDelta(w, 1, [e], [C], 1);
+            const w2 = new World({ maxEntities: 4, components: [C] });
+            const map = new Map<number, number>();
+            const ensure = (sid: number) => { let l = map.get(sid); if (l === undefined) { l = w2.spawn(); map.set(sid, l); } return l; };
+            decodeDelta(w2, buf, [C], 1, ensure);
+            return { buf, world: w2, entity: map.get(e as number)!, };
+        };
+
+        const q = enc(Q, { x: 12.3456, y: -7.891 });
+        const x = q.world.get(q.entity, Q).x;
+        const y = q.world.get(q.entity, Q).y;
+        // range 200 over 16 bits → step ≈ 0.00305; assert within a few steps.
+        expect(Math.abs(x - 12.3456)).toBeLessThan(0.01);
+        expect(Math.abs(y - -7.891)).toBeLessThan(0.01);
+
+        const r = enc(R, { x: 12.3456, y: -7.891 });
+        expect(q.buf.length).toBeLessThan(r.buf.length); // 2×u16 < 2×f32
+    });
+});
+
+describe('per-peer snapshot budget', () => {
+    const P = defineComponent('P', {
+        schema: { x: f32 },
+        sync: networked({ rate: 'every-tick', interest: 'global' }),
+    });
+
+    test('sends highest-priority entities first; dropped ones ship next tick', async () => {
+        const intents = defineIntents({ noop: { x: f32 } });
+        const rpcs = defineRpcs({});
+        const serverWorld = new World({ maxEntities: 32, components: [P] });
+        const clientWorld = new World({ maxEntities: 32, components: [P] });
+        const serverLoop = new GameLoop({ tickRate: 60, type: 'manual-server' });
+        const clientLoop = new GameLoop({ tickRate: 60, type: 'manual-client' });
+        const transport = new MemoryServerTransport();
+        const server = new GameServer({
+            world: serverWorld,
+            loop: serverLoop,
+            transport,
+            protocol: { intents, rpcs },
+            // entity = 4 (id) + 4 (mask) + 4 (one f32 field) = 12 bytes.
+            snapshot: { rate: 60, maxBytesPerPeer: 12, priority: (e, w) => w.get(e, P).x },
+        });
+        const { client: clientTransport } = transport.connectClient();
+        new GameClient({ world: clientWorld, loop: clientLoop, transport: clientTransport, protocol: { intents, rpcs } });
+
+        const lowPri = serverWorld.spawn();
+        serverWorld.add(lowPri, P, { x: 1 });
+        const highPri = serverWorld.spawn();
+        serverWorld.add(highPri, P, { x: 100 });
+
+        const roundTrip = async () => {
+            serverLoop.step(1 / 60 + 0.001);
+            await flush();
+            clientLoop.step(1 / 60 + 0.001);
+            await flush();
+        };
+
+        await roundTrip();
+        // Only the highest-priority entity fit in the first tick.
+        const has = (sid: number) => (clientWorld as any).getComponents().length >= 0 &&
+            [...(clientWorld as any).query(P)].length; // placeholder
+        // The high-priority entity is present; the low one is not yet.
+        const presentX = [...(clientWorld as any).query(P)].map((e: number) => clientWorld.get(e, P).x);
+        expect(presentX).toContain(100);
+        expect(presentX).not.toContain(1);
+
+        await roundTrip();
+        const afterX = [...(clientWorld as any).query(P)].map((e: number) => clientWorld.get(e, P).x);
+        expect(afterX).toContain(1); // dropped entity shipped on the next tick
+        void has;
     });
 });

@@ -149,6 +149,8 @@ server.use(new LagCompensation({ tickRate: 20, historyMs: 500, components: [Posi
 
 Full snapshots of a thousand entities do not scale. `AoiGrid` filters each peer's snapshot to entities within `radius + hysteresisRadius` of that peer's assigned entity. The server tracks each peer's visible set and sends a despawn when an entity leaves it (including a peer-driven leave), so clients never keep a stale entity on screen.
 
+Two bandwidth levers: `networked({ quantize: { x: { min, max, bits } } })` sends a field as an 8/16-bit integer over a range (store stays `f32`; e.g. a position `f32` → 2 bytes), and the server's `snapshot.maxBytesPerPeer` caps each peer's entity body, sending highest-`priority` entities first and deferring the rest to the next tick (they stay dirty).
+
 Both `GameServer` and `GameClient` accept an optional `debug?: boolean | Logger` (a `murow/core/logger` `Logger`, or `true` for the console logger) for connect/disconnect/kick/interest-leave diagnostics.
 
 ```ts

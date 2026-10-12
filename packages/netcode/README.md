@@ -380,7 +380,11 @@ reconciliation only rolls back state for entities the peer owns.
 new GameServer({
   world, loop, transport,
   protocol: { intents, rpcs },
-  snapshot: { rate: 20 },     // clamped to tickRate
+  snapshot: {
+    rate: 20,                 // clamped to tickRate
+    maxBytesPerPeer: 1400,    // optional: highest-priority entities first, rest next tick
+    priority: (e, world) => 0,// optional: higher sends first
+  },
   kick: { ackTimeout: 2000 }, // ms before forcing close
   debug: true,                 // optional: true | Logger (default: no logging)
 });
@@ -605,6 +609,11 @@ Server-only handlers can do anything.
 - `snapThreshold` - reconciliation dead-zone: a server correction whose
   per-field magnitude is at or below it keeps the predicted value
   (smooths) instead of snapping.
+- `quantize` - per-field wire quantization. Each listed field ships as a
+  `bits`-wide (8 or 16, default 16) unsigned integer over `[min, max]`
+  instead of its full schema width, e.g. `quantize: { x: { min: -1000,
+  max: 1000, bits: 16 } }` sends a position `f32` in 2 bytes; the store
+  stays `f32` and out-of-range values clamp.
 
 Interp dispatch is per-component, not per-field.
 

@@ -38,6 +38,13 @@ export interface SyncSpec {
      * (smooth) instead of snapping.
      */
     snapThreshold?: number;
+    /**
+     * Per-field wire quantization. Each listed field is sent as a `bits`-wide
+     * unsigned integer over `[min, max]` instead of its full schema width
+     * (e.g. a position `f32` at `bits: 16` costs 2 bytes on the wire while the
+     * store stays `f32`). Out-of-range values clamp. Default `bits: 16`.
+     */
+    quantize?: Record<string, { min: number; max: number; bits?: 8 | 16 }>;
 }
 
 /**
