@@ -39,26 +39,38 @@ function quaternionFields(c: Component<any>): [string, string, string, string] |
     return null;
 }
 
-/** Shortest-arc spherical interpolation of two unit quaternions (x,y,z,w). */
-function slerpQuat(a: number[], b: number[], t: number): number[] {
-    let [bx, by, bz, bw] = b;
-    let dot = a[0]! * bx + a[1]! * by + a[2]! * bz + a[3]! * bw;
+/**
+ * Shortest-arc spherical interpolation of two unit quaternions (x,y,z,w).
+ * Writes into `out` and returns it, so callers can reuse one scratch array.
+ */
+function slerpQuatInto(
+    ax: number, ay: number, az: number, aw: number,
+    bx: number, by: number, bz: number, bw: number,
+    t: number,
+    out: number[],
+): number[] {
+    let dot = ax * bx + ay * by + az * bz + aw * bw;
     if (dot < 0) {
         bx = -bx; by = -by; bz = -bz; bw = -bw; dot = -dot;
     }
     if (dot > 0.9995) {
         // Nearly parallel: lerp then renormalize.
-        const x = lerp(a[0]!, bx, t), y = lerp(a[1]!, by, t), z = lerp(a[2]!, bz, t), w = lerp(a[3]!, bw, t);
+        const x = lerp(ax, bx, t), y = lerp(ay, by, t), z = lerp(az, bz, t), w = lerp(aw, bw, t);
         const inv = 1 / (Math.hypot(x, y, z, w) || 1);
-        return [x * inv, y * inv, z * inv, w * inv];
+        out[0] = x * inv; out[1] = y * inv; out[2] = z * inv; out[3] = w * inv;
+        return out;
     }
     const theta0 = Math.acos(dot);
     const theta = theta0 * t;
     const sinTheta = Math.sin(theta);
     const sinTheta0 = Math.sin(theta0);
-    const s0 = Math.cos(theta) - dot * sinTheta / sinTheta0;
+    const s0 = Math.cos(theta) - (dot * sinTheta) / sinTheta0;
     const s1 = sinTheta / sinTheta0;
-    return [s0 * a[0]! + s1 * bx, s0 * a[1]! + s1 * by, s0 * a[2]! + s1 * bz, s0 * a[3]! + s1 * bw];
+    out[0] = s0 * ax + s1 * bx;
+    out[1] = s0 * ay + s1 * by;
+    out[2] = s0 * az + s1 * bz;
+    out[3] = s0 * aw + s1 * bw;
+    return out;
 }
 
 /** Desync past which the play-out clock hard-snaps instead of warping. */
@@ -87,6 +99,10 @@ export class SnapshotInterpolation {
     private readonly valueScratch: Record<string, number>[] = [];
     /** Per-component field-array bundles for direct SoA writes, cached per apply. */
     private readonly bundleScratch: any[] = [];
+    /** Per-component quaternion field names (slerp), cached per apply. */
+    private readonly quatFieldScratch: ([string, string, string, string] | null)[] = [];
+    /** Reused slerp result, so per-frame interpolation allocates nothing. */
+    private readonly quatScratch: number[] = [0, 0, 0, 0];
     private nominalTickMs: number;
     delay: number;
     maxDesync: number;
@@ -204,7 +220,12 @@ export class SnapshotInterpolation {
         // One field-array bundle per component, so the hot loop writes straight
         // into the world's SoA instead of building an object per value.
         const bundles = this.bundleScratch;
-        for (let ci = 0; ci < components.length; ci++) bundles[ci] = world.fields(components[ci]!) as any;
+        const qfs = this.quatFieldScratch;
+        for (let ci = 0; ci < components.length; ci++) {
+            const c = components[ci]!;
+            bundles[ci] = world.fields(c) as any;
+            qfs[ci] = modeFor(c) === 'slerp' ? quaternionFields(c) : null;
+        }
 
         for (const serverEid of seen) {
             const localEid = this.serverToLocal.get(serverEid);
@@ -265,13 +286,13 @@ export class SnapshotInterpolation {
                     continue;
                 }
 
-                const qf = mode === 'slerp' ? quaternionFields(c) : null;
+                const qf = qfs[ci];
                 if (has) {
                     if (qf !== null) {
-                        const q = slerpQuat(
-                            [va[qf[0]] as number, va[qf[1]] as number, va[qf[2]] as number, va[qf[3]] as number],
-                            [vb[qf[0]] as number, vb[qf[1]] as number, vb[qf[2]] as number, vb[qf[3]] as number],
-                            wideT,
+                        const q = slerpQuatInto(
+                            va[qf[0]] as number, va[qf[1]] as number, va[qf[2]] as number, va[qf[3]] as number,
+                            vb[qf[0]] as number, vb[qf[1]] as number, vb[qf[2]] as number, vb[qf[3]] as number,
+                            wideT, this.quatScratch,
                         );
                         for (let k = 0; k < names.length; k++) {
                             const name = names[k]!;
@@ -290,10 +311,10 @@ export class SnapshotInterpolation {
                     // First appearance: build one object and let the world allocate.
                     const out = (this.valueScratch[ci] ??= {});
                     if (qf !== null) {
-                        const q = slerpQuat(
-                            [va[qf[0]] as number, va[qf[1]] as number, va[qf[2]] as number, va[qf[3]] as number],
-                            [vb[qf[0]] as number, vb[qf[1]] as number, vb[qf[2]] as number, vb[qf[3]] as number],
-                            wideT,
+                        const q = slerpQuatInto(
+                            va[qf[0]] as number, va[qf[1]] as number, va[qf[2]] as number, va[qf[3]] as number,
+                            vb[qf[0]] as number, vb[qf[1]] as number, vb[qf[2]] as number, vb[qf[3]] as number,
+                            wideT, this.quatScratch,
                         );
                         for (const name of names) {
                             const qi = qf.indexOf(name);

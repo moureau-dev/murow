@@ -165,6 +165,10 @@ export class GameServer<
     /** Reused encoder callback (one closure for all peers); reads `currentPeer`. */
     private readonly encoderInclude = (eid: number, c: Component<any>): boolean =>
         this.includeFor(this.currentPeer!, eid, c);
+    /** Stable `forEachDirty` callback, so no closure is made per component per tick. */
+    private readonly collectDirty = (eid: Entity): void => {
+        if (this.dirtySeen.add(eid)) this.scratch.push(eid);
+    };
     private reconnection: { graceMs: number } | null = null;
     private nextSession = 0;
     private readonly sessionSalt = Math.random().toString(36).slice(2, 10);
@@ -421,9 +425,7 @@ export class GameServer<
         this.dirtySeen.clear();
         this.scratch.length = 0;
         for (const c of this.syncedComponents) {
-            this.world.forEachDirty(c, (eid) => {
-                if (this.dirtySeen.add(eid)) this.scratch.push(eid);
-            });
+            this.world.forEachDirty(c, this.collectDirty);
         }
 
         const hadDespawn = this.world.getDespawned().length > 0;
