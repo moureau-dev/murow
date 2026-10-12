@@ -35,6 +35,9 @@ export function applyExtrapolation(
     const dtMs = prev !== null ? newest.receivedAt - prev.receivedAt : 0;
     const k = dtMs > 0 && elapsedMs > 0 ? elapsedMs / dtMs : 0;
 
+    const bundles: any[] = [];
+    for (let ci = 0; ci < components.length; ci++) bundles[ci] = world.fields(components[ci]!);
+
     for (const serverEid of newest.entityIds) {
         const localEid = serverToLocal.get(serverEid);
         if (localEid === undefined || shouldSkip(localEid)) continue;
@@ -45,20 +48,35 @@ export function applyExtrapolation(
             const c = components[ci]!;
             const v = comps[ci];
             if (v == null) continue;
-
-            let toWrite: Record<string, number> = v;
             const vp = prev?.componentValuesByEntity.get(serverEid)?.[ci] ?? undefined;
-            if (vp !== undefined && k > 0) {
-                const out = (scratch[ci] ??= {});
-                for (const fieldName of c.fieldNames as string[]) {
-                    const cur = v[fieldName] as number;
-                    out[fieldName] = cur + (cur - (vp[fieldName] as number)) * k;
-                }
-                toWrite = out;
-            }
+            const names = c.fieldNames as string[];
 
-            if (world.has(localEid, c)) world.update(localEid, c, toWrite as any);
-            else world.add(localEid, c, toWrite as any);
+            if (world.has(localEid, c)) {
+                const f = bundles[ci]!;
+                if (vp !== undefined && k > 0) {
+                    for (let n = 0; n < names.length; n++) {
+                        const name = names[n]!;
+                        const cur = v[name] as number;
+                        f[name]![localEid] = cur + (cur - (vp[name] as number)) * k;
+                    }
+                } else {
+                    for (let n = 0; n < names.length; n++) {
+                        const name = names[n]!;
+                        f[name]![localEid] = v[name];
+                    }
+                }
+            } else {
+                let toWrite: Record<string, number> = v;
+                if (vp !== undefined && k > 0) {
+                    const out = (scratch[ci] ??= {});
+                    for (const name of names) {
+                        const cur = v[name] as number;
+                        out[name] = cur + (cur - (vp[name] as number)) * k;
+                    }
+                    toWrite = out;
+                }
+                world.add(localEid, c, toWrite as any);
+            }
         }
     }
 }

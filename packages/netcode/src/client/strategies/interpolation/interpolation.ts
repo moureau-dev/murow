@@ -85,6 +85,8 @@ export class SnapshotInterpolation {
      * stale fields from the previous component.
      */
     private readonly valueScratch: Record<string, number>[] = [];
+    /** Per-component field-array bundles for direct SoA writes, cached per apply. */
+    private readonly bundleScratch: any[] = [];
     private nominalTickMs: number;
     delay: number;
     maxDesync: number;
@@ -199,6 +201,11 @@ export class SnapshotInterpolation {
         // (idle), not a transient hole, so hold rather than reach across it.
         const maxBridgeTicks = this.maxBridgeGap / tickRateMs;
 
+        // One field-array bundle per component, so the hot loop writes straight
+        // into the world's SoA instead of building an object per value.
+        const bundles = this.bundleScratch;
+        for (let ci = 0; ci < components.length; ci++) bundles[ci] = world.fields(components[ci]!) as any;
+
         for (const serverEid of seen) {
             const localEid = this.serverToLocal.get(serverEid);
             if (localEid === undefined) continue;
@@ -222,63 +229,82 @@ export class SnapshotInterpolation {
 
                 if (va === undefined && vb === undefined) continue;
 
-                let toWrite: Record<string, any> | undefined;
+                const has = world.has(localEid, c);
+                const names = c.fieldNames as string[];
+                const f = bundles[ci]!;
 
-                if (vb === undefined) {
-                    toWrite = va;
-                } else if (va === undefined) {
-                    toWrite = vb;
-                } else {
-                    const mode = modeFor(c);
-                    if (mode === 'none') {
-                        toWrite = vb;
-                    } else {
-                        const bTick = tl.at(bIdx).sample.serverTick;
-                        let aTick = tl.at(aIdx).sample.serverTick;
-                        // Samples straddling a gap bigger than the bridge limit mean
-                        // the entity was starved (idle). Hold the last value until one
-                        // tick before it reappears, then ramp in over that single tick.
-                        if (bTick - aTick > maxBridgeTicks) aTick = bTick - 1;
-                        const wideSpan = bTick - aTick;
-                        const wideT = wideSpan > 0
-                            ? Math.min(1, Math.max(0, (renderTick - aTick) / wideSpan))
-                            : 0;
-                        if (mode === 'step') {
-                            toWrite = wideT < 0.5 ? va : vb;
-                        } else {
-                            const qf = mode === 'slerp' ? quaternionFields(c) : null;
-                            const out = (this.valueScratch[ci] ??= {});
-                            if (qf) {
-                                const q = slerpQuat(
-                                    [va[qf[0]] as number, va[qf[1]] as number, va[qf[2]] as number, va[qf[3]] as number],
-                                    [vb[qf[0]] as number, vb[qf[1]] as number, vb[qf[2]] as number, vb[qf[3]] as number],
-                                    wideT,
-                                );
-                                for (const fieldName of c.fieldNames as string[]) {
-                                    const qi = qf.indexOf(fieldName);
-                                    out[fieldName] = qi === -1
-                                        ? lerp(va[fieldName] as number, vb[fieldName] as number, wideT)
-                                        : q[qi]!;
-                                }
-                            } else {
-                                for (const fieldName of c.fieldNames as string[]) {
-                                    out[fieldName] = lerp(
-                                        va[fieldName] as number,
-                                        vb[fieldName] as number,
-                                        wideT,
-                                    );
-                                }
-                            }
-                            toWrite = out;
-                        }
-                    }
+                // Copy a single source verbatim (no interpolation).
+                if (vb === undefined || (va !== undefined && modeFor(c) === 'none')) {
+                    const src = vb === undefined ? va! : vb;
+                    if (has) for (let k = 0; k < names.length; k++) f[names[k]!]![localEid] = src[names[k]!];
+                    else world.add(localEid, c, src as any);
+                    continue;
+                }
+                if (va === undefined) {
+                    if (has) for (let k = 0; k < names.length; k++) f[names[k]!]![localEid] = vb[names[k]!];
+                    else world.add(localEid, c, vb as any);
+                    continue;
                 }
 
-                if (toWrite === undefined) continue;
-                if (world.has(localEid, c)) {
-                    world.update(localEid, c, toWrite as any);
+                const mode = modeFor(c);
+                const bTick = tl.at(bIdx).sample.serverTick;
+                let aTick = tl.at(aIdx).sample.serverTick;
+                // Samples straddling a gap bigger than the bridge limit mean the
+                // entity was starved (idle). Hold until one tick before it
+                // reappears, then ramp in over that single tick.
+                if (bTick - aTick > maxBridgeTicks) aTick = bTick - 1;
+                const wideSpan = bTick - aTick;
+                const wideT = wideSpan > 0
+                    ? Math.min(1, Math.max(0, (renderTick - aTick) / wideSpan))
+                    : 0;
+
+                if (mode === 'step') {
+                    const src = wideT < 0.5 ? va : vb;
+                    if (has) for (let k = 0; k < names.length; k++) f[names[k]!]![localEid] = src[names[k]!];
+                    else world.add(localEid, c, src as any);
+                    continue;
+                }
+
+                const qf = mode === 'slerp' ? quaternionFields(c) : null;
+                if (has) {
+                    if (qf !== null) {
+                        const q = slerpQuat(
+                            [va[qf[0]] as number, va[qf[1]] as number, va[qf[2]] as number, va[qf[3]] as number],
+                            [vb[qf[0]] as number, vb[qf[1]] as number, vb[qf[2]] as number, vb[qf[3]] as number],
+                            wideT,
+                        );
+                        for (let k = 0; k < names.length; k++) {
+                            const name = names[k]!;
+                            const qi = qf.indexOf(name);
+                            f[name]![localEid] = qi === -1
+                                ? lerp(va[name] as number, vb[name] as number, wideT)
+                                : q[qi]!;
+                        }
+                    } else {
+                        for (let k = 0; k < names.length; k++) {
+                            const name = names[k]!;
+                            f[name]![localEid] = lerp(va[name] as number, vb[name] as number, wideT);
+                        }
+                    }
                 } else {
-                    world.add(localEid, c, toWrite as any);
+                    // First appearance: build one object and let the world allocate.
+                    const out = (this.valueScratch[ci] ??= {});
+                    if (qf !== null) {
+                        const q = slerpQuat(
+                            [va[qf[0]] as number, va[qf[1]] as number, va[qf[2]] as number, va[qf[3]] as number],
+                            [vb[qf[0]] as number, vb[qf[1]] as number, vb[qf[2]] as number, vb[qf[3]] as number],
+                            wideT,
+                        );
+                        for (const name of names) {
+                            const qi = qf.indexOf(name);
+                            out[name] = qi === -1 ? lerp(va[name] as number, vb[name] as number, wideT) : q[qi]!;
+                        }
+                    } else {
+                        for (const name of names) {
+                            out[name] = lerp(va[name] as number, vb[name] as number, wideT);
+                        }
+                    }
+                    world.add(localEid, c, out as any);
                 }
             }
         }
@@ -290,6 +316,9 @@ export class SnapshotInterpolation {
         components: Component<any>[],
         shouldSkip: (entity: Entity) => boolean,
     ): void {
+        const bundles = this.bundleScratch;
+        for (let ci = 0; ci < components.length; ci++) bundles[ci] = world.fields(components[ci]!) as any;
+
         for (const serverEid of snap.entityIds) {
             const localEid = this.serverToLocal.get(serverEid);
             if (localEid === undefined) continue;
@@ -300,8 +329,16 @@ export class SnapshotInterpolation {
                 const c = components[ci]!;
                 const v = comps[ci];
                 if (v == null) continue;
-                if (world.has(localEid, c)) world.update(localEid, c, v as any);
-                else world.add(localEid, c, v as any);
+                if (world.has(localEid, c)) {
+                    const f = bundles[ci]!;
+                    const names = c.fieldNames as string[];
+                    for (let k = 0; k < names.length; k++) {
+                        const name = names[k]!;
+                        f[name]![localEid] = v[name];
+                    }
+                } else {
+                    world.add(localEid, c, v as any);
+                }
             }
         }
     }
