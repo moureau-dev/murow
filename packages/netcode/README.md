@@ -382,10 +382,13 @@ new GameServer({
   protocol: { intents, rpcs },
   snapshot: { rate: 20 },     // clamped to tickRate
   kick: { ackTimeout: 2000 }, // ms before forcing close
+  debug: true,                 // optional: true | Logger (default: no logging)
 });
 ```
 
 Defaults: `snapshot.rate = min(20, tickRate)`, `kick.ackTimeout = 2000`.
+
+`debug` accepts `true` (console `[net-server]` logger), a `murow/core/logger` `Logger`, or is omitted for no logging. It records connect/disconnect, kick, unknown-message, and AOI interest-leave events.
 </details>
 
 <details>
@@ -397,6 +400,7 @@ new GameClient({
   protocol: { intents, rpcs },
   strategy: { kind: 'snapshot-interpolation', delay: 100, staleWindow: 300, maxDesync: 500, maxBridgeGap: 250 },
   prediction: { bufferSize: 64 },
+  debug: true,                 // optional: true | Logger (default: no logging)
 });
 ```
 
@@ -469,6 +473,14 @@ peer's assigned entity as visible. A component whose `interest` names
 this plugin ships only for those peers; a `'global'`-interest component
 is never filtered. Entities without the `positionComponent` pass
 through unfiltered.
+
+**Enter/leave.** The server tracks each peer's visible set (a reused
+per-peer `SlotSet` of entity ids). When an entity drops out (out of
+radius, or globally despawned) it is sent to that peer as a despawn, so
+the client removes it instead of holding a frozen copy. Candidates each
+tick are the peer's previously-visible entities plus the dirty set, so a
+*peer-driven* leave (the entity is still, the peer moved away) is caught
+too.
 
 ### `LagCompensation`
 

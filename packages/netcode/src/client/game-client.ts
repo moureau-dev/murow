@@ -12,6 +12,7 @@ import type { DefinedIntents, IntentPayload, IntentSchemaMap } from '../intents/
 import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs';
 import type { DefinedPredictions } from '../predictions/define-predictions';
 import type { SyncSpec } from '../components/sync-spec';
+import { Logger } from 'murow/core/logger';
 import { makeFieldsAccessor, makeMarkDirty, type PredictionContext } from '../ctx';
 
 const MSG_SNAPSHOT = 0x80;
@@ -93,6 +94,8 @@ export interface GameClientOptions<
         bufferSize?: number;
     };
     now?: () => number;
+    /** Optional diagnostics: `true` → console logger, or pass a `Logger`. */
+    debug?: boolean | Logger;
 }
 
 export class GameClient<
@@ -129,6 +132,7 @@ export class GameClient<
     interpBuffer: SnapshotInterpolation;
     private _rttMs: number | null = null;
     private now: () => number;
+    private readonly log: Logger;
 
     /**
      * Local entity the server has assigned to this peer, or `null` if no
@@ -174,6 +178,7 @@ export class GameClient<
         const staleWindowMs = strategy.staleWindow ?? interpolationDelay * 2 + 100;
         this.predictionBufferSize = opts.prediction?.bufferSize ?? 64;
         this.rng = new SimpleRNG(1);
+        this.log = Logger.resolve(opts.debug, 'net-client');
         this.lastDt = opts.loop.ticker.intervalMs / 1000;
         this.now = opts.now ?? (() => performance.now());
 
@@ -261,9 +266,9 @@ export class GameClient<
     }
 
     private wireTransport(): void {
-        this.transport.onOpen?.(() => this.emit('connected', {}));
+        this.transport.onOpen?.(() => { this.log.info('connected'); this.emit('connected', {}); });
         this.transport.onMessage((data) => this.handleIncoming(data));
-        this.transport.onClose(() => this.emit('disconnected', { reason: 'transport-closed' }));
+        this.transport.onClose(() => { this.log.info('disconnected'); this.emit('disconnected', { reason: 'transport-closed' }); });
         this.transport.onError?.((error: Error) => this.emit('error', { error, context: 'transport' }));
     }
 
@@ -298,6 +303,7 @@ export class GameClient<
         }
         if (type === MSG_KICK) {
             const reason = new TextDecoder().decode(data.subarray(1));
+            this.log.warn('kicked', { reason });
             this.emit('kicked', { reason });
             const ack = new Uint8Array([CMSG_KICK_ACK]);
             this.transport.send(ack);
@@ -315,6 +321,7 @@ export class GameClient<
             this.applyAssignment(view.getUint32(0, true));
             return;
         }
+        this.log.warn('unknown server message type', { type });
         this.emit('error', {
             error: new Error(`Unknown server message type 0x${type.toString(16)}`),
             context: 'handleIncoming',

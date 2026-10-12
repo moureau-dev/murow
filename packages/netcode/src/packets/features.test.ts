@@ -11,6 +11,7 @@ import { GameClient } from '../client/game-client';
 import { SnapshotInterpolation, type BufferedSnapshot } from '../client/strategies/snapshot-interpolation';
 import { networked } from '../components/sync-spec';
 import type { ServerPlugin } from '../server/plugins/plugin';
+import { AoiGrid } from '../server/plugins/aoi-grid';
 
 async function flush(): Promise<void> {
     for (let i = 0; i < 4; i++) await Promise.resolve();
@@ -222,5 +223,62 @@ describe('per-component snapThreshold', () => {
         expect(clientWorld.get(ce, Ammo).n).toBeCloseTo(20, 5);
 
         void server;
+    });
+});
+
+describe('AOI enter/leave', () => {
+    const Pos = defineComponent('Pos', {
+        schema: { x: f32, y: f32 },
+        sync: networked({ rate: 'every-tick', interest: 'aoi' }),
+    });
+
+    test('an entity leaving the radius is despawned on the client', async () => {
+        const intents = defineIntents({ noop: { x: f32 } });
+        const rpcs = defineRpcs({});
+        const serverWorld = new World({ maxEntities: 32, components: [Pos] });
+        const clientWorld = new World({ maxEntities: 32, components: [Pos] });
+        const serverLoop = new GameLoop({ tickRate: 60, type: 'manual-server' });
+        const clientLoop = new GameLoop({ tickRate: 60, type: 'manual-client' });
+        const transport = new MemoryServerTransport();
+        const server = new GameServer({
+            world: serverWorld,
+            loop: serverLoop,
+            transport,
+            protocol: { intents, rpcs },
+            snapshot: { rate: 60 },
+        });
+        server.use(new AoiGrid({ cellSize: 8, radius: 10, positionComponent: Pos }));
+        const { client: clientTransport } = transport.connectClient();
+        const client = new GameClient({
+            world: clientWorld,
+            loop: clientLoop,
+            transport: clientTransport,
+            protocol: { intents, rpcs },
+        });
+
+        const player = serverWorld.spawn();
+        serverWorld.add(player, Pos, { x: 0, y: 0 });
+        const enemy = serverWorld.spawn();
+        serverWorld.add(enemy, Pos, { x: 5, y: 0 }); // inside radius 10
+        server.assignEntity({ peerId: transport.getPeerIds()[0]!, entity: -1 }, player);
+
+        const roundTrip = async () => {
+            serverLoop.step(1 / 60 + 0.001);
+            await flush();
+            clientLoop.step(1 / 60 + 0.001);
+            await flush();
+        };
+
+        await roundTrip();
+        const ce = (client as any).serverToLocal.get(enemy as number) as number;
+        expect(ce).toBeDefined();
+        expect(clientWorld.has(ce, Pos)).toBe(true);
+
+        // Move the enemy well outside the AOI radius.
+        serverWorld.update(enemy, Pos, { x: 100, y: 0 });
+        await roundTrip();
+
+        const after = (client as any).serverToLocal.get(enemy as number);
+        expect(after === undefined || !clientWorld.has(after, Pos)).toBe(true);
     });
 });

@@ -1,5 +1,6 @@
 import { SimpleRNG } from 'murow/core/simple-rng';
 import { SlotSet } from 'murow/core/slot-map';
+import { Logger } from 'murow/core/logger';
 import type { Component, Entity, World } from 'murow/ecs';
 import type { GameLoop } from 'murow/game';
 import type { ServerTransportAdapter, TransportAdapter } from 'murow/net';
@@ -53,6 +54,8 @@ export interface GameServerOptions<
     };
     /** Optional schema fingerprint for component-layout drift checks. */
     schemaFingerprint?: string;
+    /** Optional diagnostics: `true` → console logger, or pass a `Logger`. */
+    debug?: boolean | Logger;
 }
 
 interface KickingState {
@@ -74,6 +77,8 @@ interface InternalPeer extends Peer {
      */
     needsBaseline: boolean;
     intentQueue: { sequence: number; payload: Uint8Array }[];
+    /** Server entities currently visible to this peer (interest-aware). */
+    visible: SlotSet;
 }
 
 export class GameServer<
@@ -103,6 +108,12 @@ export class GameServer<
     private rng: SimpleRNG;
     private scratch: number[] = [];
     private lastDt: number;
+    private readonly log: Logger;
+    private readonly dirtySeen: SlotSet;
+    private readonly visibleScratch: SlotSet;
+    private readonly baselineSeen: SlotSet;
+    private readonly peerDespawned: number[] = [];
+    private readonly candidates: number[] = [];
 
     constructor(opts: GameServerOptions<I, R>) {
         super([
@@ -120,6 +131,10 @@ export class GameServer<
         this.intents = opts.protocol.intents;
         this.rpcs = opts.protocol.rpcs;
         this.rng = new SimpleRNG(1);
+        this.log = Logger.resolve(opts.debug, 'net-server');
+        this.dirtySeen = new SlotSet(this.world.getMaxEntities());
+        this.visibleScratch = new SlotSet(this.world.getMaxEntities());
+        this.baselineSeen = new SlotSet(this.world.getMaxEntities());
 
         const reg = this.rpcs.registry as any;
         if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
@@ -156,10 +171,12 @@ export class GameServer<
                 pendingBySequence: new Map<number, Uint8Array>(),
                 needsBaseline: true,
                 intentQueue: [],
+                visible: new SlotSet(this.world.getMaxEntities()),
             };
             this.peers.set(peerId, peer);
             peerTransport.onMessage((data) => this.handleIncoming(peer, data));
             peerTransport.onClose?.(() => this.handleDisconnect(peer, 'transport-closed'));
+            this.log.info('peer connected', { peerId });
             this.emit('connection', { peer });
         });
 
@@ -175,6 +192,7 @@ export class GameServer<
         if (peer.kicking !== null) clearTimeout(peer.kicking.timer);
         this.peers.delete(peer.peerId);
         for (const plugin of this.plugins) plugin.onDisconnect?.(peer);
+        this.log.info('peer disconnected', { peerId: peer.peerId, reason });
         this.emit('disconnection', { peer, reason });
     }
 
@@ -240,14 +258,11 @@ export class GameServer<
         if (this.syncedComponents.length === 0) return;
 
         // Union of dirty entities across all synced components.
-        const seen = new Set<Entity>();
+        this.dirtySeen.clear();
         this.scratch.length = 0;
         for (const c of this.syncedComponents) {
             this.world.forEachDirty(c, (eid) => {
-                if (!seen.has(eid)) {
-                    seen.add(eid);
-                    this.scratch.push(eid);
-                }
+                if (this.dirtySeen.add(eid)) this.scratch.push(eid);
             });
         }
 
@@ -264,13 +279,10 @@ export class GameServer<
         const computeBaseline = (): Entity[] => {
             if (baseline !== null) return baseline;
             const result: Entity[] = [];
-            const baselineSeen = new Set<Entity>();
+            this.baselineSeen.clear();
             for (const c of this.syncedComponents) {
                 for (const eid of this.world.query(c)) {
-                    if (!baselineSeen.has(eid)) {
-                        baselineSeen.add(eid);
-                        result.push(eid);
-                    }
+                    if (this.baselineSeen.add(eid)) result.push(eid);
                 }
             }
             baseline = result;
@@ -285,10 +297,21 @@ export class GameServer<
                 ? computeBaseline()
                 : this.scratch;
 
-            // Per-plugin visible sets for this peer, each computed against the
-            // full source set. A component's `interest` selects the plugin that
-            // governs it; `'global'` means "not filtered". Built lazily, since
-            // most components carry `'global'`.
+            // Candidates for interest: everything this peer saw last tick plus
+            // the dirty set. Re-checking last tick's visible entities is what
+            // lets a peer-driven AOI leave (entity still, peer moved) be caught.
+            const candidates = this.candidates;
+            candidates.length = 0;
+            {
+                const buf = peer.visible.denseBuffer;
+                const n = peer.visible.size;
+                for (let i = 0; i < n; i++) candidates.push(buf[i]!);
+            }
+            for (let i = 0; i < source.length; i++) candidates.push(source[i]!);
+
+            // Per-plugin visible sets, each computed against the candidate set.
+            // A component's `interest` selects the plugin that governs it;
+            // `'global'` means "not filtered". Built lazily.
             let built = false;
             const interestAllows = (eid: Entity, c: Component<any>): boolean => {
                 const rule = (c.__sync as SyncSpec).interest;
@@ -302,7 +325,7 @@ export class GameServer<
                         const plugin = this.plugins[i]!;
                         if (plugin.filterSnapshot === undefined) continue;
                         out.length = 0;
-                        plugin.filterSnapshot(peer, this.world, source, out);
+                        plugin.filterSnapshot(peer, this.world, candidates, out);
                         for (let k = 0; k < out.length; k++) set.add(out[k]!);
                     }
                     built = true;
@@ -317,6 +340,37 @@ export class GameServer<
                 && (peer.needsBaseline
                     || rateIncludes((c.__sync as SyncSpec).rate, this.world.isDirty(eid, c), this.tickCounter));
 
+            // Interest-visible entities this tick → the peer's new visibility set.
+            const vis = this.visibleScratch;
+            vis.clear();
+            for (let i = 0; i < candidates.length; i++) {
+                const eid = candidates[i]!;
+                for (const c of this.syncedComponents) {
+                    if (this.world.has(eid, c) && interestAllows(eid, c)) { vis.add(eid); break; }
+                }
+            }
+
+            // Entities the peer no longer sees (AOI leave, or a global despawn):
+            // shipped as despawns so the client removes them.
+            this.peerDespawned.length = 0;
+            {
+                const buf = peer.visible.denseBuffer;
+                const n = peer.visible.size;
+                for (let i = 0; i < n; i++) {
+                    const eid = buf[i]!;
+                    if (!vis.has(eid)) this.peerDespawned.push(eid);
+                }
+            }
+            peer.visible.clear();
+            {
+                const buf = vis.denseBuffer;
+                const n = vis.size;
+                for (let i = 0; i < n; i++) peer.visible.add(buf[i]!);
+            }
+            if (this.peerDespawned.length > 0) {
+                this.log.info('peer interest leave', { peerId: peer.peerId, count: this.peerDespawned.length });
+            }
+
             // Entities with at least one component that ships to this peer.
             peerOut.length = 0;
             for (let i = 0; i < source.length; i++) {
@@ -328,7 +382,7 @@ export class GameServer<
 
             // Baseline peers always send (even empty) so they get a tick
             // header + clientAckTick. Established peers skip empty deltas.
-            if (peerOut.length === 0 && despawned.length === 0 && !peer.needsBaseline) return;
+            if (peerOut.length === 0 && this.peerDespawned.length === 0 && !peer.needsBaseline) return;
 
             const buf = encodeDelta(
                 this.world,
@@ -336,7 +390,7 @@ export class GameServer<
                 peerOut as number[],
                 this.syncedComponents,
                 this.syncedNumMaskWords,
-                despawned,
+                this.peerDespawned,
                 peer.lastAckedClientTick,
                 include,
             );
@@ -396,6 +450,7 @@ export class GameServer<
             this.handleRpc(peer, data.subarray(1));
             return;
         }
+        this.log.warn('unknown client message type', { type });
         this.emit('error', {
             error: new Error(`Unknown client message type 0x${type.toString(16)}`),
             context: 'handleIncoming',

@@ -14,7 +14,7 @@ Referenced from [llms.txt](../llms.txt).
 6. **Only networked components in a prediction.** A prediction that writes local-only state will be corrupted by rollback.
 7. **The server is authoritative.** It applies intents itself; the client only predicts and reconciles.
 8. **Peers are not entities.** Spawn an entity on connect and bind it with `server.assignEntity(peer, e)`; the client learns it via `'assigned'` / `client.assignedEntity`.
-9. **Scope what peers receive with `networked().interest`** — `'global'` is never filtered (and forces its entity in); a plugin name (e.g. `AoiGrid`'s `name`) ships the component only for peers the plugin deems visible.
+9. **Scope what peers receive with `networked().interest`** — `'global'` is never filtered (and forces its entity in); a plugin name (e.g. `AoiGrid`'s `name`) ships the component only for peers the plugin deems visible. When a previously-visible entity leaves interest (out of AOI, or despawned) the server ships a despawn, so the client removes it rather than holding a frozen copy.
 10. **Sim tick rate is not render rate.** Run a fixed `tickRate`; render interpolates between fixed states.
 
 ## The decision model
@@ -147,7 +147,9 @@ server.use(new LagCompensation({ tickRate: 20, historyMs: 500, components: [Posi
 
 ### Area of interest — filtering what each peer receives
 
-Full snapshots of a thousand entities do not scale. `AoiGrid` filters each peer's snapshot to entities within `radius + hysteresisRadius` of that peer's assigned entity.
+Full snapshots of a thousand entities do not scale. `AoiGrid` filters each peer's snapshot to entities within `radius + hysteresisRadius` of that peer's assigned entity. The server tracks each peer's visible set and sends a despawn when an entity leaves it (including a peer-driven leave), so clients never keep a stale entity on screen.
+
+Both `GameServer` and `GameClient` accept an optional `debug?: boolean | Logger` (a `murow/core/logger` `Logger`, or `true` for the console logger) for connect/disconnect/kick/interest-leave diagnostics.
 
 ```ts
 server.use(new AoiGrid({
