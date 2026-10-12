@@ -7,10 +7,10 @@
  * NOTE: TGSL bodies must use `function` syntax, not arrow functions.
  */
 import { GpuBindGroupLayout, GpuShader } from 'murow/gpu';
-import { d, std } from '../../../gpu-ns';
+import { d, std } from '../../gpu-ns';
 
 
-import { DynamicSprite, StaticSprite, SpriteUniforms } from '../../../engine-core/types';
+import { DynamicSprite, StaticSprite, SpriteUniforms } from '../../engine-core/types';
 
 // --- Bind group layouts ---
 

@@ -1,8 +1,8 @@
 import type { Hitbox } from 'murow/core/hitbox';
 import type { Ray3D } from 'murow/core/ray';
 import { testHitbox3D } from 'murow/core/hitbox';
-import type { Camera3D } from '../../cameras/camera-3d';
-import type { MeshInstanceHandle } from '../../types';
+import type { Camera3D } from '../../../cameras/camera-3d';
+import type { MeshInstanceHandle } from '../../../types';
 
 /** Destination for collected hits (structurally satisfied by `RaycastState`). */
 export interface RaycastSink {

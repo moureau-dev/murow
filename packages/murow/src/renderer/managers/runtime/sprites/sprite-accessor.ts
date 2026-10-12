@@ -28,7 +28,7 @@ import {
 } from "../engine-core/constants";
 import type { SpriteHandle } from "murow/renderer";
 import type { HandleBase } from "../handle-base";
-import type { SpriteId } from "../_2d/ids";
+import type { SpriteId } from "../../types";
 
 export class SpriteAccessor implements SpriteHandle, HandleBase<SpriteId> {
     private dynamicData: Float32Array;

@@ -1,4 +1,4 @@
-import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
+import { RawDevice } from 'murow/gpu';
 
 import { PooledCollection } from 'murow/core/collection';
 import type { Logger } from 'murow/core';
@@ -11,8 +11,8 @@ import type {
     PrefabBucket2D,
     Prefab2D,
 } from 'murow/renderer';
-import type { Renderer2DCore } from '../_2d/core';
-import type { SpriteId } from '../_2d/ids';
+import type { Renderer2DCore } from '../core/2d';
+import type { SpriteId } from '../../types';
 import {
     DYNAMIC_FLOATS_PER_SPRITE,
     DYNAMIC_OFFSET_CURR_X,

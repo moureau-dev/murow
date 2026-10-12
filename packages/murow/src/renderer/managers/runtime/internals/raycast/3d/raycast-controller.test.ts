@@ -1,8 +1,8 @@
 import { test, expect, describe } from 'bun:test';
 import { Ray3D } from 'murow/core/ray';
-import { Camera3D } from '../../camera/3d/camera-3d';
+import { Camera3D } from '../../../camera/3d/camera-3d';
 import { RaycastController, type RaycastTarget, type RaycastSink } from './raycast-controller';
-import type { MeshInstanceHandle } from '../../types';
+import type { MeshInstanceHandle } from '../../../types';
 
 const handle = { id: 1 } as MeshInstanceHandle;
 

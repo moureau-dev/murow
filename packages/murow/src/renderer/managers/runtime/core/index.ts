@@ -1,2 +1,2 @@
-export { RendererCore } from './renderer-core';
-export { SceneUniforms, type SceneUniformValues } from './scene';
+export * from "./2d";
+export * from "./3d";

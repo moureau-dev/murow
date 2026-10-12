@@ -8,8 +8,8 @@ import {
     type RaycastOptions,
 } from 'murow/renderer';
 
-import type { Camera3D } from '../../cameras/camera-3d';
-import type { MeshInstanceHandle } from '../../types';
+import type { Camera3D } from '../../../cameras/camera-3d';
+import type { MeshInstanceHandle } from '../../../types';
 import type { RaycastController } from './raycast-controller';
 
 type Point = [number, number, number];
