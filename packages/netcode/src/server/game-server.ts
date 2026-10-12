@@ -280,27 +280,51 @@ export class GameServer<
                 ? computeBaseline()
                 : this.scratch;
 
-            let current: ReadonlyArray<Entity> = source;
-            for (const plugin of this.plugins) {
-                if (plugin.filterSnapshot === undefined) continue;
-                peerOut.length = 0;
-                plugin.filterSnapshot(peer, this.world, current, peerOut);
-                current = peerOut.slice();
+            // Per-plugin visible sets for this peer, each computed against the
+            // full source set. A component's `interest` selects the plugin that
+            // governs it; `'global'` means "not filtered". Built lazily, since
+            // most components carry `'global'`.
+            let perPlugin: Map<string, Set<Entity>> | null = null;
+            const interestAllows = (eid: Entity, c: Component<any>): boolean => {
+                const rule = (c.__sync as SyncSpec).interest;
+                if (rule === 'global') return true;
+                if (perPlugin === null) {
+                    perPlugin = new Map();
+                    const out: Entity[] = [];
+                    for (const plugin of this.plugins) {
+                        if (plugin.filterSnapshot === undefined) continue;
+                        out.length = 0;
+                        plugin.filterSnapshot(peer, this.world, source, out);
+                        perPlugin.set(plugin.name, new Set(out));
+                    }
+                }
+                const set = perPlugin.get(rule as string);
+                return set === undefined ? true : set.has(eid);
+            };
+
+            const include = (eid: Entity, c: Component<any>): boolean =>
+                this.world.has(eid, c)
+                && interestAllows(eid, c)
+                && (peer.needsBaseline
+                    || rateIncludes((c.__sync as SyncSpec).rate, this.world.isDirty(eid, c), this.tickCounter));
+
+            // Entities with at least one component that ships to this peer.
+            peerOut.length = 0;
+            for (let i = 0; i < source.length; i++) {
+                const eid = source[i]!;
+                for (const c of this.syncedComponents) {
+                    if (include(eid, c)) { peerOut.push(eid); break; }
+                }
             }
 
             // Baseline peers always send (even empty) so they get a tick
             // header + clientAckTick. Established peers skip empty deltas.
-            if (current.length === 0 && despawned.length === 0 && !peer.needsBaseline) continue;
-
-            const include = peer.needsBaseline
-                ? undefined
-                : (eid: Entity, c: Component<any>) =>
-                      rateIncludes((c.__sync as SyncSpec).rate, this.world.isDirty(eid, c), this.tickCounter);
+            if (peerOut.length === 0 && despawned.length === 0 && !peer.needsBaseline) continue;
 
             const buf = encodeDelta(
                 this.world,
                 this.tickCounter,
-                current as number[],
+                peerOut as number[],
                 this.syncedComponents,
                 this.syncedNumMaskWords,
                 despawned,

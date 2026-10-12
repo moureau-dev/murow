@@ -19,11 +19,24 @@ export type InterestRule = 'global' | (string & {});
 export interface SyncSpec {
     /** Snapshot eligibility cadence. */
     rate: SyncRate;
-    /** Visibility filter (e.g. AOI plugin name) or `'global'`. */
+    /**
+     * Visibility filter. `'global'` is never filtered (and forces its entity
+     * into the snapshot). A plugin name (e.g. an `AoiGrid`'s `name`) means the
+     * component ships to a peer only if that plugin deems the entity visible.
+     */
     interest: InterestRule;
-    /** Default interpolation mode for this component's fields. */
+    /**
+     * Interpolation mode for this component's fields. `slerp` treats the
+     * component as a quaternion (`x`/`y`/`z`/`w`, or exactly four fields in
+     * declaration order) and interpolates along the shortest arc; anything else
+     * falls back to `lerp`.
+     */
     interp?: InterpolationMode;
-    /** Override the reconciliation snap threshold for this component. */
+    /**
+     * Reconciliation dead-zone for this component. A server correction whose
+     * per-field magnitude is at or below this keeps the predicted value
+     * (smooth) instead of snapping.
+     */
     snapThreshold?: number;
 }
 

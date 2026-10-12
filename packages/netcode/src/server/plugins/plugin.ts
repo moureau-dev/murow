@@ -15,9 +15,10 @@ export interface ServerPlugin {
         ctx: ServerHandlerContext,
     ): void;
     /**
-     * Filter `dirtyEntities` down to those visible to `peer`. Push
-     * visible entities onto `out` (pre-cleared by the engine). Plugins
-     * compose in registration order on the same scratch array.
+     * Push the entities visible to `peer` onto `out` (pre-cleared by the
+     * engine). Each plugin is consulted against the full dirty set; a
+     * component's `sync.interest` selects which plugin governs it (`'global'`
+     * components bypass plugins and force their entity into the snapshot).
      */
     filterSnapshot?(
         peer: Peer,

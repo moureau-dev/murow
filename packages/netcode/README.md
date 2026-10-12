@@ -323,7 +323,7 @@ Options:
   entity is dirty, `'on-change'` only when this component changed since
   the last snapshot, `{ every: N }` on change or every Nth snapshot tick.
 - `interest` - which peers receive it (`'global'` or a plugin name).
-  Currently unread - see "Not wired up yet" below.
+  See "`networked()` fields" below.
 - `interp` - how the receiver smooths between packets (`'lerp'`, `'slerp'`, `'step'`, `'none'`)
 - `snapThreshold` - distance beyond which the receiver snaps instead of smoothing
 
@@ -334,8 +334,7 @@ Pass the components to both `GameServer` and `GameClient` via the
 const world = new World({ maxEntities: 64, components: [Position, Ammo] });
 ```
 
-Not all options are wired up yet - see the "Not wired up yet" section
-below.
+See the "`networked()` fields" section below.
 
 ### Entity assignment
 
@@ -439,7 +438,7 @@ networked({
 - `rate`: snapshot eligibility cadence.
 - `interest`: visibility filter; declares a plugin's `name`, or
   `'global'` for "every peer sees this". Currently unread - see
-  "Not wired up yet" below.
+  "`networked()` fields" below.
 - `interp`: interpolation mode, dispatched per-component (not per-field).
 - `snapThreshold`: per-component override of the reconciliation
   snap-vs-smooth threshold.
@@ -465,9 +464,10 @@ server.use(new AoiGrid({
 }));
 ```
 
-`AoiGrid` filters every dirty entity by radius, regardless of each
-component's `interest` value - `interest` is currently unread (see
-"Not wired up yet"). Entities without the `positionComponent` pass
+`AoiGrid` declares entities within `radius + hysteresisRadius` of each
+peer's assigned entity as visible. A component whose `interest` names
+this plugin ships only for those peers; a `'global'`-interest component
+is never filtered. Entities without the `positionComponent` pass
 through unfiltered.
 
 ### `LagCompensation`
@@ -578,19 +578,21 @@ Predictions replay during rollback. Same input must produce same output.
 
 Server-only handlers can do anything.
 
-## Not wired up yet
+## `networked()` fields
 
-Some `networked()` fields are in the type but not honored at runtime
-yet. Setting them compiles; the component still syncs with default
-behavior.
-
-- `interest` is not read. Server plugins (`AoiGrid`, etc.) run their
-  `filterSnapshot` against every dirty entity regardless of what each
-  component says. To limit a component to a subset of peers today,
-  write a plugin whose `filterSnapshot` inspects it.
-- `interp: 'slerp'` falls through to `'lerp'`. `'lerp'`, `'step'`, and
-  `'none'` work.
-- `snapThreshold` is unread.
+- `interest` - visibility. `'global'` is never filtered and forces its
+  entity into the snapshot; a plugin name (an `AoiGrid`'s `name`) means
+  the component ships to a peer only if that plugin deems the entity
+  visible. Plugins are consulted against the full dirty set and each
+  component is gated by its own `interest`, so one entity can ship
+  different components to different peers.
+- `interp` - `'lerp'` (default), `'slerp'`, `'step'`, `'none'`. `'slerp'`
+  treats the component as a quaternion (`x`/`y`/`z`/`w`, or exactly four
+  fields in declaration order) and interpolates along the shortest arc;
+  anything else falls back to `'lerp'`.
+- `snapThreshold` - reconciliation dead-zone: a server correction whose
+  per-field magnitude is at or below it keeps the predicted value
+  (smooths) instead of snapping.
 
 Interp dispatch is per-component, not per-field.
 

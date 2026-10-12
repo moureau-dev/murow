@@ -11,6 +11,7 @@ import { SnapshotInterpolation } from './strategies/snapshot-interpolation';
 import type { DefinedIntents, IntentPayload, IntentSchemaMap } from '../intents/define-intents';
 import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs';
 import type { DefinedPredictions } from '../predictions/define-predictions';
+import type { SyncSpec } from '../components/sync-spec';
 import { makeFieldsAccessor, makeMarkDirty, type PredictionContext } from '../ctx';
 
 const MSG_SNAPSHOT = 0x80;
@@ -197,6 +198,24 @@ export class GameClient<
                     const comps = decoded.valuesByServerEntity.get(serverEid);
                     if (comps === undefined) continue;
                     for (const [c, value] of comps) {
+                        // Per-component snap dead-zone: a correction smaller than
+                        // the component's `snapThreshold` keeps the predicted value
+                        // (smooths) instead of hard-snapping.
+                        const threshold = (c.__sync as SyncSpec | undefined)?.snapThreshold;
+                        if (threshold !== undefined && this.world.has(localEid, c)) {
+                            const current = this.world.get(localEid, c) as Record<string, number>;
+                            const incoming = value as Record<string, number>;
+                            let within = true;
+                            for (const f of c.fieldNames as string[]) {
+                                const a = current[f];
+                                const b = incoming[f];
+                                if (typeof a !== 'number' || typeof b !== 'number' || Math.abs(a - b) > threshold) {
+                                    within = false;
+                                    break;
+                                }
+                            }
+                            if (within) continue;
+                        }
                         if (this.world.has(localEid, c)) {
                             this.world.update(localEid, c, value as any);
                         } else {

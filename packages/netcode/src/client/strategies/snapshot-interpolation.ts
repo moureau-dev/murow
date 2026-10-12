@@ -16,6 +16,41 @@ function modeFor(c: Component<any>): InterpolationMode {
     return sync?.interp ?? 'lerp';
 }
 
+/**
+ * The four field names holding a quaternion, if this component looks like one:
+ * `x`/`y`/`z`/`w` by name, or exactly four fields in declaration order. `null`
+ * for anything else (slerp then falls back to lerp).
+ */
+function quaternionFields(c: Component<any>): [string, string, string, string] | null {
+    const names = c.fieldNames as string[];
+    const byName = ['x', 'y', 'z', 'w'];
+    if (byName.every((n) => names.includes(n))) return ['x', 'y', 'z', 'w'];
+    if (names.length === 4) return [names[0], names[1], names[2], names[3]];
+    return null;
+}
+
+/** Shortest-arc spherical interpolation of two unit quaternions (x,y,z,w). */
+function slerpQuat(a: number[], b: number[], t: number): number[] {
+    let [bx, by, bz, bw] = b;
+    let dot = a[0]! * bx + a[1]! * by + a[2]! * bz + a[3]! * bw;
+    if (dot < 0) {
+        bx = -bx; by = -by; bz = -bz; bw = -bw; dot = -dot;
+    }
+    if (dot > 0.9995) {
+        // Nearly parallel: lerp then renormalize.
+        const x = lerp(a[0]!, bx, t), y = lerp(a[1]!, by, t), z = lerp(a[2]!, bz, t), w = lerp(a[3]!, bw, t);
+        const inv = 1 / (Math.hypot(x, y, z, w) || 1);
+        return [x * inv, y * inv, z * inv, w * inv];
+    }
+    const theta0 = Math.acos(dot);
+    const theta = theta0 * t;
+    const sinTheta = Math.sin(theta);
+    const sinTheta0 = Math.sin(theta0);
+    const s0 = Math.cos(theta) - dot * sinTheta / sinTheta0;
+    const s1 = sinTheta / sinTheta0;
+    return [s0 * a[0]! + s1 * bx, s0 * a[1]! + s1 * by, s0 * a[2]! + s1 * bz, s0 * a[3]! + s1 * bw];
+}
+
 /** Desync past which the play-out clock hard-snaps instead of warping. */
 const DEFAULT_MAX_DESYNC = 500;
 
@@ -188,14 +223,28 @@ export class SnapshotInterpolation {
                         if (mode === 'step') {
                             toWrite = wideT < 0.5 ? va : vb;
                         } else {
-                            // slerp falls through to lerp until implemented.
+                            const qf = mode === 'slerp' ? quaternionFields(c) : null;
                             const out: Record<string, number> = {};
-                            for (const fieldName of c.fieldNames as string[]) {
-                                out[fieldName] = lerp(
-                                    va[fieldName] as number,
-                                    vb[fieldName] as number,
+                            if (qf) {
+                                const q = slerpQuat(
+                                    [va[qf[0]] as number, va[qf[1]] as number, va[qf[2]] as number, va[qf[3]] as number],
+                                    [vb[qf[0]] as number, vb[qf[1]] as number, vb[qf[2]] as number, vb[qf[3]] as number],
                                     wideT,
                                 );
+                                for (const fieldName of c.fieldNames as string[]) {
+                                    const qi = qf.indexOf(fieldName);
+                                    out[fieldName] = qi === -1
+                                        ? lerp(va[fieldName] as number, vb[fieldName] as number, wideT)
+                                        : q[qi]!;
+                                }
+                            } else {
+                                for (const fieldName of c.fieldNames as string[]) {
+                                    out[fieldName] = lerp(
+                                        va[fieldName] as number,
+                                        vb[fieldName] as number,
+                                        wideT,
+                                    );
+                                }
                             }
                             toWrite = out;
                         }

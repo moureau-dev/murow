@@ -14,7 +14,7 @@ Referenced from [llms.txt](../llms.txt).
 6. **Only networked components in a prediction.** A prediction that writes local-only state will be corrupted by rollback.
 7. **The server is authoritative.** It applies intents itself; the client only predicts and reconciles.
 8. **Peers are not entities.** Spawn an entity on connect and bind it with `server.assignEntity(peer, e)`; the client learns it via `'assigned'` / `client.assignedEntity`.
-9. **Scope what peers receive with a plugin** (`AoiGrid`), not with `networked().interest` — `interest` is not read yet.
+9. **Scope what peers receive with `networked().interest`** — `'global'` is never filtered (and forces its entity in); a plugin name (e.g. `AoiGrid`'s `name`) ships the component only for peers the plugin deems visible.
 10. **Sim tick rate is not render rate.** Run a fixed `tickRate`; render interpolates between fixed states.
 
 ## The decision model
@@ -161,7 +161,7 @@ server.use(new AoiGrid({
 
 Two things to know before you reach for it:
 
-- **`networked().interest` is not read.** `AoiGrid` filters *every* dirty entity by radius regardless of what each component declares. There is no per-component interest rule at runtime today. To scope one component to a subset of peers, write a plugin whose `filterSnapshot` inspects it.
+- **`networked().interest` is honored.** Each plugin is consulted against the full dirty set, and every component is gated by its own `interest`: `'global'` forces its entity into the snapshot, while a plugin-name interest ships the component only when that plugin deems the entity visible. One entity can therefore ship different components to different peers.
 - Entities without the `positionComponent` pass through unfiltered. That is the escape hatch for genuinely global state (scoreboards, match timers) — keep it on a component that is not the AOI position component.
 
 ### Tests — memory and virtual transports
@@ -713,7 +713,7 @@ Murow's WebSocket transports (`BunWebSocketServerTransport`, browser `BrowserWeb
 
 ## Gotchas
 
-- **`interest` is not wired up.** `networked({ interest: 'aoi' })` compiles and does nothing at runtime. Interest is controlled by plugins (`AoiGrid`), which filter every dirty entity by radius regardless of component declarations. To scope a component, write a plugin whose `filterSnapshot` inspects it.
+- **`interest` is wired up.** `networked({ interest: 'aoi' })` ships the component only for peers the plugin named `'aoi'` (an `AoiGrid`) deems visible; `'global'` is never filtered and forces the entity into the snapshot.
 - **`interp: 'slerp'` is not wired up.** It falls through to `'lerp'`. `'lerp'`, `'step'`, and `'none'` work. Interp dispatch is per-component, not per-field, so put discrete fields (ids, flags) on a `'step'` component rather than mixing them into a `'lerp'` one.
 - **`snapThreshold` is not wired up.** It is in the type and unread. Use the client-level `maxDesync` and `maxBridgeGap` knobs for snap-vs-smooth behavior.
 - **Predictions must write networked components only.** Rollback restores networked state; a prediction that touched local UI leaves it corrupted. Drive UI from networked state.
