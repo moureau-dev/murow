@@ -1,8 +1,8 @@
 # Renderer
 
-Renderer-agnostic primitives for any rendering backend (WebGPU, PixiJS, Three.js, …). This module holds the **abstract contracts** that backends implement and the **asset pipeline** (parsing, spec registry, typed lookups) that they consume.
+Renderer-agnostic primitives for any rendering backend. Holds the **asset pipeline** (parsing, spec registry, typed lookups), the **agnostic renderer managers**, and the **`RendererRuntime` port** a backend implements.
 
-Everything here is **pure CPU**: no GPU, no canvas, no device. The webgpu (or any) backend is responsible for the upload step.
+Everything here is **backend-agnostic**: no GPU API, no WGSL, no compute. A backend (WebGPU, WebGL, …) plugs in by implementing `RendererRuntime` (`managers/runtime/backend.ts`) — device, codegen `compile`, presentation, and the `Skinning`/`Particles3D` feature ports — then composes the shared managers.
 
 ## Folder layout
 
@@ -28,6 +28,14 @@ renderer/
 │   └── asset/             (AssetBucket — textures + prefabs under one roof)
 ├── raycast/           — abstract pick / ray-test contracts
 │   └── raycast.ts         (Raycast, RaycastMemo, RaycastHit, RaycastOptions)
+├── managers/          — the agnostic renderer
+│   ├── runtime/           (managers, core, internals, cameras, feature ports)
+│   │   └── backend.ts         (RendererRuntime, Skinning, Particles3D, Presentation)
+│   ├── managers.ts        (RendererManagers — 3D composition root)
+│   ├── managers-2d.ts     (RendererManagers2D — 2D composition root)
+│   ├── types.ts           (ids, options, interpolator)
+│   ├── handles.ts         (the Handles namespace)
+│   └── handle-base.ts     (HandleBase — the shared handle contract)
 ├── math.ts            — TRS/mat4 math (zero-alloc)
 └── types.ts           — SpriteHandle, SpritesheetHandle, Camera*State, etc.
 ```
@@ -246,34 +254,30 @@ All prefabs carry `.metadata` (preserved from the spec) and optionally `.hitbox`
 
 ## Implementing a backend
 
-Subclass the base renderer. If the user provides an `AssetBucket`, walk it to size GPU buffers and upload parsed prefabs — the bucket is passed as `prefabs` in options and exposed as `_prefabs` on the base renderer.
+A backend implements the `RendererRuntime` port and composes the shared managers — it does **not** subclass a base renderer.
 
-```typescript
-import {
-  Base3DRenderer,
-  type AssetBucket,
-  type Renderer3DOptions,
-} from 'murow';
+```ts
+import { RendererManagers } from 'murow/renderer/managers';
+import type { RendererRuntime } from 'murow/renderer/managers';
 
-class MyRenderer extends Base3DRenderer {
-  constructor(canvas, options: Renderer3DOptions & { prefabs?: AssetBucket }) {
-    super(canvas, options);
-  }
-  async init() {
-    const bucket = this._prefabs as AssetBucket | undefined;
-    if (bucket) {
-      await bucket.load();
-      for (const prefab of bucket.prefabs.entries()) {
-        // Upload each parsed prefab to your GPU primitives
-      }
-    }
-  }
-  render(alpha) { /* draw */ }
-  destroy() { /* cleanup */ }
-}
+const runtime: RendererRuntime = {
+  async createPresentation(canvas) { /* device + canvas surface */ return presentation; },
+  presentation,                       // the active present target
+  compile(shaders) { /* emit target source via your TargetSyntax */ return { code }; },
+  createRawBuffer(schema, usage) { /* allocate */ return buffer; },
+  createBindGroupLayout(descriptor) { /* allocate */ return layout; },
+  shaderSource(name) { return MY_SHADERS[name] ?? ''; },
+  skinning: mySkinning,               // compute, or CPU/vertex
+  particles: myParticles,
+};
+
+const managers = new RendererManagers({ runtime, core, camera, /* … */ });
+// then attach: this.instances = managers.instances; … (see RendererManagers2D for the 2D set)
 ```
 
-See [`@murow/webgpu`](../../../webgpu) for a full reference implementation.
+Given an `AssetBucket`, walk it to size GPU buffers and upload parsed prefabs — the bucket is passed as `assets` in options.
+
+See [`@murow/webgpu`](../../../webgpu) for the full reference backend (device + WGSL `TargetSyntax` + compute `Skinning`/`Particles3D`).
 
 ## Picking / Raycasting
 

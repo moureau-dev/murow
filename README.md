@@ -98,7 +98,7 @@ const compute = renderer
 const render = renderer
   .createGeometry('particles', { maxInstances: 10000, geometry: 'quad' })
   .instanceLayout({ dynamic: { posX: d.f32, posY: d.f32, velX: d.f32, velY: d.f32, life: d.f32 } })
-  .fromCompute(compute, 'particles')
+  .fromBuffer(particleBuffer)
   .build();
 
 compute.dispatch(10000);

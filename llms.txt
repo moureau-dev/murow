@@ -3458,7 +3458,7 @@ const render = renderer.geometry
     dynamic: { posX: d.f32, posY: d.f32, life: d.f32 },   // updated per frame
     static:  { hue:  d.f32 },                              // set once
   })
-  .fromCompute(compute, 'particles')                       // ← zero-copy: reads compute buffer directly
+  .fromBuffer(particleBuffer)                              // ← zero-copy: reads an external storage buffer directly
   .uniforms({ resolution: d.vec2f, time: d.f32 })
   .shaders({
     vertex: {
@@ -3486,7 +3486,7 @@ render.updateAll((ctx, slot) => {
 });
 ```
 
-- `.fromCompute(compute, bufferName)` skips `addInstance` — instance data lives in the compute buffer. Use one or the other, not both.
+- `.fromBuffer(buffer)` skips `addInstance` — instance data lives in an external storage buffer. Use one or the other, not both.
 - `renderer.onResize((w, h) => render.updateUniforms({ resolution: [w, h] }))` keeps screen-relative shaders correct.
 
 ### `AnimationController` — 2D spritesheet animation
