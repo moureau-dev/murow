@@ -1,4 +1,5 @@
 import type { Component, World } from 'murow/ecs';
+import type { SnapshotValuePool } from './snapshot-pool';
 
 /**
  * Snapshot delta wire format.
@@ -259,6 +260,7 @@ export function decodeDelta(
      * either way so the local entity has the right shape.
      */
     shouldApply: (localEntity: number) => boolean = () => true,
+    pool?: SnapshotValuePool,
 ): DecodedDelta {
     const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     let off = 0;
@@ -270,7 +272,7 @@ export function decodeDelta(
 
     const localEntityIds: number[] = [];
     const serverEntityIds: number[] = [];
-    const valuesByServerEntity = new Map<number, (Record<string, any> | null)[]>();
+    const valuesByServerEntity = pool ? pool.acquireMap() : new Map<number, (Record<string, any> | null)[]>();
 
     // Reused across entities: one mask buffer and two present lists per decode,
     // instead of a fresh allocation per entity.
@@ -301,10 +303,12 @@ export function decodeDelta(
         localEntityIds.push(localEid);
 
         const applyToWorld = shouldApply(localEid);
-        const compMap: (Record<string, any> | null)[] = new Array(components.length).fill(null);
+        const compMap: (Record<string, any> | null)[] = pool
+            ? pool.acquireRow(components.length)
+            : new Array(components.length).fill(null);
         for (let pi = 0; pi < present.length; pi++) {
             const c = present[pi]!;
-            const update: Record<string, any> = {};
+            const update: Record<string, any> = pool ? pool.acquireValues() : {};
             const sync = (c as any).__sync;
             for (const fieldName of c.fieldNames as string[]) {
                 const q = resolveQuant(sync, fieldName);

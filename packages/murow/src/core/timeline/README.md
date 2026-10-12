@@ -40,6 +40,7 @@ if (pair) {
 - `at(index)`: the entry at an index (`{ tick, receivedAt, sample }`).
 - `length`, `latestReceivedAt`.
 - `setStaleWindow(ms)`, `clear()`.
+- `onEvict(sample)`: optional hook called for a sample as it is dropped (capacity overflow, stale-window reset, or `clear`) — lets the owner recycle the sample's storage.
 
 ## Notes
 

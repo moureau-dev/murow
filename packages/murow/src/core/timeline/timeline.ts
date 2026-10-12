@@ -14,6 +14,11 @@ export class Timeline<S> {
     private _latestReceivedAt = -Infinity;
     capacity: number;
     staleWindow: number;
+    /**
+     * Called with a sample as it is dropped (capacity overflow, stale-window
+     * reset, or `clear`). Lets the owner recycle the sample's storage.
+     */
+    onEvict: ((sample: S) => void) | null = null;
 
     constructor(capacity: number, staleWindowMs: number) {
         this.capacity = capacity;
@@ -45,8 +50,17 @@ export class Timeline<S> {
     }
 
     clear(): void {
-        this.entries.length = 0;
+        this.evictAll();
         this._latestReceivedAt = -Infinity;
+    }
+
+    /** Drop every entry, notifying `onEvict` for each. */
+    private evictAll(): void {
+        const onEvict = this.onEvict;
+        if (onEvict !== null) {
+            for (let i = 0; i < this.entries.length; i++) onEvict(this.entries[i]!.sample);
+        }
+        this.entries.length = 0;
     }
 
     /**
@@ -57,7 +71,7 @@ export class Timeline<S> {
         let reset = false;
         const gap = receivedAt - this._latestReceivedAt;
         if (this.entries.length > 0 && gap > this.staleWindow) {
-            this.entries.length = 0;
+            this.evictAll();
             this._latestReceivedAt = -Infinity;
             reset = true;
         }
@@ -72,7 +86,10 @@ export class Timeline<S> {
         }
         this.entries.splice(insertAt, 0, { tick, receivedAt, sample });
 
-        while (this.entries.length > this.capacity) this.entries.shift();
+        while (this.entries.length > this.capacity) {
+            const evicted = this.entries.shift()!;
+            this.onEvict?.(evicted.sample);
+        }
         return reset;
     }
 

@@ -4,6 +4,8 @@ import { SlewClock } from 'murow/core/clock';
 import type { Component, Entity, World } from 'murow/ecs';
 import type { SyncSpec, InterpolationMode } from '../../../components/sync-spec';
 import { PeerRenderStrategy } from '../strategy';
+import type { ServerEntityLookup } from '../../server-entity-map';
+import type { SnapshotPool } from '../../../codec/snapshot-pool';
 import type { PeerRenderContext } from '../strategy';
 
 export interface BufferedSnapshot {
@@ -72,7 +74,7 @@ const DEFAULT_MAX_BRIDGE_GAP = 250;
  * (play-out clock). Predicted entities are skipped; reconciliation drives them.
  */
 export class SnapshotInterpolation {
-    private serverToLocal: Map<number, Entity>;
+    private serverToLocal: ServerEntityLookup;
     private timeline: Timeline<BufferedSnapshot>;
     private clock = new SlewClock();
     private smoothedTickRateMs: number;
@@ -83,16 +85,20 @@ export class SnapshotInterpolation {
     maxBridgeGap: number;
 
     constructor(
-        serverToLocal: Map<number, Entity>,
+        serverToLocal: ServerEntityLookup,
         capacity: number,
         delayMs: number,
         staleWindowMs: number,
         maxDesyncMs: number = DEFAULT_MAX_DESYNC,
         nominalTickMs: number = 0,
         maxBridgeGapMs: number = DEFAULT_MAX_BRIDGE_GAP,
+        pool?: SnapshotPool,
     ) {
         this.serverToLocal = serverToLocal;
         this.timeline = new Timeline<BufferedSnapshot>(capacity, staleWindowMs);
+        if (pool !== undefined) {
+            this.timeline.onEvict = (s) => pool.release(s.componentValuesByEntity);
+        }
         this.delay = delayMs;
         this.maxDesync = maxDesyncMs;
         this.nominalTickMs = nominalTickMs;
@@ -335,6 +341,7 @@ export class SnapshotInterpolationStrategy extends PeerRenderStrategy {
             this.options.maxDesync,
             ctx.tickIntervalMs,
             this.options.maxBridgeGap,
+            ctx.snapshotPool,
         );
     }
 

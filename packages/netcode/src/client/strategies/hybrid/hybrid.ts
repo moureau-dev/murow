@@ -2,6 +2,9 @@ import type { Component, Entity, World } from 'murow/ecs';
 import { SnapshotInterpolationStrategy } from '../interpolation';
 import { applyExtrapolation } from '../extrapolation';
 import { PeerRenderStrategy } from '../strategy';
+import type { ServerEntityLookup } from '../../server-entity-map';
+
+const NO_SERVERS: ServerEntityLookup = { get: () => undefined };
 import type { PeerRenderContext } from '../strategy';
 import type { BufferedSnapshot } from '../interpolation';
 
@@ -35,7 +38,7 @@ export class HybridStrategy extends PeerRenderStrategy {
     private readonly maxExtrapolationMs: number;
     private newest: BufferedSnapshot | null = null;
     private prev: BufferedSnapshot | null = null;
-    private serverToLocal: Map<number, Entity> = new Map();
+    private serverToLocal: ServerEntityLookup = NO_SERVERS;
     private readonly scratch: Record<string, number> = {};
 
     constructor(options: HybridOptions = {}) {

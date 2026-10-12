@@ -1,5 +1,7 @@
 import type { Component, Entity, World } from 'murow/ecs';
 import type { BufferedSnapshot } from '../interpolation';
+import type { ServerEntityLookup } from '../../server-entity-map';
+import type { SnapshotPool } from '../../../codec/snapshot-pool';
 
 /**
  * Client context a peer-render strategy needs. `GameClient` builds it once and
@@ -8,13 +10,15 @@ import type { BufferedSnapshot } from '../interpolation';
  */
 export interface PeerRenderContext {
     /** Server entity id -> local entity map owned by the client. */
-    readonly serverToLocal: Map<number, Entity>;
+    readonly serverToLocal: ServerEntityLookup;
     /** Wall clock in ms (`GameClient.now`). */
     readonly now: () => number;
     /** One simulation tick in ms. */
     readonly tickIntervalMs: number;
     /** Default snapshot ring capacity. */
     readonly capacity: number;
+    /** Optional value pool the timeline recycles evicted snapshots into. */
+    readonly snapshotPool?: SnapshotPool;
 }
 
 /**

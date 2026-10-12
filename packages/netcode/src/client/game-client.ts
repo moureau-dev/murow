@@ -16,6 +16,8 @@ import type { SyncSpec } from '../components/sync-spec';
 import { Logger } from 'murow/core/logger';
 import { computeSchemaFingerprint } from '../codec/fingerprint';
 import { SlotSet } from 'murow/core/slot-map';
+import { ServerEntityMap } from './server-entity-map';
+import { SnapshotPool } from '../codec/snapshot-pool';
 import { makeFieldsAccessor, makeMarkDirty, type PredictionContext } from '../ctx';
 
 const MSG_SNAPSHOT = 0x80;
@@ -106,7 +108,8 @@ export class GameClient<
     private lastServerTick = 0;
     private lastReconciledServerTick = 0;
 
-    private serverToLocal = new Map<number, Entity>();
+    private serverToLocal!: ServerEntityMap;
+    private readonly snapshotPool = new SnapshotPool();
     private syncedComponents: Component<any>[] = [];
     private syncedNumMaskWords = 1;
     private rng: SimpleRNG;
@@ -161,6 +164,7 @@ export class GameClient<
             'error',
         ]);
         this.world = opts.world;
+        this.serverToLocal = new ServerEntityMap(this.world.getMaxEntities());
         this.reconcileCtx = { decoded: null, resetEntities: new SlotSet(this.world.getMaxEntities()) };
         this.loop = opts.loop;
         this.transport = opts.transport;
@@ -193,6 +197,7 @@ export class GameClient<
             now: this.now,
             tickIntervalMs: opts.loop.ticker.intervalMs,
             capacity: 16,
+            snapshotPool: this.snapshotPool,
         });
 
         this.reconciler = new Reconciler({
@@ -387,6 +392,7 @@ export class GameClient<
                 // go through the buffer's `sync` apply. decodeDelta still
                 // archetype-inits first-appearance components.
                 () => false,
+                this.snapshotPool,
             );
             this.lastServerTick = decoded.tick;
 

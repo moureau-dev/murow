@@ -697,6 +697,7 @@ function decodeDelta(
   numMaskWords: number,               // SAME value
   ensureEntity: (serverEntityId: number, present: Component<any>[]) => number,  // map server id -> local id, spawning if needed
   shouldApply?: (localEntity: number) => boolean,   // default () => true; false skips overwriting (e.g. your own predicted entity)
+  pool?: SnapshotValuePool,                          // optional: recycle the decoded Map/rows/value objects (see SnapshotPool)
 ): DecodedDelta;
 
 interface DecodedDelta {

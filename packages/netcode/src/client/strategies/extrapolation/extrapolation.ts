@@ -1,6 +1,9 @@
 import type { Component, Entity, World } from 'murow/ecs';
 import { Timeline } from 'murow/core/timeline';
 import { PeerRenderStrategy } from '../strategy';
+import type { ServerEntityLookup } from '../../server-entity-map';
+
+const NO_SERVERS: ServerEntityLookup = { get: () => undefined };
 import type { PeerRenderContext } from '../strategy';
 import type { BufferedSnapshot } from '../interpolation';
 
@@ -27,7 +30,7 @@ export function applyExtrapolation(
     scratch: Record<string, number>,
     components: Component<any>[],
     shouldSkip: (entity: Entity) => boolean,
-    serverToLocal: Map<number, Entity>,
+    serverToLocal: ServerEntityLookup,
 ): void {
     const dtMs = prev !== null ? newest.receivedAt - prev.receivedAt : 0;
     const k = dtMs > 0 && elapsedMs > 0 ? elapsedMs / dtMs : 0;
@@ -72,7 +75,7 @@ export function applyExtrapolation(
  */
 export class ExtrapolationStrategy extends PeerRenderStrategy {
     private timeline: Timeline<BufferedSnapshot> | null = null;
-    private serverToLocal: Map<number, Entity> = new Map();
+    private serverToLocal: ServerEntityLookup = NO_SERVERS;
     private maxExtrapolationMs = 200;
     private readonly scratch: Record<string, number> = {};
 
@@ -83,6 +86,8 @@ export class ExtrapolationStrategy extends PeerRenderStrategy {
     protected override onBind(ctx: PeerRenderContext): void {
         this.serverToLocal = ctx.serverToLocal;
         this.timeline = new Timeline<BufferedSnapshot>(this.options.capacity ?? ctx.capacity, 2000);
+        const pool = ctx.snapshotPool;
+        if (pool !== undefined) this.timeline.onEvict = (s) => pool.release(s.componentValuesByEntity);
         this.maxExtrapolationMs = this.options.maxExtrapolationMs ?? 200;
     }
 
