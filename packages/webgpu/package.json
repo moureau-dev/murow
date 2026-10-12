@@ -40,11 +40,6 @@
   "peerDependencies": {
     "murow": "workspace:*"
   },
-  "dependencies": {
-    "acorn": "^8.16.0",
-    "tinyest-for-wgsl": "^0.3.2",
-    "typegpu": "^0.10.2"
-  },
   "devDependencies": {
     "@types/bun": "^1.1.16",
     "@webgpu/types": "^0.1.69",

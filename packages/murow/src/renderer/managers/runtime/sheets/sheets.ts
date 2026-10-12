@@ -7,7 +7,7 @@ import type {
     SpritesheetHandle,
     SpritesheetSource,
 } from 'murow/renderer';
-import { parseSpritesheet } from 'murow/renderer';
+import { parseSpritesheet } from '../../../spritesheet/parser';
 import { Spritesheet, createTextureFromBitmap } from '../spritesheet/spritesheet';
 import type { Renderer2DCore } from '../core/2d';
 import type { SheetId } from '../ids';

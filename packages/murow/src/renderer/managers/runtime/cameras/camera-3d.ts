@@ -5,7 +5,8 @@
  */
  import { lerp } from "murow/core/lerp";
  import { Ray3D } from "murow/core/ray";
- import { mat4Mul, type Camera3DState } from 'murow/renderer';
+ import { mat4Mul } from '../../../math';
+ import type { Camera3DState } from '../../../types';
  import type { Interpolator } from '../types';
  import { CameraEffectList } from './camera-effect';
 

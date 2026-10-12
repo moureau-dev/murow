@@ -38,9 +38,8 @@ There is no `CHANGELOG.md` in this repo. Do not invent one.
   invoke them with `bun run <script>`.
 - TypeScript throughout. Dual ESM + CJS build via `esbuild` (`dist/esm`,
   `dist/cjs`) plus `tsc --emitDeclarationOnly` for types (`dist/types`).
-- `murow` core has **zero runtime dependencies**. `murow/webgpu` needs
-  `typegpu`, `acorn`, and `tinyest-for-wgsl` (declared as `optionalDependencies`
-  of `murow`, bundled into the package).
+- `murow` has **zero runtime dependencies** — core, `murow/gpu`, and
+  `murow/webgpu` are all self-contained.
 - Bun workspaces monorepo:
   - `packages/murow` — the published package `murow` (core + bundled webgpu/netcode)
   - `packages/webgpu` — `@murow/webgpu`, the reference renderer backend
