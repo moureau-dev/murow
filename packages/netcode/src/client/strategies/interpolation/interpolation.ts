@@ -79,6 +79,12 @@ export class SnapshotInterpolation {
     private clock = new SlewClock();
     private smoothedTickRateMs: number;
     private readonly seenScratch = new Set<number>();
+    /**
+     * One reused result object per component index. Must be per-component: 
+     * `world.update` iterates the object's keys, so a shared object would leak 
+     * stale fields from the previous component.
+     */
+    private readonly valueScratch: Record<string, number>[] = [];
     private nominalTickMs: number;
     delay: number;
     maxDesync: number;
@@ -241,7 +247,7 @@ export class SnapshotInterpolation {
                             toWrite = wideT < 0.5 ? va : vb;
                         } else {
                             const qf = mode === 'slerp' ? quaternionFields(c) : null;
-                            const out: Record<string, number> = {};
+                            const out = (this.valueScratch[ci] ??= {});
                             if (qf) {
                                 const q = slerpQuat(
                                     [va[qf[0]] as number, va[qf[1]] as number, va[qf[2]] as number, va[qf[3]] as number],

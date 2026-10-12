@@ -27,7 +27,7 @@ export function applyExtrapolation(
     newest: BufferedSnapshot,
     prev: BufferedSnapshot | null,
     elapsedMs: number,
-    scratch: Record<string, number>,
+    scratch: Record<string, number>[],
     components: Component<any>[],
     shouldSkip: (entity: Entity) => boolean,
     serverToLocal: ServerEntityLookup,
@@ -49,7 +49,7 @@ export function applyExtrapolation(
             let toWrite: Record<string, number> = v;
             const vp = prev?.componentValuesByEntity.get(serverEid)?.[ci] ?? undefined;
             if (vp !== undefined && k > 0) {
-                const out = scratch;
+                const out = (scratch[ci] ??= {});
                 for (const fieldName of c.fieldNames as string[]) {
                     const cur = v[fieldName] as number;
                     out[fieldName] = cur + (cur - (vp[fieldName] as number)) * k;
@@ -77,7 +77,7 @@ export class ExtrapolationStrategy extends PeerRenderStrategy {
     private timeline: Timeline<BufferedSnapshot> | null = null;
     private serverToLocal: ServerEntityLookup = NO_SERVERS;
     private maxExtrapolationMs = 200;
-    private readonly scratch: Record<string, number> = {};
+    private readonly scratch: Record<string, number>[] = [];
 
     constructor(private readonly options: ExtrapolationOptions = {}) {
         super();

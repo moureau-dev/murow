@@ -39,7 +39,7 @@ export class HybridStrategy extends PeerRenderStrategy {
     private newest: BufferedSnapshot | null = null;
     private prev: BufferedSnapshot | null = null;
     private serverToLocal: ServerEntityLookup = NO_SERVERS;
-    private readonly scratch: Record<string, number> = {};
+    private readonly scratch: Record<string, number>[] = [];
 
     constructor(options: HybridOptions = {}) {
         super();

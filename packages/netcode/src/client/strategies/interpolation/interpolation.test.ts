@@ -243,3 +243,44 @@ describe('SnapshotInterpolation', () => {
         expect(world.get(peer, Position).x).toBeCloseTo(6.5);
     });
 });
+
+describe('SnapshotInterpolation apply with mixed-field components', () => {
+    const Position = defineComponent('MixPosition', {
+        schema: { x: f32, y: f32 },
+        sync: networked({ rate: 'every-tick', interest: 'global', interp: 'lerp' }),
+    });
+    const Rotation = defineComponent('MixRotation', {
+        schema: { x: f32, y: f32, z: f32, w: f32 },
+        sync: networked({ rate: 'every-tick', interest: 'global', interp: 'slerp' }),
+    });
+
+    test('reuses per-component scratch without leaking keys across components', () => {
+        // world.update iterates the object's keys, so a scratch shared between
+        // Position (2 fields) and Rotation (4 fields) would crash on stale keys.
+        const world = new World({ maxEntities: 4, components: [Position, Rotation] });
+        const serverToLocal = new Map<number, number>();
+        const e = world.spawn();
+        world.add(e, Position, { x: 0, y: 0 });
+        world.add(e, Rotation, { x: 0, y: 0, z: 0, w: 1 });
+        serverToLocal.set(1, e);
+
+        const snap = (tick: number, receivedAt: number, p: [number, number], r: [number, number, number, number]) =>
+            ({
+                receivedAt,
+                serverTick: tick,
+                entityIds: [1],
+                componentValuesByEntity: new Map([
+                    [1, [{ x: p[0], y: p[1] }, { x: r[0], y: r[1], z: r[2], w: r[3] }]],
+                ]),
+            }) as any;
+
+        const buf = new SnapshotInterpolation(serverToLocal, 8, 0, 300);
+        buf.record(snap(0, 0, [0, 0], [0, 0, 0, 1]));
+        buf.record(snap(1, 100, [10, 20], [0, 0, Math.SQRT1_2, Math.SQRT1_2]));
+        expect(() => buf.apply(world, 50, [Position, Rotation], () => false)).not.toThrow();
+
+        const p = world.get(e, Position);
+        expect(p.x).toBeGreaterThan(0);
+        expect(p.y).toBeGreaterThan(0);
+    });
+});
