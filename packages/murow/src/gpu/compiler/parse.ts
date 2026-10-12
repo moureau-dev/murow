@@ -655,11 +655,9 @@ class Parser {
         if (token.value === 'false') return literal(boolType(), false);
         const known = this.locals[token.value];
         if (known) return known;
-        if (token.value === 'd' || /^d\d+$/.test(token.value)) return { __namespace: 'd' };
-        if (token.value === 'std' || /^std\d+$/.test(token.value)) return { __namespace: 'std' };
-        if (token.value === this.namespaceParams || token.value === this.namespaceMaterial || token.value === this.namespaceStd) {
-            return { __namespace: token.value };
-        }
+        // Destructured params beat the `d`/`std` name special-case: a minifier
+        // may rename a binding (for example `mesh`) to `d`, so the bound name
+        // must resolve to the binding before `d` is read as the data namespace.
         const destructured = this.destructured[token.value];
         if (destructured) {
             if (destructured === 'params') {
@@ -668,12 +666,22 @@ class Parser {
                 return value;
             }
             if (destructured === 'material') {
-                const value = this.material[this.destructuredKey[token.value] ?? token.value];
+                const key = this.destructuredKey[token.value] ?? token.value;
+                const value = this.material[key];
                 if (value !== undefined) return value;
+                // The destructured key survives minification even when the binding
+                // name does not, so resolve a helper external by key.
+                const helper = this.options.externals?.[key];
+                if (helper !== undefined) return helper;
                 // Otherwise fall through: the name may be a helper external.
             } else {
                 return this.member({ __namespace: 'std' }, token.value);
             }
+        }
+        if (token.value === 'd' || /^d\d+$/.test(token.value)) return { __namespace: 'd' };
+        if (token.value === 'std' || /^std\d+$/.test(token.value)) return { __namespace: 'std' };
+        if (token.value === this.namespaceParams || token.value === this.namespaceMaterial || token.value === this.namespaceStd) {
+            return { __namespace: token.value };
         }
         const exposedMaterial = this.material[token.value];
         if (exposedMaterial !== undefined) return exposedMaterial;

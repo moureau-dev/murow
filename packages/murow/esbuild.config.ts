@@ -26,7 +26,7 @@ async function main() {
             format: 'esm',
             platform: 'neutral',
             minifyWhitespace: true,
-            minifyIdentifiers: false,
+            minifyIdentifiers: true,
             minifySyntax: false,
         }),
         build({
@@ -36,7 +36,7 @@ async function main() {
             format: 'cjs',
             platform: 'neutral',
             minifyWhitespace: true,
-            minifyIdentifiers: false,
+            minifyIdentifiers: true,
             minifySyntax: false,
         }),
     ]);

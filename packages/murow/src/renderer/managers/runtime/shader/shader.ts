@@ -188,7 +188,7 @@ export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataL
             );
         }
 
-        const mapped = tonemap(acc);
+        const mapped = std.tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, 1.0);
         },
     );
@@ -568,7 +568,7 @@ export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedM
             );
         }
 
-        const mapped = tonemap(acc);
+        const mapped = std.tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, texColor.w);
         },
     );
@@ -958,7 +958,7 @@ export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
             );
         }
 
-        const mapped = tonemap(acc);
+        const mapped = std.tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, 1.0);
         },
     );

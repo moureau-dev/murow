@@ -189,7 +189,7 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
         const alpha = std.mul(tex.w, m.opacity);
         if (alpha < m.alphaTest) { std.discard(); }
 
-        const mapped = tonemap(acc);
+        const mapped = std.tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, alpha);
         },
     );

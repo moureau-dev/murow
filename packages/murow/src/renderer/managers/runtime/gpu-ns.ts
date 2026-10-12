@@ -6,7 +6,7 @@
  * stable (importing the raw namespaces lets a bundler rename them).
  */
 import { d as dataNs, std as stdNs } from 'murow/gpu';
-import { shadeLight } from './shaders/utils';
+import { shadeLight, tonemap } from './shaders/utils';
 
 export const d: typeof dataNs = { ...dataNs };
-export const std = { ...stdNs, shadeLight };
+export const std = { ...stdNs, shadeLight, tonemap };
