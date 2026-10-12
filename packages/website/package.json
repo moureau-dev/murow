@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "newstack start",
-    "prebuild": "cp ../../llms.txt ./public/llms.txt",
+    "prebuild": "cp ../../llms.txt ./public/llms.txt && rm -rf ./public/docs && cp -r ../../docs ./public/docs && bun run prepare-docs.ts",
     "build": "newstack build --mode=ssg"
   },
   "dependencies": {
