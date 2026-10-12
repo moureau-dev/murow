@@ -217,12 +217,13 @@ export class GameClient<
                         // the component's `snapThreshold` keeps the predicted value
                         // (smooths) instead of hard-snapping.
                         const threshold = (c.__sync as SyncSpec | undefined)?.snapThreshold;
-                        if (threshold !== undefined && this.world.has(localEid, c)) {
-                            const current = this.world.get(localEid, c) as Record<string, number>;
-                            const incoming = value as Record<string, number>;
+                        const present = this.world.has(localEid, c);
+                        const fields = present ? (this.world.fields(c) as any) : null;
+                        const incoming = value as Record<string, number>;
+                        if (threshold !== undefined && fields !== null) {
                             let within = true;
                             for (const f of c.fieldNames as string[]) {
-                                const a = current[f];
+                                const a = fields[f][localEid] as number;
                                 const b = incoming[f];
                                 if (typeof a !== 'number' || typeof b !== 'number' || Math.abs(a - b) > threshold) {
                                     within = false;
@@ -231,8 +232,8 @@ export class GameClient<
                             }
                             if (within) continue;
                         }
-                        if (this.world.has(localEid, c)) {
-                            this.world.update(localEid, c, value as any);
+                        if (fields !== null) {
+                            for (const f of c.fieldNames as string[]) fields[f][localEid] = incoming[f];
                         } else {
                             this.world.add(localEid, c, value as any);
                         }
