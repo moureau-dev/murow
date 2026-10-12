@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { emitEntry } from '../codegen/emit';
 import { TestWgslBackend } from '../codegen/test-syntax';
 import { createEmitContext } from '../codegen/backend';
-import { breakStmt, loopStmt, type IrStmt } from '../ir';
+import { breakStmt, call, loopStmt, vec, type IrStmt } from '../ir';
 import { parseShaderBody, parseShaderFunction } from './parse';
+import { ShaderValue, toExpr, ShaderInput } from '../dsl/value';
 import { ShaderCompiler, transformSource } from './transform';
 
 function wgsl(source: string, options: Parameters<typeof parseShaderBody>[1] = { stage: 'fragment' }): string {
@@ -30,6 +31,32 @@ describe('parseShaderBody', () => {
         const code = wgsl('(_v, _m, s) => s.vec4f(1, 0, 0, 1)');
         expect(code).toContain('@fragment');
         expect(code).toContain('return vec4<f32>(1, 0, 0, 1);');
+    });
+
+    test('a minified destructured helper resolves by its preserved key', () => {
+        // Minify keeps object keys but renames bindings: `{ snoise }` becomes
+        // `{ snoise: X }`. The helper must resolve by the key, not the binding.
+        const helper = (x: unknown) => new ShaderValue({ node: call(vec('f32', 3), 'snoise', [toExpr(x as ShaderInput)]) });
+        const code = wgsl('(input, { snoise: X }) => { return X(input.uv); }', {
+            stage: 'fragment',
+            params: { uv: vec('f32', 2) },
+            externals: { snoise: helper },
+        } as never);
+        expect(code).toContain('snoise');
+    });
+
+    test('lowers a minified `if`-as-short-circuit back to an if statement', () => {
+        // minifySyntax: `if (c) discard;` -> `c && discard;`
+        const code = wgsl('(_v, _m, s) => { s.f32(1) > s.f32(0) && s.discard(); return s.vec4f(1, 1, 1, 1); }');
+        expect(code).toContain('if (');
+        expect(code).toContain('discard');
+    });
+
+    test('lowers a minified statement+return sequence', () => {
+        // minifySyntax: `if (c) discard; return v;` -> `return c && discard(), v;`
+        const code = wgsl('(_v, _m, s) => { return s.f32(1) > s.f32(0) && s.discard(), s.vec4f(1, 1, 1, 1); }');
+        expect(code).toContain('discard');
+        expect(code).toContain('return vec4<f32>(');
     });
 
     test('lowers const declarations and native operators', () => {

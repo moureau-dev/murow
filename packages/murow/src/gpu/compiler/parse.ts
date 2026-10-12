@@ -284,7 +284,7 @@ class Parser {
         const token = this.peek();
         if (token.kind === 'ident') {
             if (token.value === 'const' || token.value === 'let' || token.value === 'var') return this.parseVarDecl();
-            if (token.value === 'return') return [this.parseReturn()];
+            if (token.value === 'return') return this.parseReturn();
             if (token.value === 'if') return [this.parseIf()];
             if (token.value === 'for') return this.parseFor();
             if (token.value === 'while') return this.parseWhile();
@@ -452,16 +452,36 @@ class Parser {
         return letStmt(id, this.locals[name]!.type, expr);
     }
 
-    private parseReturn(): IrStmt {
+    private parseReturn(): IrStmt[] {
         this.next();
         if (this.peekPunc(';') || this.peekPunc('}')) {
             if (this.peekPunc(';')) this.next();
-            return returnStmt(null);
+            return [returnStmt(null)];
         }
-        const value = this.parseExpression();
+        const stmts: IrStmt[] = [];
+        for (;;) {
+            const value = this.parseExpression();
+            if (this.peekPunc(',')) {
+                // A sequence in a `return`: earlier parts run for effect.
+                // minifySyntax folds `if (c) discard; return v;` into
+                // `return c && discard(), v;`.
+                this.next();
+                if (isStmtNode(value)) stmts.push(value as IrStmt);
+                else throw this.error('parseShader: unsupported expression in a return sequence');
+                continue;
+            }
+            if (isStmtNode(value)) {
+                stmts.push(value as IrStmt);
+                stmts.push(returnStmt(null));
+            } else if (isObjectLiteral(value)) {
+                stmts.push(returnStmt(this.buildOutputValue(value)));
+            } else {
+                stmts.push(returnStmt(this.exprOf(value)));
+            }
+            break;
+        }
         this.consumeSemicolon();
-        if (isObjectLiteral(value)) return returnStmt(this.buildOutputValue(value));
-        return returnStmt(this.exprOf(value));
+        return stmts;
     }
 
     /**
@@ -522,9 +542,33 @@ class Parser {
             const a = this.parseAssignment();
             this.expectPunc(':');
             const b = this.parseAssignment();
+            // minifySyntax folds one- and multi-statement `if`/`else` bodies into a
+            // ternary whose branches are assignments or comma sequences of them
+            // (`c ? x = a : y = b`, `c ? (p = 1, q = 2) : ...`). Lower it back.
+            if (this.isStmtish(a) || this.isStmtish(b)) {
+                return ifStmt(this.exprOf(cond), this.toStmts(a), this.toStmts(b));
+            }
             return intrinsic('select', [this.exprOf(cond), this.exprOf(a), this.exprOf(b)]);
         }
         return cond;
+    }
+
+    /** Whether a parsed value is a statement, or a sequence containing one. */
+    private isStmtish(value: unknown): boolean {
+        if (isStmtNode(value)) return true;
+        return value !== null && typeof value === 'object' && '__seq' in value;
+    }
+
+    /** Expand a statement value (or comma sequence) into a list of statements. */
+    private toStmts(value: unknown): IrStmt[] {
+        if (value !== null && typeof value === 'object' && '__seq' in value) {
+            return (value as { __seq: unknown[] }).__seq.map((entry) => {
+                if (isStmtNode(entry)) return entry as IrStmt;
+                throw this.error('parseShader: unsupported expression in a sequence');
+            });
+        }
+        if (isStmtNode(value)) return [value as IrStmt];
+        throw this.error('parseShader: expected a statement');
     }
 
     private readonly precedence: readonly (readonly string[])[] = [
@@ -546,6 +590,14 @@ class Parser {
         while (this.peekPuncIn(this.precedence[level]!)) {
             const op = this.next().value;
             const right = this.parseBinary(level + 1);
+            // minifySyntax folds a one-statement `if` into a logical
+            // short-circuit: `if (c) s;` becomes `c && s;` and `if (!c) s;`
+            // becomes `c || s;`. Lower it back to an `if` statement.
+            if ((op === '&&' || op === '||') && isStmtNode(right)) {
+                const cond = op === '&&' ? this.exprOf(left) : notExpr(this.exprOf(left));
+                left = ifStmt(cond, [right as IrStmt], null);
+                break;
+            }
             left = this.binaryOp(op, this.exprOf(left), this.exprOf(right));
         }
         return left;
@@ -637,6 +689,14 @@ class Parser {
         }
         if (token.kind === 'punc' && token.value === '(') {
             const inner = this.parseExpression();
+            // A parenthesized comma sequence, e.g. `(a = 1, b = 2)`. minifySyntax
+            // emits these when it folds a multi-statement branch into a ternary.
+            if (this.peekPunc(',')) {
+                const seq = [inner];
+                while (this.peekPunc(',')) { this.next(); seq.push(this.parseExpression()); }
+                this.expectPunc(')');
+                return { __seq: seq };
+            }
             this.expectPunc(')');
             return inner;
         }
@@ -655,11 +715,9 @@ class Parser {
         if (token.value === 'false') return literal(boolType(), false);
         const known = this.locals[token.value];
         if (known) return known;
-        if (token.value === 'd' || /^d\d+$/.test(token.value)) return { __namespace: 'd' };
-        if (token.value === 'std' || /^std\d+$/.test(token.value)) return { __namespace: 'std' };
-        if (token.value === this.namespaceParams || token.value === this.namespaceMaterial || token.value === this.namespaceStd) {
-            return { __namespace: token.value };
-        }
+        // Destructured params beat the `d`/`std` name special-case: a minifier
+        // may rename a binding (for example `mesh`) to `d`, so the bound name
+        // must resolve to the binding before `d` is read as the data namespace.
         const destructured = this.destructured[token.value];
         if (destructured) {
             if (destructured === 'params') {
@@ -668,12 +726,22 @@ class Parser {
                 return value;
             }
             if (destructured === 'material') {
-                const value = this.material[this.destructuredKey[token.value] ?? token.value];
+                const key = this.destructuredKey[token.value] ?? token.value;
+                const value = this.material[key];
                 if (value !== undefined) return value;
+                // The destructured key survives minification even when the binding
+                // name does not, so resolve a helper external by key.
+                const helper = this.options.externals?.[key];
+                if (helper !== undefined) return helper;
                 // Otherwise fall through: the name may be a helper external.
             } else {
                 return this.member({ __namespace: 'std' }, token.value);
             }
+        }
+        if (token.value === 'd' || /^d\d+$/.test(token.value)) return { __namespace: 'd' };
+        if (token.value === 'std' || /^std\d+$/.test(token.value)) return { __namespace: 'std' };
+        if (token.value === this.namespaceParams || token.value === this.namespaceMaterial || token.value === this.namespaceStd) {
+            return { __namespace: token.value };
         }
         const exposedMaterial = this.material[token.value];
         if (exposedMaterial !== undefined) return exposedMaterial;
