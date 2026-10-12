@@ -23,7 +23,7 @@ import {
     type IntrinsicImpl,
 } from 'murow/gpu/codegen';
 import { walkEntry, type IrEntry } from 'murow/gpu/ir';
-import { HELPER_WGSL } from '../helpers';
+import { HELPER_WGSL } from '../../shaders';
 import { WgslSyntax } from '../syntax';
 
 /** WGSL atomic intrinsics whose first argument must be a pointer. */

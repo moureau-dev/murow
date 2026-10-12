@@ -8,3 +8,4 @@
 
 export * from './gpu-device';
 export * from './recording-device';
+export * from './render-api';

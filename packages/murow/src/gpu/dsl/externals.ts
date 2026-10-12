@@ -137,17 +137,17 @@ export class Textures {
 }
 
 /** 3D value noise. */
-export function noise(x: ShaderInput): ShaderValue {
+export function noiseExternal(x: ShaderInput): ShaderValue {
     return new ShaderValue({ node: call(f32Type(), 'noise', [toExpr(x)]) });
 }
 
 /** Signed value noise. */
-export function snoise(uv: ShaderInput, res: ShaderInput): ShaderValue {
+export function snoiseExternal(uv: ShaderInput, res: ShaderInput): ShaderValue {
     return new ShaderValue({ node: call(f32Type(), 'snoise', [toExpr(uv), toExpr(res)]) });
 }
 
 /** Diffuse light contribution. */
-export function lightContribution(
+export function lightContributionExternal(
     pos: ShaderInput,
     axis: ShaderInput,
     color: ShaderInput,
@@ -168,7 +168,7 @@ export function lightContribution(
 }
 
 /** Reinhard tone map. */
-export function tonemap(c: ShaderInput): ShaderValue {
+export function tonemapExternal(c: ShaderInput): ShaderValue {
     return new ShaderValue({ node: call(vecType('f32', 3), 'tonemap', [toExpr(c)]) });
 }
 
@@ -184,10 +184,10 @@ export interface Externals {
     readonly material: StructValue;
     readonly lights: LightsAccessor;
     readonly textures: Textures;
-    readonly noise: typeof noise;
-    readonly snoise: typeof snoise;
-    readonly lightContribution: typeof lightContribution;
-    readonly tonemap: typeof tonemap;
+    readonly noise: typeof noiseExternal;
+    readonly snoise: typeof snoiseExternal;
+    readonly lightContribution: typeof lightContributionExternal;
+    readonly tonemap: typeof tonemapExternal;
 }
 
 /** Build the environment, optionally with a custom binding map. */
@@ -198,10 +198,10 @@ export function createExternals(options: ExternalsOptions = {}): Externals {
         material: createMaterial({ ...(options.material ?? {}), bindings }),
         lights: createLights({ bindings }),
         textures: new Textures({ bindings }),
-        noise,
-        snoise,
-        lightContribution,
-        tonemap,
+        noise: noiseExternal,
+        snoise: snoiseExternal,
+        lightContribution: lightContributionExternal,
+        tonemap: tonemapExternal,
     };
 }
 

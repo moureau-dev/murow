@@ -7,7 +7,6 @@
  */
 export * from './syntax';
 export * from './backend';
-export * from './helpers';
 export * from './device';
 
 // The authoring namespaces, re-exported so the shim import sites keep working.

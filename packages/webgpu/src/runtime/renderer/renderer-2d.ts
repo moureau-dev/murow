@@ -1,0 +1,396 @@
+/**
+ * WebGPU2DRenderer — instanced 2D sprite renderer backed by TypeGPU.
+ *
+ * - One draw call per spritesheet batch (layer-sorted)
+ * - Zero-GC: flat Float32Array CPU buffers, raw writeBuffer uploads
+ * - GPU-side interpolation between ticks
+ * - TypeGPU for shaders, layouts, pipelines; raw device for hot-path uploads
+ *
+ * The renderer is a composition root: it owns resource setup, lifecycle and the
+ * render sequence. User-facing subsystems are reached through managers
+ * (`renderer.sprites`, `renderer.sheets`, `renderer.geometry`,
+ * `renderer.compute`), and the camera is `renderer.camera`.
+ */
+
+import type { RawDevice, RawTextureFormat } from 'murow/gpu';
+import { d } from '../../gpu';
+import { runtime } from '../runtime';
+import type { RendererRuntime } from 'murow/renderer/managers';
+import { RendererManagers2D } from 'murow/renderer/managers';
+import { Renderer2DCore, CameraEffectStack, DynamicSprite, StaticSprite, SpriteUniforms, createSpriteLayout, createTextureLayout, createSpriteVertex, createSpriteFragment, Raycast2D, RaycastController2D, CameraManager2D, SpriteManager, SpritesheetManager, GeometryManager, setPrefab2DHandle } from 'murow/renderer/managers/runtime';
+import { BaseRenderer } from 'murow/renderer';
+import type {
+    AssetBucket,
+    Renderer2DOptions,
+    PrefabBucket2D,
+    SpritesheetPrefab,
+} from 'murow/renderer';
+import { Logger } from 'murow/core';
+
+export interface WebGPU2DRendererOptions<A extends AssetBucket<'2d', any, any> = AssetBucket<'2d', any, any>> extends Renderer2DOptions {
+    /**
+     * Pre-loaded asset bucket. When provided, the renderer uploads every
+     * spritesheet prefab to the GPU during `init()`, and
+     * `sprites.add({ sheet: assets.prefabs.get('id') })` resolves to the right
+     * spritesheet handle. The bucket must have `load()` resolved before being
+     * passed in.
+     */
+    assets?: A;
+    /**
+     * How many sprite instances you intend to spawn. Used to size buffers when
+     * `maxSprites` is not given explicitly. Defaults to 1024.
+     */
+    maxInstances?: number;
+    /**
+     * Development diagnostics. `true` routes warnings to the console with a
+     * `[murow]` prefix; pass a `Logger` to route them yourself.
+     */
+    debug?: boolean | Logger;
+    /**
+     * Capacity of the camera-effect chain. Bounds the number of live effects
+     * and the renderer's compiled-effect resources. Default 20.
+     */
+    maxEffects?: number;
+}
+
+export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucket<'2d', any, any>> extends BaseRenderer<Renderer2DOptions> {
+    private runtime!: RendererRuntime;
+    /** Sprite instance budget. Fixed for the device lifetime. */
+    readonly maxSprites: number;
+
+    private readonly core: Renderer2DCore;
+    private readonly logger: Logger;
+    private readonly _prefabs: PrefabBucket2D | null;
+    private readonly maxEffects: number;
+    private cameraEffects!: CameraEffectStack;
+    private lastRenderTime = 0;
+    /** Accumulated render time (seconds), exposed to effects as `scene.time`. */
+    private elapsed = 0;
+
+    /** Pooled sprite facade. */
+    sprites!: SpriteManager;
+    /** Spritesheet upload facade. */
+    sheets!: SpritesheetManager;
+    /** Custom geometry facade. */
+    geometry!: GeometryManager;
+    /** 2D picking facade. */
+    raycast!: Raycast2D;
+
+    private resizeObserver: ResizeObserver | null = null;
+    private readonly resizeCallbacks: ((width: number, height: number) => void)[] = [];
+
+    constructor(canvas: HTMLCanvasElement, options: WebGPU2DRendererOptions<A>) {
+        const resolvedMaxSprites = options.maxSprites ?? options.maxInstances ?? 1024;
+        super(canvas, { ...options, maxSprites: resolvedMaxSprites });
+        this.maxSprites = resolvedMaxSprites;
+        this.maxEffects = options.maxEffects ?? 20;
+        this.core = new Renderer2DCore();
+        this.logger = Logger.resolve(options.debug);
+        this.core.camera = new CameraManager2D(canvas.width || 800, canvas.height || 600, { maxEffects: this.maxEffects });
+        this.core.width = canvas.width || 1;
+        this.core.height = canvas.height || 1;
+        this._prefabs = (options.assets?.prefabs as unknown as PrefabBucket2D | undefined) ?? null;
+    }
+
+    get device(): RawDevice { return this.core.device; }
+    get format(): RawTextureFormat { return this.core.format; }
+
+    /** The 2D camera. Shared with every manager through the renderer core. */
+    get camera(): CameraManager2D { return this.core.camera; }
+
+    /**
+     * Project a 2D world point to canvas CSS pixels (for HTML overlays via
+     * `murow/dom`). Writes `[x, y, depth]` into `out` (`z` is ignored in 2D).
+     */
+    worldToScreen(x: number, y: number, _z: number, out: Float32Array): boolean {
+        const m = this.camera.getMatrix();
+        const ndcX = m[0]! * x + m[4]! * y + m[8]!;
+        const ndcY = m[1]! * x + m[5]! * y + m[9]!;
+        const w = this.canvas.clientWidth || this._width;
+        const h = this.canvas.clientHeight || this._height;
+        out[0] = (ndcX * 0.5 + 0.5) * w;
+        out[1] = (0.5 - ndcY * 0.5) * h;
+        out[2] = 1 / Math.max(this.camera.zoom, 1e-4);
+        return true;
+    }
+
+    async init(): Promise<void> {
+        this.runtime = runtime();
+        const presentation = await this.runtime.createPresentation(this.canvas);
+        this.core.root = { device: presentation.device } as never;
+        this.core.device = presentation.device;
+        const device: any = this.core.device;
+        this.core.format = presentation.format;
+
+        this.core.context = presentation.context;
+        this.core.context.configure({
+            device: this.core.device,
+            format: this.core.format,
+            alphaMode: 'premultiplied',
+        });
+
+        this._width = this.canvas.width;
+        this._height = this.canvas.height;
+        this.core.width = this._width;
+        this.core.height = this._height;
+        this.camera.setViewport(this._width, this._height);
+
+        // TypeGPU layouts
+        this.core.spriteLayout = createSpriteLayout(this.maxSprites);
+        this.core.textureLayout = createTextureLayout();
+
+        // TypeGPU shaders
+        const vertex = createSpriteVertex(this.core.spriteLayout, this.core.textureLayout);
+        const fragment = createSpriteFragment(this.core.spriteLayout, this.core.textureLayout);
+
+        // Render pipeline (no vertex buffer — quad generated from vertexIndex)
+        const { code } = this.runtime.compile([vertex, fragment]);
+        const spriteModule = device.createShaderModule({ code, label: 'sprite-2d' });
+        const spriteBgl = this.runtime.createBindGroupLayout(this.core.spriteLayout.toDescriptor());
+        this.core.rawTextureLayout = this.runtime.createBindGroupLayout(this.core.textureLayout.toDescriptor());
+        this.core.rawPipeline = device.createRenderPipeline({
+            label: 'sprite-2d',
+            layout: device.createPipelineLayout({ bindGroupLayouts: [spriteBgl, this.core.rawTextureLayout] }),
+            vertex: { module: spriteModule },
+            fragment: {
+                module: spriteModule,
+                targets: [{
+                    format: this.core.format,
+                    blend: {
+                        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                    },
+                }],
+            },
+            primitive: { topology: 'triangle-list' },
+        });
+
+        // Instance data buffers
+        this.core.rawDynamicBuffer = this.runtime.createRawBuffer(d.arrayOf(DynamicSprite, this.maxSprites), 'storage');
+        this.core.rawStaticBuffer = this.runtime.createRawBuffer(d.arrayOf(StaticSprite, this.maxSprites), 'storage');
+        this.core.rawUniformBuffer = this.runtime.createRawBuffer(SpriteUniforms, 'uniform');
+        this.core.rawSlotIndexBuffer = this.runtime.createRawBuffer(d.arrayOf(d.u32, this.maxSprites), 'storage');
+
+        // Bind group for sprite data
+        this.core.rawSpriteBindGroup = device.createBindGroup({
+            layout: spriteBgl,
+            entries: [
+                { binding: 0, resource: { buffer: this.core.rawUniformBuffer } },
+                { binding: 1, resource: { buffer: this.core.rawDynamicBuffer } },
+                { binding: 2, resource: { buffer: this.core.rawStaticBuffer } },
+                { binding: 3, resource: { buffer: this.core.rawSlotIndexBuffer } },
+            ],
+        });
+
+        // Managers
+        const managers = new RendererManagers2D({
+            core: this.core,
+            runtime: this.runtime,
+            canvas: this.canvas,
+            logger: this.logger,
+            camera: this.core.camera,
+            maxSprites: this.maxSprites,
+            prefabs: this._prefabs,
+            getClearColor: () => this._clearColor,
+        });
+        this.sheets = managers.sheets;
+        this.sprites = managers.sprites;
+        this.geometry = managers.geometry;
+        this.cameraEffects = new CameraEffectStack({
+            runtime: this.runtime,
+            root: this.core.root,
+            format: this.core.format,
+            maxEffects: this.maxEffects,
+        });
+
+        if (this._prefabs) {
+            this.uploadPrefabBucket(this._prefabs);
+        }
+
+        this.raycast = new Raycast2D(new RaycastController2D({
+            camera: this.camera,
+            eachSprite: this.sprites.eachSprite.bind(this.sprites),
+            resolveHitbox: this.sprites.resolveHitbox.bind(this.sprites),
+        }), this.canvas);
+
+        this.setupResizeObserver();
+        this._initialized = true;
+    }
+
+    /**
+     * Upload every prefab in the bucket to the GPU and stash the resulting
+     * SpritesheetHandle on each prefab so `bucket.get(id)` returns something
+     * usable as a sprite source.
+     */
+    private uploadPrefabBucket(bucket: PrefabBucket2D): void {
+        for (const prefab of bucket.entries()) {
+            if (prefab.type === 'spritesheet') {
+                const handle = this.sheets.upload((prefab as SpritesheetPrefab).parsed);
+                setPrefab2DHandle(prefab, handle);
+            }
+        }
+    }
+
+    private setupResizeObserver(): void {
+        const supportsDevicePixelBox = (() => {
+            try {
+                // Throws on unsupported browsers (e.g. iOS Safari)
+                const ro = new ResizeObserver(() => {});
+                ro.observe(document.body, { box: 'device-pixel-content-box' });
+                ro.disconnect();
+                return true;
+            } catch {
+                return false;
+            }
+        })();
+
+        this.resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                let w: number, h: number;
+                if (supportsDevicePixelBox && entry.devicePixelContentBoxSize?.[0]) {
+                    w = entry.devicePixelContentBoxSize[0].inlineSize;
+                    h = entry.devicePixelContentBoxSize[0].blockSize;
+                } else {
+                    const box = entry.contentBoxSize[0];
+                    const dpr = devicePixelRatio;
+                    w = Math.round(box.inlineSize * dpr);
+                    h = Math.round(box.blockSize * dpr);
+                }
+                if (w === this._width && h === this._height) continue;
+                this._width = w;
+                this._height = h;
+                this.core.width = w;
+                this.core.height = h;
+
+                if (this.options.autoResize) {
+                    this.canvas.width = w;
+                    this.canvas.height = h;
+                    this.core.context.configure({
+                        device: this.core.device,
+                        format: this.core.format,
+                        alphaMode: 'premultiplied',
+                    });
+                }
+
+                this.camera.setViewport(w, h);
+
+                for (const cb of this.resizeCallbacks) {
+                    cb(w, h);
+                }
+            }
+        });
+        this.resizeObserver.observe(this.canvas, supportsDevicePixelBox ? { box: 'device-pixel-content-box' } : undefined);
+    }
+
+    /**
+     * Register a callback that fires when the canvas resizes.
+     * Receives the new width and height in physical pixels.
+     */
+    onResize(callback: (width: number, height: number) => void): void {
+        this.resizeCallbacks.push(callback);
+    }
+
+    storePreviousState(): void {
+        this.camera.storePrevious();
+        this.sprites.storePrevious();
+    }
+
+    render(alpha: number): void {
+        if (!this._initialized) return;
+
+        this.advanceTime();
+        this.camera.interpolate(alpha);
+
+        // Pack the frame's batches and upload the sprite buffers.
+        this.sprites.prepareFrame();
+        this.sprites.upload(this.core.device);
+
+        // Upload uniforms (mat3x3 padded + alpha + resolution)
+        const uniformData = this.core.uniformData;
+        const matrix = this.camera.getMatrix();
+        uniformData.set(matrix, 0);
+        uniformData[12] = alpha;
+        uniformData[14] = this._width;
+        uniformData[15] = this._height;
+        this.core.device.queue.writeBuffer(
+            this.core.rawUniformBuffer, 0,
+            uniformData.buffer, uniformData.byteOffset, 64,
+        );
+
+        // Camera effects render the sprite pass off-screen, then present the
+        // result to the swapchain through the effect chain. With none enabled,
+        // the sprite pass targets the swapchain directly (unchanged path).
+        const swapchainView = this.core.context.getCurrentTexture().createView();
+        const enabledEffects = this.camera.effects.enableCount();
+        const targetView = enabledEffects > 0
+            ? this.cameraEffects.sceneTarget(this._width, this._height)
+            : swapchainView;
+
+        // Render pass
+        const encoder = this.core.device.createCommandEncoder();
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+                view: targetView,
+                loadOp: 'clear',
+                storeOp: 'store',
+                clearValue: {
+                    r: this._clearColor[0], g: this._clearColor[1],
+                    b: this._clearColor[2], a: this._clearColor[3],
+                },
+            }],
+        });
+
+        pass.setPipeline(this.core.rawPipeline);
+        pass.setBindGroup(0, this.core.rawSpriteBindGroup);
+
+        // Draw per batch using firstInstance to offset into the index buffer
+        let drawOffset = 0;
+        const batches = this.sprites.batches;
+        const batchCount = this.sprites.batchCount;
+        for (let i = 0; i < batchCount; i++) {
+            const batch = batches[i]!;
+            if (batch.count === 0) continue;
+            const texBindGroup = this.sheets.bindGroup(batch.sheetId);
+            if (!texBindGroup) continue;
+
+            pass.setBindGroup(1, texBindGroup);
+            pass.draw(6, batch.count, 0, drawOffset);
+            drawOffset += batch.count;
+        }
+
+        pass.end();
+
+        if (enabledEffects > 0) {
+            this.cameraEffects.apply(
+                encoder,
+                swapchainView,
+                this.camera.effects,
+                this.elapsed,
+                this._width,
+                this._height,
+            );
+        }
+
+        this.core.device.queue.submit([encoder.finish()]);
+    }
+
+    /** Advance the render clock; the frame delta is clamped to avoid a large jump on resume. */
+    private advanceTime(): void {
+        const now = performance.now();
+        if (this.lastRenderTime > 0) {
+            this.elapsed += Math.min((now - this.lastRenderTime) / 1000, 0.1);
+        }
+        this.lastRenderTime = now;
+    }
+
+    destroy(): void {
+        this.resizeObserver?.disconnect();
+        this.resizeObserver = null;
+        this.resizeCallbacks.length = 0;
+        this.cameraEffects?.destroy();
+        this.core?.rawDynamicBuffer?.destroy();
+        this.core?.rawStaticBuffer?.destroy();
+        this.core?.rawUniformBuffer?.destroy();
+        this.core?.rawSlotIndexBuffer?.destroy();
+    }
+}

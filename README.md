@@ -98,7 +98,7 @@ const compute = renderer
 const render = renderer
   .createGeometry('particles', { maxInstances: 10000, geometry: 'quad' })
   .instanceLayout({ dynamic: { posX: d.f32, posY: d.f32, velX: d.f32, velY: d.f32, life: d.f32 } })
-  .fromCompute(compute, 'particles')
+  .fromBuffer(particleBuffer)
   .build();
 
 compute.dispatch(10000);
@@ -111,7 +111,7 @@ Full example: [benchmarks/renderer/programs/gpu-particles.ts](./benchmarks/rende
 ## Documentation
 
 - [Murow Core Package](./packages/murow/README.md) — ECS, networking, protocol, game loop
-- [WebGPU Renderer Package](./packages/webgpu/README.md) — 2D/3D rendering, compute shaders, TypeGPU
+- [WebGPU Renderer Package](./packages/webgpu/README.md) — 2D/3D rendering backend (WebGPU)
 - [Netcode Package](./packages/netcode/README.md) — Snapshot sync, prediction, interpolation, plugins
 
 ## Development
