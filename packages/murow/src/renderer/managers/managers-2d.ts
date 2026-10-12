@@ -39,6 +39,11 @@ export class RendererManagers2D {
             logger: deps.logger,
             prefabs: deps.prefabs,
         });
-        this.geometry = new GeometryManager({ core: deps.core, runtime: deps.runtime, canvas: deps.canvas, getClearColor: deps.getClearColor });
+        this.geometry = new GeometryManager({ 
+            core: deps.core,
+            runtime: deps.runtime,
+            canvas: deps.canvas,
+            getClearColor: deps.getClearColor,
+        });
     }
 }
