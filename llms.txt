@@ -3,12 +3,12 @@
 Murow is a TypeScript game engine for **server-authoritative multiplayer** games. It ships three packages from a single npm install (`murow`):
 
 - `murow` — core: ECS, game loop, input, audio, math, binary codecs, protocol primitives, transport-agnostic networking, renderer abstractions, the agnostic renderer managers, and the shader DSL/codegen (`murow/gpu`)
-- `murow/webgpu` — the WebGPU backend: it implements the agnostic renderer's backend ports (device, codegen target, presentation, `Skinning`, `Particles3D`)
+- `murow/webgpu` — the WebGPU renderer backend (2D + 3D)
 - `murow/netcode` — opinionated multiplayer layer (snapshots, prediction with rollback, interest plugins, lag compensation) built on top of the protocol + net primitives
 
 The `webgpu` and `netcode` subpaths are bundled with the `murow` package — `npm install murow` is the only install.
 
-**The engine is renderer-agnostic.** `murow` ships *abstract renderer contracts* + the asset pipeline (`AssetBucket`, `PrefabBucket`, `parseGltf`, `parseSpritesheet`, `SkeletalAnimation`) + CPU collision/picking (`Hitbox`, `HitboxLibrary`, `Raycaster`, `Ray3D`) — all pure CPU, usable on a headless server. `murow/webgpu` is the reference backend; other backends implement the agnostic renderer's `RendererRuntime` port (device + shader-codegen target + presentation + the `Skinning`/`Particles3D` feature ports), and the shared managers run unchanged. The renderer handles GPU-side frame interpolation (lerp), frustum culling, distance-based animation culling, sparse-batched draw calls, glTF skinning, and instance recycling automatically — see "WebGPU Renderer" section.
+**The engine is renderer-agnostic.** `murow` ships *abstract renderer contracts* + the asset pipeline (`AssetBucket`, `PrefabBucket`, `parseGltf`, `parseSpritesheet`, `SkeletalAnimation`) + CPU collision/picking (`Hitbox`, `HitboxLibrary`, `Raycaster`, `Ray3D`) — all pure CPU, usable on a headless server. `murow/webgpu` is the reference backend; a different backend can implement the same renderer runtime. The renderer handles GPU-side frame interpolation (lerp), frustum culling, distance-based animation culling, sparse-batched draw calls, glTF skinning, and instance recycling automatically — see "WebGPU Renderer" section.
 
 **This is not Unity, Three.js, PlayCanvas, or Phaser.** Do not apply patterns from those. Murow is **data-oriented**: an ECS World holds typed components in Structure-of-Arrays storage, a GameLoop drives systems at a fixed tick rate, and a renderer reads world state once per frame.
 
@@ -23,17 +23,11 @@ Before writing anything, internalize these — they are the patterns agents wron
 
 ## Architecture
 
-Rendering is split into three layers:
-
-- **`murow/renderer/managers/runtime`** — the **agnostic renderer**: every manager (instances, materials, lights, shadows, decals, particles, camera, models, and the 2D sprites/sheets/geometry) plus the shader DSL and IR. No GPU API, no WGSL, no compute. It drives a `RendererRuntime` port.
-- **`murow/gpu`** — the GPU-common layer: schemas, the `d`/`std` shader DSL + IR, codegen (a `TargetSyntax` writes the shader text), resource descriptors, and the backend-neutral device model.
-- **`murow/webgpu`** — the WebGPU backend: implements `RendererRuntime` (`createPresentation`, `compile` via the WGSL target, `createRawBuffer`, `createBindGroupLayout`, `shaderSource`) and the compute feature ports (`Skinning`, `Particles3D`), then composes the shared managers via `RendererManagers` / `RendererManagers2D`.
-
-A different backend (WebGL, etc.) implements the **same** `RendererRuntime` port with its own device + `TargetSyntax`, and its own `Skinning`/`Particles3D` implementations (CPU or vertex when the API has no compute). The renderer and managers do not change.
+The engine is **renderer-agnostic**: the ECS, game loop, input, asset pipeline, netcode, and server all run without a GPU. Rendering is supplied by a backend — `murow/webgpu` ships the WebGPU 2D/3D renderer. (Other backends can be added; they reuse the shared renderer managers.)
 
 You can use Murow with:
 - **Murow's WebGPU renderer** (`murow/webgpu`) — the reference backend: 2D/3D, GPU frame interpolation, glTF skinning
-- **a custom backend** — implement the `RendererRuntime` port (plus `Skinning`/`Particles3D` if you want the compute features)
+- **a custom backend** — implement the renderer runtime
 - **a custom rendering system** — the core is pure CPU and runs headless
 
 **Do not assume that `murow` implies use of `WebGPU3DRenderer`.** The ECS, game loop, input, asset pipeline, netcode, and server side are all renderer-independent and run without any GPU (servers, tests, simulation-only processes). Pick a renderer only when you actually draw.
@@ -2376,27 +2370,7 @@ The netcode layer assumes **ordered delivery**. WebSocket over TCP satisfies tha
 
 ### Implementing a custom backend
 
-A backend implements the `RendererRuntime` port from `murow/renderer/managers/runtime` (device + `compile` + `createRawBuffer` + `createBindGroupLayout` + `createPresentation` + `shaderSource` + the `Skinning`/`Particles3D` feature ports) and composes the shared managers:
-
-```ts
-import { RendererManagers } from 'murow/renderer/managers';
-import type { RendererRuntime } from 'murow/renderer/managers';
-
-const runtime: RendererRuntime = {
-  async createPresentation(canvas) { /* your device + canvas surface */ },
-  presentation: undefined as never,
-  compile(shaders) { /* codegen: emit GLSL/HLSL via your TargetSyntax */ },
-  createRawBuffer(schema, usage) { /* allocate */ },
-  createBindGroupLayout(descriptor) { /* allocate */ },
-  shaderSource(name) { return MY_SHADERS[name] ?? ''; },
-  skinning: mySkinning,     // compute, or a CPU/vertex implementation
-  particles: myParticles,
-};
-
-const managers = new RendererManagers({ runtime, core, camera, /* … */ });
-```
-
-The 2D mirror is `RendererManagers2D`. The managers, ECS, asset pipeline, and netcode are identical regardless of backend.
+To render with something other than WebGPU, implement the renderer runtime (device + shader compilation + presentation) and plug in the shared managers. Most users never do this — use `murow/webgpu` unless you have a specific reason. See the `@murow/webgpu` package for a reference implementation.
 
 ### `AssetBucket` — primary entry point (wraps PrefabBucket + TextureBucket)
 
@@ -3401,7 +3375,7 @@ const Particle = d.struct({
 
 ### Compute features
 
-Skeletal animation (`Skinning`) and GPU particles (`Particles3D`) are **backend ports** on `RendererRuntime`. `murow/webgpu` implements them with compute kernels; a backend without compute provides CPU/vertex implementations of the same interfaces. There is no public `renderer.compute` / `ComputeBuilder` API — the shared renderer only talks to the ports.
+Skeletal animation and GPU particles are handled automatically by the WebGPU renderer. (There is no public `renderer.compute` API.)
 
 ### Custom instanced geometry — `GeometryBuilder` / `CustomGeometry`
 
@@ -3639,7 +3613,7 @@ inverseLerp(min: number, max: number, value: number): number;
 | Calling `server.on('intent', handler)` to implement gameplay | That event is **observe-only** telemetry. Gameplay belongs in `defineHandlers(intents, {...})`. Both can coexist |
 | Casting `world.fields(C)` results to specific typed arrays | Don't - the return type is precisely inferred from the schema (`f32 -> Float32Array`, `u8 -> Uint8Array`, etc.). Casts only mask bugs |
 | Calling `handle.setColor(...)` to recolor a 3D instance | No such method - 3D `color` is set once at `instances.add({ color })`. To recolor, `destroy()` and re-add. (2D `SpriteHandle.setTint` IS live) |
-| Expecting a skybox or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and a material system (`standard` / `unlit` / `emissive` / custom `shader`), but no skybox or PBR. Write a custom backend (implement the `RendererRuntime` port) if you need more |
+| Expecting a skybox or a PBR material model | The WebGPU 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and a material system (`standard` / `unlit` / `emissive` / custom `shader`), but no skybox or PBR. Write a custom backend if you need more |
 | `instances.add({ model: ... })` | The option key is `prefab`, not `model`. Use `instances.add({ prefab: assets.prefabs.get(id) })` |
 | `renderer.models.createCube({ size: 1 })` for the player / obstacles / ground | Declare reusable models as `AssetBucket` prefabs (`assets.prefabs.get('id')`) — the `renderer.models` factories are one-off/debug conveniences: no parallel load, no typed ids, no bucket GPU sizing |
 | `.prefabs(({ bucket }) => { bucket.add(...); })` — block body doesn't return the bucket | `textures()` / `prefabs()` callbacks MUST return the bucket: expression body (`({ bucket }) => bucket.add(...)`) or explicit `return bucket.add(...)`. A block that only calls `.add(...)` returns `undefined` and registers nothing |
@@ -3700,7 +3674,7 @@ export class Arena<T extends DriverType = 'client'> {
 
 ### Build tooling: no special plugin required
 
-The renderer parses shader bodies from their source (`Function.toString()`) at link time — no build plugin to install, and it works in any bundler (Vite, esbuild, Webpack, Bun, or a plain `<script type="module">` with an import map). Because bodies are parsed from source, do **not** enable identifier or syntax minification for bundles containing shader bodies; whitespace-only minification is fine.
+The renderer parses shader bodies from their source (`Function.toString()`) at link time — no build plugin to install, and it works in any bundler (Vite, esbuild, Webpack, Bun, or a plain `<script type="module">` with an import map). Keep identifier and syntax minification off in bundles that contain shader bodies.
 
 Just `import { WebGPU3DRenderer } from 'murow/webgpu'`.
 
