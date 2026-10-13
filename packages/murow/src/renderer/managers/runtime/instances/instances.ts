@@ -258,6 +258,8 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
      */
     prepareFrame(frustum: Frustum): void {
         const store = this.deps.store;
+        // Mirror active LOD fade companions from their main instances first.
+        store.syncCompanions();
         const skinned = this.deps.skinned;
         const models = this.deps.models;
 

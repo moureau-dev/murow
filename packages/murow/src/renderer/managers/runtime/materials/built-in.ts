@@ -64,7 +64,7 @@ type FragInput = {
 export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
     return GpuShader.fragment(
         {
-            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position },
+            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, vMorph: d.f32, frontFacing: d.builtin.frontFacing, position: d.builtin.position },
             out: d.vec4f,
             bindings: { mesh: meshLayout, mat: matLayout },
             helpers: { std, tonemap },
@@ -188,6 +188,13 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
 
         const alpha = std.mul(tex.w, m.opacity);
         if (alpha < m.alphaTest) { std.discard(); }
+
+        // LOD dithered cross-fade: the main slot fades out as `vMorph` goes
+        // 0 -> 1; a companion slot (vMorph 1 -> 2) fades in. Screen-door dither.
+        const morph = input.vMorph;
+        const dither = std.fract(std.sin(input.position.x * 12.9898 + input.position.y * 78.233) * 43758.5453);
+        if (morph < 1.0) { if (dither < morph) { std.discard(); } }
+        else { if (dither >= morph - 1.0) { std.discard(); } }
 
         const mapped = std.tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, alpha);

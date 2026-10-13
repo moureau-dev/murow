@@ -86,7 +86,7 @@ describe('InstanceLodStore geomorph', () => {
 
         setPos(dyn, 0, 20, 0, 0);                                  // d² 400 → level 1 (adjacent)
         expect(lod.select(dyn, 0, 0, 0, 1, 0.1, apply)).toBe(1);
-        expect(applied).toEqual([[0, 7]]);                          // batch held at lo (level 0)
+        expect(applied).toEqual([]);                                // main stays on level 0 (fades out)
         expect(dyn[DYN_MORPH]).toBe(0);
 
         lod.advanceFades(dyn, apply);
@@ -115,7 +115,7 @@ describe('InstanceLodStore geomorph', () => {
 
         setPos(dyn, 0, 0, 0, 0);                                    // near → refine to 0
         lod.select(dyn, 0, 0, 0, 1, 0.1, apply);
-        expect(dyn[DYN_MORPH]).toBe(1);                             // starts fully at level 1
+        expect(dyn[DYN_MORPH]).toBe(0);                             // main (level 1) fades out from 0
         lod.advanceFades(dyn, apply);
         expect(dyn[DYN_MORPH]).toBeCloseTo(0.5);
         lod.advanceFades(dyn, apply);

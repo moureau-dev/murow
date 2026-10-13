@@ -9,7 +9,7 @@ import {
     DYN_PREV_PX, DYN_PREV_PY, DYN_PREV_PZ,
     DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ,
     DYN_PREV_RX, DYN_PREV_RY, DYN_PREV_RZ,
-    DYN_CURR_RX, DYN_CURR_RY, DYN_CURR_RZ,
+    DYN_CURR_RX, DYN_CURR_RY, DYN_CURR_RZ, DYN_MORPH,
     STAT_SX, STAT_SY, STAT_SZ, STAT_CR, STAT_CG, STAT_CB,
     STAT_MATERIAL_ID, STAT_CUSTOM0, STAT_CUSTOM1,
     MAX_MATERIALS_PER_INSTANCE,
@@ -56,6 +56,8 @@ export class InstanceStore {
 
     /** Level-of-detail state and selection. */
     readonly lod: InstanceLodStore;
+    /** Per-slot LOD fade companion slot (a ghost at the target level), or -1. */
+    private readonly companions: Int32Array;
 
     constructor(private readonly deps: InstanceStoreDeps) {
         const n = deps.maxInstances;
@@ -68,6 +70,7 @@ export class InstanceStore {
         this.materialCount = new Uint8Array(n);
         this.textureBGs = new Array(n).fill(null);
         this.lod = new InstanceLodStore(n);
+        this.companions = new Int32Array(n).fill(-1);
         this.slots = new SlotMap(n);
         this.batcher = new SparseBatcher(n);
     }
@@ -363,16 +366,74 @@ export class InstanceStore {
      * anti-flicker band). Returns the number of level swaps.
      */
     selectLod(camX: number, camY: number, camZ: number, bias = 1, hysteresis = 0.1): number {
-        return this.lod.select(this.dynamicData, camX, camY, camZ, bias, hysteresis, this.applyModelSwap);
+        return this.lod.select(this.dynamicData, camX, camY, camZ, bias, hysteresis, this.applyModelSwap, this.beginFadeCb);
     }
 
     private readonly applyModelSwap = (slot: number, modelId: number): void => {
         this.swapModel(slot, modelId);
     };
 
+    private readonly beginFadeCb = (slot: number, modelId: number): number => this.beginCompanion(slot, modelId);
+    private readonly endFadeCb = (slot: number, companion: number): void => this.endCompanion(slot, companion);
+
+    /** Spawn a hidden companion instance at `modelId` that mirrors `slot`. */
+    private beginCompanion(slot: number, modelId: number): number {
+        const c = this.slots.add();
+        if (c === -1) return -1;
+        const dyn = this.dynamicData;
+        const stat = this.staticData;
+        const sDyn = slot * DYNAMIC_MESH_FLOATS, cDyn = c * DYNAMIC_MESH_FLOATS;
+        for (let i = 0; i < DYNAMIC_MESH_FLOATS; i++) dyn[cDyn + i] = dyn[sDyn + i]!;
+        const sStat = slot * STATIC_MESH_FLOATS, cStat = c * STATIC_MESH_FLOATS;
+        for (let i = 0; i < STATIC_MESH_FLOATS; i++) stat[cStat + i] = stat[sStat + i]!;
+        this.instanceModelIds[c] = modelId;
+        const kS = slot * MAX_MATERIALS_PER_INSTANCE;
+        const kC = c * MAX_MATERIALS_PER_INSTANCE;
+        const count = this.materialCount[slot] ?? 0;
+        this.materialCount[c] = count;
+        for (let i = 0; i < count; i++) {
+            const m = this.materialIds[kS + i]!;
+            this.materialIds[kC + i] = m;
+            this.batcher.add(m, modelId, c);
+        }
+        this.companions[slot] = c;
+        this.staticDirty = true;
+        return c;
+    }
+
+    /** Free a fade companion. */
+    private endCompanion(slot: number, c: number): void {
+        const kC = c * MAX_MATERIALS_PER_INSTANCE;
+        const count = this.materialCount[c] ?? 0;
+        const modelId = this.instanceModelIds[c]!;
+        for (let i = 0; i < count; i++) this.batcher.remove(this.materialIds[kC + i]!, modelId, c);
+        this.materialCount[c] = 0;
+        const cDyn = c * DYNAMIC_MESH_FLOATS, cStat = c * STATIC_MESH_FLOATS;
+        this.dynamicData.fill(0, cDyn, cDyn + DYNAMIC_MESH_FLOATS);
+        this.staticData.fill(0, cStat, cStat + STATIC_MESH_FLOATS);
+        this.instanceHandles[c] = null;
+        this.slots.remove(c);
+        this.companions[slot] = -1;
+        this.staticDirty = true;
+    }
+
+    /** Mirror each companion's transform from its main slot (morph excluded). */
+    syncCompanions(): void {
+        const dyn = this.dynamicData;
+        const active = this.slots.activeSlots;
+        const size = this.slots.size;
+        for (let i = 0; i < size; i++) {
+            const slot = active[i]!;
+            const c = this.companions[slot]!;
+            if (c < 0) continue;
+            const sDyn = slot * DYNAMIC_MESH_FLOATS, cDyn = c * DYNAMIC_MESH_FLOATS;
+            for (let k = 0; k < DYN_MORPH; k++) dyn[cDyn + k] = dyn[sDyn + k]!;
+        }
+    }
+
     /** Advance in-progress LOD geomorphs by one tick (no-op when `lod.fadeTicks` is 0). */
     advanceFades(): void {
-        this.lod.advanceFades(this.dynamicData, this.applyModelSwap);
+        this.lod.advanceFades(this.dynamicData, this.applyModelSwap, this.endFadeCb);
     }
 
     /** Remove `materialId` from every instance using it (falls back to default). */

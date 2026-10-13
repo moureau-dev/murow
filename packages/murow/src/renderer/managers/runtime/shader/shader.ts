@@ -54,13 +54,7 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
         const stat = mesh.staticInstances[slot];
         const alpha = mesh.uniforms.alpha;
 
-        // LOD morph: blend the paired next-level position (same vertex index).
-        const morph = dyn.morph;
-        const pos = d.vec3f(
-            std.mix(input.position.x, input.positionB.x, morph),
-            std.mix(input.position.y, input.positionB.y, morph),
-            std.mix(input.position.z, input.positionB.z, morph),
-        );
+        const pos = input.position;
 
         // Interpolate position
         const px = std.mix(dyn.prevPosX, dyn.currPosX, alpha);
@@ -257,11 +251,7 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
         const sz = stat.scaleZ;
 
         // Build TRS inline: scale → rotateZ → rotateY → rotateX → translate
-        const pos = d.vec3f(
-            std.mix(input.position.x, input.positionB.x, dyn.morph),
-            std.mix(input.position.y, input.positionB.y, dyn.morph),
-            std.mix(input.position.z, input.positionB.z, dyn.morph),
-        );
+        const pos = input.position;
         const scaled = d.vec3f(
             std.mul(pos.x, sx),
             std.mul(pos.y, sy),
@@ -356,6 +346,7 @@ export function createExtrudedMeshVertex(meshLayout: MeshDataLayout, matLayout: 
                 vColor: d.vec3f,
                 vUV: d.vec2f,
                 vWorldPos: d.vec3f,
+                vMorph: d.f32,
                 vCustom: d.vec2f,
             },
             bindings: { mesh: meshLayout, mat: matLayout },
@@ -380,11 +371,7 @@ export function createExtrudedMeshVertex(meshLayout: MeshDataLayout, matLayout: 
         const sy = stat.scaleY;
         const sz = stat.scaleZ;
 
-        const pos = d.vec3f(
-            std.mix(input.position.x, input.positionB.x, dyn.morph),
-            std.mix(input.position.y, input.positionB.y, dyn.morph),
-            std.mix(input.position.z, input.positionB.z, dyn.morph),
-        );
+        const pos = input.position;
         const scaled = d.vec3f(
             std.mul(std.add(pos.x, std.mul(input.normal.x, ext)), sx),
             std.mul(std.add(pos.y, std.mul(input.normal.y, ext)), sy),
@@ -448,6 +435,7 @@ export function createExtrudedMeshVertex(meshLayout: MeshDataLayout, matLayout: 
             vUV: input.uv,
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
             vCustom: d.vec2f(stat.custom0, stat.custom1),
+            vMorph: dyn.morph,
         };
         },
     );
@@ -486,11 +474,7 @@ export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
         const ry = std.mix(dyn.prevRotY, dyn.currRotY, alpha);
         const rz = std.mix(dyn.prevRotZ, dyn.currRotZ, alpha);
 
-        const pos = d.vec3f(
-            std.mix(input.position.x, input.positionB.x, dyn.morph),
-            std.mix(input.position.y, input.positionB.y, dyn.morph),
-            std.mix(input.position.z, input.positionB.z, dyn.morph),
-        );
+        const pos = input.position;
         const scaled = d.vec3f(
             std.mul(pos.x, stat.scaleX),
             std.mul(pos.y, stat.scaleY),
@@ -801,6 +785,7 @@ export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, m
                 vColor: d.vec3f,
                 vUV: d.vec2f,
                 vWorldPos: d.vec3f,
+                vMorph: d.f32,
                 vCustom: d.vec2f,
             },
             bindings: { mesh: layout, mat: matLayout },
@@ -929,6 +914,7 @@ export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, m
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vUV: input.uv,
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
+            vMorph: dyn.morph,
             vCustom: d.vec2f(0.0, 0.0),
         };
         },

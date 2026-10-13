@@ -26,6 +26,8 @@ export class InstanceLodStore {
     private readonly fadeTo: Int8Array;
     /** Per-slot fade progress in [0, 1]. */
     private readonly fadeT: Float32Array;
+    /** Per-slot companion slot carrying the fade target, or -1. */
+    private readonly fadeCompanion: Int32Array;
     /**
      * Geomorph fade length in ticks. `0` (default) hard-switches; the renderer
      * raises it to blend adjacent levels on the GPU.
@@ -40,6 +42,7 @@ export class InstanceLodStore {
         this.current = new Uint8Array(capacity);
         this.fadeTo = new Int8Array(capacity).fill(-1);
         this.fadeT = new Float32Array(capacity);
+        this.fadeCompanion = new Int32Array(capacity).fill(-1);
     }
 
     /**
@@ -63,6 +66,7 @@ export class InstanceLodStore {
         this.current[slot] = 0;
         this.fadeTo[slot] = -1;
         this.fadeT[slot] = 0;
+        this.fadeCompanion[slot] = -1;
         this.slots.add(slot);
     }
 
@@ -73,6 +77,7 @@ export class InstanceLodStore {
         this.current[slot] = 0;
         this.fadeTo[slot] = -1;
         this.fadeT[slot] = 0;
+        this.fadeCompanion[slot] = -1;
     }
 
     /** The slot's current level (0 when it has no LOD chain). */
@@ -85,7 +90,11 @@ export class InstanceLodStore {
      * (0 = lower level, 1 = upper) into the dynamic instance data. No-op unless
      * `fadeTicks > 0`.
      */
-    advanceFades(dynamicData: Float32Array, apply: (slot: number, modelId: number) => void): void {
+    advanceFades(
+        dynamicData: Float32Array,
+        apply: (slot: number, modelId: number) => void,
+        endFade?: (slot: number, companion: number) => void,
+    ): void {
         if (this.fadeTicks <= 0) return;
         const step = 1 / this.fadeTicks;
         const active = this.slots.denseBuffer;
@@ -95,16 +104,20 @@ export class InstanceLodStore {
             const to = this.fadeTo[slot]!;
             if (to === -1) continue;
             const row = slot * MAX_LOD_LEVELS;
+            const c = this.fadeCompanion[slot]!;
             let t = this.fadeT[slot]! + step;
             if (t >= 1) {
+                apply(slot, this.modelIds[row + to]!);
+                if (c >= 0 && endFade !== undefined) endFade(slot, c);
+                this.fadeCompanion[slot] = -1;
                 this.current[slot] = to;
                 this.fadeTo[slot] = -1;
                 this.fadeT[slot] = 0;
-                apply(slot, this.modelIds[row + to]!);
                 dynamicData[slot * DYNAMIC_MESH_FLOATS + DYN_MORPH] = 0;
             } else {
                 this.fadeT[slot] = t;
-                dynamicData[slot * DYNAMIC_MESH_FLOATS + DYN_MORPH] = to > this.current[slot]! ? t : 1 - t;
+                dynamicData[slot * DYNAMIC_MESH_FLOATS + DYN_MORPH] = t;
+                if (c >= 0) dynamicData[c * DYNAMIC_MESH_FLOATS + DYN_MORPH] = 1 + t;
             }
         }
     }
@@ -123,6 +136,7 @@ export class InstanceLodStore {
         bias: number,
         hysteresis: number,
         apply: (slot: number, modelId: number) => void,
+        beginFade?: (slot: number, modelId: number) => number,
     ): number {
         const bias2 = bias * bias;
         const active = this.slots.denseBuffer;
@@ -154,13 +168,15 @@ export class InstanceLodStore {
                 if (d2 >= this.distSq[row + target]! * bias2 * (1 - hysteresis)) continue;
             }
             if (this.fadeTicks > 0 && (target === cur + 1 || target === cur - 1)) {
-                // Begin a geomorph at the lower level (the batch's model); the
-                // shader blends `position` (lo) to `positionB` (hi) by `morph`.
-                const lo = cur < target ? cur : target;
+                // Dithered cross-fade: the main slot stays on `cur` and fades out
+                // (morph 0 -> 1), a companion slot carries the target and fades in
+                // (morph 1 -> 2). The shader screen-door-discards by `morph`.
+                const c = beginFade !== undefined ? beginFade(slot, this.modelIds[row + target]!) : -1;
+                this.fadeCompanion[slot] = c;
                 this.fadeTo[slot] = target;
                 this.fadeT[slot] = 0;
-                apply(slot, this.modelIds[row + lo]!);
-                dynamicData[slot * DYNAMIC_MESH_FLOATS + DYN_MORPH] = target > cur ? 0 : 1;
+                dynamicData[slot * DYNAMIC_MESH_FLOATS + DYN_MORPH] = 0;
+                if (c >= 0) dynamicData[c * DYNAMIC_MESH_FLOATS + DYN_MORPH] = 1;
             } else {
                 apply(slot, this.modelIds[row + target]!);
                 this.current[slot] = target;
