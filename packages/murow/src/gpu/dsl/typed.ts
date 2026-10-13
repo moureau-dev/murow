@@ -251,6 +251,15 @@ export interface TypedStd extends TypedD {
     textureSample(t: unknown, s: unknown, uv: Input, arrayIndex: Input): SV<Vec<'f32', 4>>;
     textureSampleLevel(t: unknown, s: unknown, uv: Input, level: Input): SV<Vec<'f32', 4>>;
     textureSampleLevel(t: unknown, s: unknown, uv: Input, arrayIndex: Input, level: Input): SV<Vec<'f32', 4>>;
+    /** Read a texel without a sampler. Depth textures yield `f32`, others `vec4<f32>`. */
+    textureLoad(t: unknown, coords: Input, level?: Input): SV<any>;
+    /** Write a texel to a storage texture (a statement). */
+    textureStore(t: unknown, coords: Input, texel: Input): unknown;
+    /** Dimensions of a texture or one of its mips. */
+    textureDimensions(t: unknown, level?: Input): SV<Vec<'u32', 2>>;
+    atomicAdd(pointer: Input, amount: Input): SV<'u32'>;
+    atomicLoad(pointer: Input): SV<'u32'>;
+    atomicStore(pointer: Input, amount: Input): unknown;
     discard(): unknown;
     tonemap(color: Input): SV<Vec<'f32', 3>>;
 }

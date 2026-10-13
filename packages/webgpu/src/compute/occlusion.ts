@@ -165,6 +165,23 @@ class WebGpuOcclusion implements Occlusion {
         if (this.candidateSlots) this.rebuildCullBG();
     }
 
+    async readArgs(): Promise<Uint32Array> {
+        const args = this.args;
+        if (!args) return new Uint32Array(0);
+        const staging = this.device.createBuffer({
+            size: args.size,
+            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+        });
+        const encoder = this.device.createCommandEncoder();
+        encoder.copyBufferToBuffer(args, 0, staging, 0, args.size);
+        this.device.queue.submit([encoder.finish()]);
+        await staging.mapAsync(GPUMapMode.READ);
+        const copy = new Uint32Array(staging.getMappedRange().slice(0));
+        staging.unmap();
+        staging.destroy();
+        return copy;
+    }
+
     setDepth(texture: RawTexture): void {
         if (texture === this.depthTextureRef) return;
         this.depthTextureRef = texture;

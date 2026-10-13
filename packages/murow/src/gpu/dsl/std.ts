@@ -9,8 +9,8 @@
  */
 import type { GpuType } from '../types';
 import type { IrExpr } from '../ir/nodes';
-import { binary, call, discardStmt, sample, unary } from '../ir/builders';
-import { bool as boolType, u32 as u32Type, vec as vecType } from '../ir/types';
+import { binary, call, discardStmt, exprStmt, sample, unary } from '../ir/builders';
+import { bool as boolType, f32 as f32Type, u32 as u32Type, vec as vecType } from '../ir/types';
 import { combineType, scalarOf, ShaderValue, toExpr, vecOf, type ShaderInput } from './value';
 import { d } from './data';
 import type { TypedStd } from './typed';
@@ -285,6 +285,35 @@ const stdImpl = {
     /** Atomically load a storage-buffer atomic. */
     atomicLoad(pointer: ShaderInput): ShaderValue {
         return value(call(u32Type(), 'atomicLoad', [toExpr(pointer)]));
+    },
+
+    /** Atomically store to a storage-buffer atomic (a statement). */
+    atomicStore(pointer: ShaderInput, amount: ShaderInput): ReturnType<typeof exprStmt> {
+        return exprStmt(call(u32Type(), 'atomicStore', [toExpr(pointer), toExpr(amount)]));
+    },
+
+    /**
+     * Read a texel without a sampler (`textureLoad`). Depth textures yield an
+     * `f32`; sampled and storage textures yield `vec4<f32>`. The optional third
+     * argument is a mip level (sampled/depth) or array index.
+     */
+    textureLoad(texture: ShaderInput, coords: ShaderInput, level?: ShaderInput): ShaderValue {
+        const t = toExpr(texture);
+        const depth = t.type.kind === 'texture' && t.type.depth === true;
+        const result: GpuType = depth ? f32Type() : vecType('f32', 4);
+        const args = level === undefined ? [t, toExpr(coords)] : [t, toExpr(coords), toExpr(level)];
+        return value(call(result, 'textureLoad', args));
+    },
+
+    /** Write a texel to a storage texture (`textureStore`, a statement). */
+    textureStore(texture: ShaderInput, coords: ShaderInput, texel: ShaderInput): ReturnType<typeof exprStmt> {
+        return exprStmt(call(f32Type(), 'textureStore', [toExpr(texture), toExpr(coords), toExpr(texel)]));
+    },
+
+    /** Dimensions of a texture or one of its mips, as `vec2<u32>`. */
+    textureDimensions(texture: ShaderInput, level?: ShaderInput): ShaderValue {
+        const args = level === undefined ? [toExpr(texture)] : [toExpr(texture), toExpr(level)];
+        return value(call(vecType('u32', 2), 'textureDimensions', args));
     },
 
     discard(): ReturnType<typeof discardStmt> {

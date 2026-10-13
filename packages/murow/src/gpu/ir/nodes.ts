@@ -151,6 +151,12 @@ export interface IrContinue {
     readonly kind: 'continue';
 }
 
+/** A bare expression evaluated for its side effect, such as a void call. */
+export interface IrExprStmt {
+    readonly kind: 'expr';
+    readonly value: IrExpr;
+}
+
 export type IrStmt =
     | IrLet
     | IrAssign
@@ -159,7 +165,8 @@ export type IrStmt =
     | IrReturn
     | IrDiscard
     | IrBreak
-    | IrContinue;
+    | IrContinue
+    | IrExprStmt;
 
 export type IrStage = 'vertex' | 'fragment' | 'compute';
 
@@ -295,6 +302,9 @@ function walkStmt(stmt: IrStmt, visit: (node: IrExpr | IrStmt) => void): void {
             break;
         case 'return':
             if (stmt.value) walkExpr(stmt.value, visit);
+            break;
+        case 'expr':
+            walkExpr(stmt.value, visit);
             break;
         default:
             break;

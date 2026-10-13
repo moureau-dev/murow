@@ -1044,7 +1044,8 @@ function isStmtNode(value: unknown): boolean {
     if (typeof value !== 'object' || value === null) return false;
     const kind = (value as { kind?: string }).kind;
     return kind === 'let' || kind === 'assign' || kind === 'if' || kind === 'loop'
-        || kind === 'return' || kind === 'discard' || kind === 'break' || kind === 'continue';
+        || kind === 'return' || kind === 'discard' || kind === 'break' || kind === 'continue'
+        || kind === 'expr';
 }
 
 function isNamespace(value: unknown): value is { __namespace: string } {

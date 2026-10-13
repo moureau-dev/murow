@@ -69,8 +69,20 @@ export function struct(name: string, fields: readonly StructFieldType[]): Struct
 }
 
 /** Texture type. */
-export function texture(base: GpuScalar, dim: TextureDim, access: TextureAccess): TextureType {
-    return { kind: 'texture', scalar: base, dim, access };
+export function texture(
+    base: GpuScalar,
+    dim: TextureDim,
+    access: TextureAccess,
+    opts: { depth?: boolean; format?: string } = {},
+): TextureType {
+    return {
+        kind: 'texture',
+        scalar: base,
+        dim,
+        access,
+        ...(opts.depth ? { depth: true } : {}),
+        ...(opts.format ? { format: opts.format } : {}),
+    };
 }
 
 /** Sampler type. */
@@ -137,7 +149,8 @@ export function typeEquals(a: GpuType, b: GpuType): boolean {
         }
         case 'texture': {
             const t = b as TextureType;
-            return a.scalar === t.scalar && a.dim === t.dim && a.access === t.access;
+            return a.scalar === t.scalar && a.dim === t.dim && a.access === t.access
+                && (a.depth ?? false) === (t.depth ?? false) && a.format === t.format;
         }
         case 'sampler':
             return a.comparison === (b as SamplerType).comparison;

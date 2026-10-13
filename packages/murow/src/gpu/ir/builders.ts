@@ -18,6 +18,7 @@ import type {
     IrDiscard,
     IrEntry,
     IrExpr,
+    IrExprStmt,
     IrId,
     IrIf,
     IrLet,
@@ -141,6 +142,11 @@ export function returnStmt(value: IrExpr | null = null): IrReturn {
 /** Discard statement (fragment stage only). */
 export function discardStmt(): IrDiscard {
     return { kind: 'discard' };
+}
+
+/** A bare expression evaluated for its side effect, such as a void call. */
+export function exprStmt(value: IrExpr): IrExprStmt {
+    return { kind: 'expr', value };
 }
 
 /** Break out of the enclosing loop. */

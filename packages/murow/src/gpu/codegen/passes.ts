@@ -88,6 +88,8 @@ function foldStmt(stmt: IrStmt): IrStmt {
             return { ...stmt, body: stmt.body.map(foldStmt) };
         case 'return':
             return { ...stmt, value: stmt.value ? foldExpr(stmt.value) : null };
+        case 'expr':
+            return { ...stmt, value: foldExpr(stmt.value) };
         default:
             return stmt;
     }

@@ -123,6 +123,11 @@ export interface Occlusion {
     /** Point the port at the current depth texture (call after a resize recreates it). */
     setDepth(texture: RawTexture): void;
     /**
+     * Read back the per-batch indirect args (`[indexCount, instanceCount, ...]`
+     * per batch). Diagnostic only; forces a GPU-to-CPU sync.
+     */
+    readArgs(): Promise<Uint32Array>;
+    /**
      * Cull candidates against the last-built pyramid and write, per batch, the
      * compacted visible-slot region and indirect draw args. `candidateSlots` is
      * the packed candidate slot list (indexed by each batch's candidateOffset).

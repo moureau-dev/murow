@@ -176,6 +176,14 @@ function makeU32Vec(width: 2 | 3 | 4, field: Field<any, any>): any {
     return Object.assign(constructValue, field, { kind: 'vec', scalar: 'u32', width, type });
 }
 
+/** Build a signed integer vector constructor. */
+function makeI32Vec(width: 2 | 3 | 4, field: Field<any, any>): any {
+    const type = vecType('i32', width);
+    const constructValue = (...args: readonly ShaderInput[]): ShaderValue =>
+        value(construct(type, args.map(toExpr)));
+    return Object.assign(constructValue, field, { kind: 'vec', scalar: 'i32', width, type });
+}
+
 const u32Vec3 = makeU32Vec(3, vec3fField);
 
 let structCount = 0;
@@ -278,6 +286,11 @@ const dImpl = {
     vec3f: makeVec('vec3f', 3, vec3fField),
     vec4f: makeVec('vec4f', 4, vec4fField),
     vec4u: makeU32Vec(4, vec4fField),
+    vec2i: makeI32Vec(2, vec2fField),
+    vec3i: makeI32Vec(3, vec3fField),
+    vec4i: makeI32Vec(4, vec4fField),
+    vec2u: makeU32Vec(2, vec2fField),
+    vec3u: makeU32Vec(3, vec3fField),
     mat2x2f: makeMat('mat2x2f', 2, 2, mat2x2fField),
     mat3x3f: makeMat('mat3x3f', 3, 3, mat3x3fField),
     mat4x4f: makeMat('mat4x4f', 4, 4, mat4x4fField),

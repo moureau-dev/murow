@@ -35,7 +35,11 @@ export function wgslType(type: GpuType): string {
             return type.name;
         case 'texture': {
             const suffix = type.dim.replace(/-/g, '_');
-            return type.depth ? `texture_depth_${suffix}` : `texture_${suffix}<${type.scalar}>`;
+            if (type.depth) return `texture_depth_${suffix}`;
+            if (type.access !== 'sample') {
+                return `texture_storage_${suffix}<${type.format ?? 'rgba8unorm'}, ${type.access}>`;
+            }
+            return `texture_${suffix}<${type.scalar}>`;
         }
         case 'sampler':
             return type.comparison ? 'sampler_comparison' : 'sampler';

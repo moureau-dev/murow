@@ -284,7 +284,7 @@ function visibilityBits(entry: BindingEntry): number {
     return bits;
 }
 
-function entryToGpu(entry: BindingEntry): Pick<GPUBindGroupLayoutEntry, 'buffer' | 'texture' | 'sampler'> {
+function entryToGpu(entry: BindingEntry): Pick<GPUBindGroupLayoutEntry, 'buffer' | 'texture' | 'sampler' | 'storageTexture'> {
     switch (entry.type) {
         case 'uniform':
             return { buffer: { type: 'uniform' } };
@@ -292,8 +292,23 @@ function entryToGpu(entry: BindingEntry): Pick<GPUBindGroupLayoutEntry, 'buffer'
             return { buffer: { type: 'storage' } };
         case 'readonly-storage':
             return { buffer: { type: 'read-only-storage' } };
-        case 'texture':
-            return { texture: { sampleType: 'float', viewDimension: textureDimension(entry.gpuType) } };
+        case 'texture': {
+            const type = entry.gpuType as { kind?: string; depth?: boolean; access?: string; format?: string } | undefined;
+            const viewDimension = textureDimension(entry.gpuType);
+            if (type?.kind === 'texture' && type.depth) {
+                return { texture: { sampleType: 'depth', viewDimension } };
+            }
+            if (type?.kind === 'texture' && type.access !== undefined && type.access !== 'sample') {
+                return {
+                    storageTexture: {
+                        access: type.access as GPUStorageTextureAccess,
+                        format: (type.format ?? 'rgba8unorm') as GPUTextureFormat,
+                        viewDimension,
+                    },
+                };
+            }
+            return { texture: { sampleType: 'float', viewDimension } };
+        }
         case 'sampler':
             return { sampler: { type: 'filtering' } };
     }

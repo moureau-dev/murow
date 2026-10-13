@@ -28,6 +28,10 @@ export interface BindingSpec {
     readonly readwrite?: boolean;
     /** A sampled texture, by sample type. */
     readonly texture?: string;
+    /** A depth texture (`texture_depth_2d`), read with `textureLoad`. */
+    readonly depthTexture?: boolean;
+    /** A storage texture (`texture_storage_2d<format, access>`). */
+    readonly storageTexture?: { readonly format: string; readonly access?: 'read' | 'write' | 'read-write' };
     /** Texture view dimension for a texture slot. Default `2d`. */
     readonly viewDimension?: string;
     /** A sampler, by type. */
@@ -56,6 +60,12 @@ function bindingType(spec: BindingSpec): GpuType {
         return type.kind === 'array' && type.count !== null ? { ...type, count: null } : type;
     }
     if (spec.texture) return textureType('f32', textureDim(spec.viewDimension), 'sample');
+    if (spec.depthTexture) return textureType('f32', textureDim(spec.viewDimension), 'sample', { depth: true });
+    if (spec.storageTexture) {
+        return textureType('f32', textureDim(spec.viewDimension), spec.storageTexture.access ?? 'write', {
+            format: spec.storageTexture.format,
+        });
+    }
     return samplerType(false);
 }
 
@@ -77,7 +87,7 @@ function textureDim(dim: string | undefined): TextureDim {
 function bindingKind(spec: BindingSpec): BindingKind {
     if (spec.uniform) return 'uniform';
     if (spec.storage) return 'storage';
-    if (spec.texture) return 'texture';
+    if (spec.texture || spec.depthTexture || spec.storageTexture) return 'texture';
     return 'sampler';
 }
 

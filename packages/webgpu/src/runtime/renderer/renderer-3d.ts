@@ -143,6 +143,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         readonly enabled: boolean;
         readonly debug: boolean;
         readonly stats: { batches: number; candidates: number };
+        /** Diagnostic readback of the per-batch indirect args (forces a GPU sync). */
+        readArgs(): Promise<Uint32Array>;
     };
 
     private hitboxDebug = new HitboxDebugRenderer();
@@ -186,6 +188,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             enabled: occlusionOptions !== undefined && occlusionOptions.enabled !== false,
             debug: occlusionOptions?.debug ?? false,
             stats: { batches: 0, candidates: 0 },
+            readArgs: () => this.runtime.occlusion?.readArgs() ?? Promise.resolve(new Uint32Array(0)),
         };
     }
 

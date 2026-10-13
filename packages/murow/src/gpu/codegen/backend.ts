@@ -417,6 +417,8 @@ export class BaseBackend implements Backend {
                 return this.emitLoop(node, ctx);
             case 'return':
                 return node.value ? `return ${this.emitNode(node.value, ctx)};` : 'return;';
+            case 'expr':
+                return `${this.emitNode(node.value, ctx)};`;
             case 'discard':
                 return this.syntax.discard();
             case 'break':

@@ -58,6 +58,8 @@ export interface TextureType {
     readonly access: TextureAccess;
     /** Depth texture, used by shadow maps. */
     readonly depth?: boolean;
+    /** Storage-texture format, for example `rgba16float`. Storage textures only. */
+    readonly format?: string;
 }
 
 export interface SamplerType {
