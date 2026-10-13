@@ -14,6 +14,7 @@ import type { Frustum } from '../internals/frustum';
 import { InstanceStore } from './instance-store';
 import { SkinnedInstanceStore, type SkinModelLike } from './skinned-instance-store';
 import { isPrefab3D, resolvePrefabHandle } from './prefab-handle';
+import type { OcclusionBatch } from '../backend';
 import {
     DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ,
     STAT_SX, STAT_SY, STAT_SZ,
@@ -111,6 +112,16 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
     slotIndexCount = 0;
     /** @internal Skinned slot indices packed by `prepareFrame`. */
     skinnedSlotIndexCount = 0;
+    /**
+     * @internal Occlusion candidate batches gathered by `prepareFrame`; the
+     * first `occlusionBatchCount` entries are valid. Handed to the optional
+     * occlusion port.
+     */
+    readonly occlusionBatches: OcclusionBatch[] = [];
+    /** @internal Number of valid entries in `occlusionBatches`. */
+    occlusionBatchCount = 0;
+    /** Pooled batch records, reused so `prepareFrame` stays allocation-free. */
+    private readonly occlusionBatchPool: OcclusionBatch[] = [];
 
     /** LOD: master switch. When false, every instance stays on level 0. */
     lodEnabled = true;
@@ -254,6 +265,10 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
     /**
      * Gather, frustum-cull and pack the visible batches for the main pass. The
      * renderer uploads the resulting slot indices and reads the batch lists.
+     *
+     * Occlusion candidates mirror the frustum-visible set: every visible slot
+     * is a candidate and the per-slot `occlusion` flag is consumed by the
+     * occlusion port, which keeps non-cullable instances in its output.
      * @internal
      */
     prepareFrame(frustum: Frustum): void {
@@ -263,6 +278,8 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         const skinned = this.deps.skinned;
         const models = this.deps.models;
 
+        this.occlusionBatches.length = 0;
+        let occlusionCount = 0;
         let indexOffset = 0;
         let batchCount = 0;
         const dyn = store.dynamicData;
@@ -296,10 +313,19 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
                 batch.materialId = materialId;
                 batch.offset = batchStart;
                 batch.count = visibleCount;
+
+                const occ = this.occlusionBatchAt(occlusionCount++);
+                occ.modelId = modelId;
+                occ.candidateOffset = batchStart;
+                occ.candidateCount = visibleCount;
+                occ.outputOffset = batchStart;
+                occ.indexCount = model.indexCount;
+                this.occlusionBatches.push(occ);
             }
         });
         this.batchCount = batchCount;
         this.slotIndexCount = indexOffset;
+        this.occlusionBatchCount = occlusionCount;
 
         let skinnedIndexOffset = 0;
         let skinnedBatchCount = 0;
@@ -426,6 +452,16 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         if (batch === undefined) {
             batch = { modelId: 0, offset: 0, count: 0 };
             this.skinnedBatchOffsets[index] = batch;
+        }
+        return batch;
+    }
+
+    /** Reuse a pooled occlusion batch record so the frame path allocates nothing. */
+    private occlusionBatchAt(index: number): OcclusionBatch {
+        let batch = this.occlusionBatchPool[index];
+        if (batch === undefined) {
+            batch = { modelId: 0, candidateOffset: 0, candidateCount: 0, outputOffset: 0, indexCount: 0 };
+            this.occlusionBatchPool[index] = batch;
         }
         return batch;
     }

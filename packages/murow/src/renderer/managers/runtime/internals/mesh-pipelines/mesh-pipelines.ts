@@ -38,8 +38,27 @@ export interface MeshPipelinesOptions {
     maxTotalBones: number;
     /** Max dynamic lights the light buffer and layouts hold. Defaults to `MAX_LIGHTS`. */
     maxLights?: number;
+    /** Max batches the indirect draw args buffer holds. Defaults to `maxInstances`. */
+    maxBatches?: number;
     width: number;
     height: number;
+}
+
+/** Indirect `drawIndexedIndirect` arguments: five u32 fields, 20 bytes. */
+export const IndirectDrawArgs = d.struct({
+    indexCount: d.u32,
+    instanceCount: d.u32,
+    firstIndex: d.u32,
+    baseVertex: d.u32,
+    firstInstance: d.u32,
+});
+
+/** Static per-batch fields the CPU writes into the indirect draw args. */
+export interface IndirectBatch {
+    /** Model index count, written to `indexCount`. */
+    indexCount: number;
+    /** Base into the slot-index list, written to `firstInstance`. */
+    offset: number;
 }
 
 /**
@@ -61,6 +80,16 @@ export class MeshPipelines {
     rawUniformBuffer!: RawBuffer;
     rawSlotIndexBuffer!: RawBuffer;
     rawLightBuffer!: RawBuffer;
+    rawIndirectArgsBuffer!: RawBuffer;
+
+    /**
+     * Whether the main pass draws indexed batches through the indirect args
+     * buffer. Set by the renderer when occlusion is active. Default false.
+     */
+    indirectEnabled = false;
+
+    private indirectBatchCapacity = 0;
+    private indirectArgsData!: Uint32Array;
 
     rawSkinnedDynamicBuffer!: RawBuffer;
     rawSkinnedStaticBuffer!: RawBuffer;
@@ -87,6 +116,7 @@ export class MeshPipelines {
         this.runtime = opts.runtime;
         const { device, format, maxInstances, maxSkinnedInstances, maxTotalBones } = opts;
         const maxLights = opts.maxLights ?? MAX_LIGHTS;
+        const maxBatches = opts.maxBatches ?? maxInstances;
         this.device = device;
         this.format = format;
 
@@ -178,6 +208,10 @@ export class MeshPipelines {
         this.rawSlotIndexBuffer = this.runtime.createRawBuffer(d.arrayOf(d.u32, maxInstances), 'storage');
         this.rawLightBuffer = this.runtime.createRawBuffer(d.arrayOf(Light, maxLights), 'storage');
 
+        this.indirectBatchCapacity = maxBatches;
+        this.indirectArgsData = new Uint32Array(5 * maxBatches);
+        this.rawIndirectArgsBuffer = this.runtime.createRawBuffer(d.arrayOf(IndirectDrawArgs, maxBatches), ['storage', 'indirect']);
+
         this.rawBindGroup = device.createBindGroup({
             layout: rawBGL,
             entries: [
@@ -256,6 +290,35 @@ export class MeshPipelines {
     setBoneBuffer(rawBoneBuffer: RawBuffer): void {
         this.rawBoneMatrixBuffer = rawBoneBuffer;
         this.rebuildSkinnedBindGroup();
+    }
+
+    /** Number of batches the indirect draw args buffer holds. */
+    get indirectArgsCapacity(): number {
+        return this.indirectBatchCapacity;
+    }
+
+    /**
+     * Write the static per-batch indirect draw args and upload them.
+     *
+     * Packs `[indexCount, 0, 0, 0, offset]` per batch. `instanceCount` is left
+     * for the occlusion cull to write on the GPU. Batches past the buffer
+     * capacity are ignored.
+     */
+    writeIndirectArgs(batches: readonly IndirectBatch[]): void {
+        const data = this.indirectArgsData;
+        const n = Math.min(batches.length, this.indirectBatchCapacity);
+        for (let i = 0; i < n; i++) {
+            const batch = batches[i]!;
+            const base = i * 5;
+            data[base] = batch.indexCount;
+            data[base + 1] = 0;
+            data[base + 2] = 0;
+            data[base + 3] = 0;
+            data[base + 4] = batch.offset;
+        }
+        if (n > 0) {
+            this.device.queue.writeBuffer(this.rawIndirectArgsBuffer, 0, data, 0, n * 20);
+        }
     }
 
     /**
@@ -342,6 +405,7 @@ export class MeshPipelines {
         this.rawUniformBuffer?.destroy();
         this.rawSlotIndexBuffer?.destroy();
         this.rawLightBuffer?.destroy();
+        this.rawIndirectArgsBuffer?.destroy();
         this.rawSkinnedDynamicBuffer?.destroy();
         this.rawSkinnedStaticBuffer?.destroy();
         this.rawSkinnedSlotIndexBuffer?.destroy();

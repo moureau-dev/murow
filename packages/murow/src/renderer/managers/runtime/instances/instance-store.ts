@@ -53,6 +53,14 @@ export class InstanceStore {
     readonly materialCount: Uint8Array;
     /** Per-slot texture override bind group, or null for the model default. */
     private readonly textureBGs: (RawBindGroup | null)[];
+    /** Per-slot occlusion flags: bit 0 cullable, bit 1 occluder. */
+    private readonly instanceFlags: Uint8Array;
+
+    /**
+     * Optional GPU buffer holding the packed candidate slot list occlusion
+     * culling reads. The renderer sets this; null means no candidates.
+     */
+    slotIndexBuffer: RawBuffer | null = null;
 
     /** Level-of-detail state and selection. */
     readonly lod: InstanceLodStore;
@@ -71,6 +79,7 @@ export class InstanceStore {
         this.materialIds = new Uint16Array(n * MAX_MATERIALS_PER_INSTANCE);
         this.materialCount = new Uint8Array(n);
         this.textureBGs = new Array(n).fill(null);
+        this.instanceFlags = new Uint8Array(n).fill(0b11);
         this.lod = new InstanceLodStore(n);
         this.companions = new Int32Array(n).fill(-1);
         this.companionSlots = new SlotSet(n);
@@ -88,6 +97,16 @@ export class InstanceStore {
 
     deleteTextureBindGroup(slot: number): void {
         this.textureBGs[slot] = null;
+    }
+
+    /** Whether a slot may be occlusion-culled by the depth pyramid. */
+    occlusionEnabled(slot: number): boolean {
+        return (this.instanceFlags[slot]! & 1) !== 0;
+    }
+
+    /** Whether a slot contributes depth to the occluder pyramid. */
+    occluderEnabled(slot: number): boolean {
+        return (this.instanceFlags[slot]! & 2) !== 0;
     }
 
     /** Number of materials in a slot's list (0 if the slot is empty). */
@@ -161,6 +180,11 @@ export class InstanceStore {
     spawn(opts: MeshInstanceOptions<any>, modelHandle: ModelHandle, userPrefabId: string | null, id: number, materialIds: readonly number[] = [0]): MeshInstanceHandle {
         const slot = this.slots.add();
         if (slot === -1) throw new Error(`Max instances (${this.deps.maxInstances}) reached`);
+
+        let flags = 0;
+        if (opts.occlusion !== false) flags |= 1;
+        if (opts.occluder !== false) flags |= 2;
+        this.instanceFlags[slot] = flags;
 
         const dynBase = slot * DYNAMIC_MESH_FLOATS;
         const statBase = slot * STATIC_MESH_FLOATS;
@@ -317,6 +341,7 @@ export class InstanceStore {
                     if (m > 0) self.deps.releaseMaterial?.(m);
                 }
                 self.materialCount[slot] = 0;
+                self.instanceFlags[slot] = 0;
                 self.lod.clear(slot);
                 self.slots.remove(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
@@ -390,6 +415,7 @@ export class InstanceStore {
         const sStat = slot * STATIC_MESH_FLOATS, cStat = c * STATIC_MESH_FLOATS;
         for (let i = 0; i < STATIC_MESH_FLOATS; i++) stat[cStat + i] = stat[sStat + i]!;
         this.instanceModelIds[c] = modelId;
+        this.instanceFlags[c] = this.instanceFlags[slot]!;
         const kS = slot * MAX_MATERIALS_PER_INSTANCE;
         const kC = c * MAX_MATERIALS_PER_INSTANCE;
         const count = this.materialCount[slot] ?? 0;
@@ -419,6 +445,7 @@ export class InstanceStore {
         this.staticData.fill(0, cStat, cStat + STATIC_MESH_FLOATS);
         this.instanceHandles[c] = null;
         this.textureBGs[c] = null;
+        this.instanceFlags[c] = 0;
         this.slots.remove(c);
         this.companions[slot] = -1;
         this.companionSlots.remove(slot);

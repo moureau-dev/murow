@@ -8,9 +8,11 @@
  * - Depth testing + back-face culling
  */
 
-import type { RawCommandEncoder, RawRenderPassEncoder } from 'murow/gpu';
+import type { RawBuffer, RawCommandEncoder, RawRenderPassEncoder } from 'murow/gpu';
 import { Base3DRenderer } from 'murow/renderer';
 import { runtime } from '../runtime';
+import { createOcclusion } from '../../compute/occlusion';
+import { d } from '../../gpu';
 import { MESH_UNIFORM_LIGHT_OFFSET } from 'murow/renderer/managers/runtime';
 import { Logger } from 'murow/core';
 import {
@@ -132,6 +134,17 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     debug: { hitboxes: boolean } = { hitboxes: false };
 
+    /**
+     * Occlusion-culling status and per-frame stats. `enabled` reflects the
+     * `occlusion.enabled` option; culling only runs when the runtime also
+     * provides an occlusion port.
+     */
+    readonly occlusion: {
+        readonly enabled: boolean;
+        readonly debug: boolean;
+        readonly stats: { batches: number; candidates: number };
+    };
+
     private hitboxDebug = new HitboxDebugRenderer();
     private mainPass!: MainPass;
     private runtime!: RendererRuntime;
@@ -165,6 +178,15 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const cullDist = options.animationCullDistance ?? 50;
         this.skinCull = new SkinCull(this.core.frustum, cullDist);
         this.maxTotalBones = this.maxSkinnedInstances * this.maxBonesPerSkin * 2;
+
+        const occlusionOptions = (options as WebGPU3DRendererOptions & {
+            occlusion?: { enabled?: boolean; debug?: boolean };
+        }).occlusion;
+        this.occlusion = {
+            enabled: occlusionOptions !== undefined && occlusionOptions.enabled !== false,
+            debug: occlusionOptions?.debug ?? false,
+            stats: { batches: 0, candidates: 0 },
+        };
     }
 
     async init(): Promise<void> {
@@ -207,7 +229,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         });
         this.core.scene = new SceneUniforms(this.core.device, this.core.pipelines.rawUniformBuffer, this.core.uniformData);
 
+
         this.cameraEffects = new CameraEffectStack({ root: this.core.root, format: this.core.format, maxEffects: this.maxCameraEffects, runtime: this.runtime });
+        this.runtime.occlusion?.setDepth(this.core.pipelines.depthTexture);
         this.cameraEffects.setDepth(this.core.pipelines.depthTexture.createView(), this.core.pipelines.depthSampler, this.camera.near, this.camera.far);
 
         const managers = new RendererManagers({
@@ -221,6 +245,39 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.particles = managers.particles; this.models = managers.models; this.instances = managers.instances;
         // GPU geomorph: blend adjacent LOD levels over ~8 ticks (set 0 to hard-switch).
         this.instances.lodFadeTicks = 8;
+
+        // Build the occlusion port once the depth + instance buffers exist.
+        if (this.occlusion.enabled && this.runtime.occlusion === undefined) {
+            const models = this.core.models.models;
+            const modelCount = Math.max(1, models.length);
+            const modelBounds = this.runtime.createRawBuffer(
+                d.arrayOf(d.vec4f, modelCount),
+                'storage',
+            );
+            const boundsData = new Float32Array(modelCount * 4);
+            for (let i = 0; i < models.length; i++) {
+                const m = models[i]!;
+                boundsData[i * 4] = m.halfX;
+                boundsData[i * 4 + 1] = m.halfY;
+                boundsData[i * 4 + 2] = m.halfZ;
+            }
+            this.core.device.queue.writeBuffer(modelBounds as never, 0, boundsData);
+            (this.runtime as { occlusion?: import('murow/renderer/managers').RendererRuntime['occlusion'] }).occlusion = createOcclusion(
+                { device: this.core.device },
+                {
+                    depthTexture: this.core.pipelines.depthTexture,
+                    depthSampler: this.core.pipelines.depthSampler,
+                    dynamicBuffer: this.core.pipelines.rawDynamicBuffer,
+                    staticBuffer: this.core.pipelines.rawStaticBuffer,
+                    modelBounds,
+                    viewProjection: this.core.pipelines.rawUniformBuffer,
+                    maxInstances: this.maxInstances,
+                    maxBatches: this.maxInstances,
+                },
+            );
+            this.runtime.occlusion?.configure({ maxBatches: this.maxInstances, maxInstances: this.maxInstances });
+            this.runtime.occlusion?.setDepth(this.core.pipelines.depthTexture);
+        }
         this.shadows = managers.shadows; this.decals = managers.decals; this.mainPass = managers.mainPass;
         this.raycast = managers.raycast; this.interpolators = managers.interpolators as never;
         if (this._prefabs) { await this.models.upload(this._assets!); }
@@ -256,7 +313,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         this.core.pipelines.resizeDepth(w, h);
         if (this.cameraEffects) {
-            this.cameraEffects.setDepth(this.core.pipelines.depthTexture.createView(), this.core.pipelines.depthSampler, this.camera.near, this.camera.far);
+            this.runtime.occlusion?.setDepth(this.core.pipelines.depthTexture);
+        this.cameraEffects.setDepth(this.core.pipelines.depthTexture.createView(), this.core.pipelines.depthSampler, this.camera.near, this.camera.far);
         }
     }
 
@@ -374,9 +432,35 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const targetView = enabledEffects > 0 ? this.cameraEffects.sceneTarget(this._width, this._height) : swapchainView;
         const encoder = this.core.device.createCommandEncoder();
 
+        // Occlusion is optional: the port may be absent or disabled.
+        const occ = this.occlusion.enabled ? this.runtime.occlusion : undefined;
+        const occlusionCandidates = occ
+            ? (this.instances.store.slotIndexBuffer ?? this.core.pipelines.rawSlotIndexBuffer)
+            : null;
+        const occlusionActive = occ !== undefined && occlusionCandidates !== null;
+
         // Shadow passes run first, then the main mesh pass, then particles/post.
         this.renderShadowPasses(encoder);
         this.uploadLightsAndUniforms(alpha, vpMatrix);
+
+        // Cull candidates against the pyramid built from last frame's depth.
+        if (occlusionActive) {
+            occ!.cull(encoder, occlusionCandidates!, this.instances.occlusionBatches);
+        }
+        let candidateTotal = 0;
+        for (let i = 0; i < this.instances.occlusionBatchCount; i++) {
+            candidateTotal += this.instances.occlusionBatches[i]!.candidateCount;
+        }
+        this.occlusion.stats.batches = occlusionActive ? this.instances.occlusionBatchCount : 0;
+        this.occlusion.stats.candidates = occlusionActive ? candidateTotal : 0;
+
+        // The mesh pipelines switch to indirect draws while occlusion is active.
+        const pipelines = this.core.pipelines as MeshPipelines & {
+            indirectEnabled?: boolean;
+            rawIndirectArgsBuffer?: RawBuffer | null;
+        };
+        pipelines.indirectEnabled = occlusionActive;
+        if (occlusionActive) pipelines.rawIndirectArgsBuffer = occ!.indirectArgs ?? null;
 
         const pass = encoder.beginRenderPass({
             colorAttachments: [{
@@ -399,6 +483,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.renderMainPass(pass, vpMatrix);
         this.renderParticles(pass, vpMatrix);
         pass.end();
+
+        // Build this frame's pyramid from the opaque depth written by the pass.
+        if (occlusionActive) occ!.buildPyramid(encoder);
 
         this.renderPost(encoder, swapchainView, enabledEffects);
 
@@ -523,6 +610,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     destroy(): void {
         this.resize?.disconnect();
+        this.runtime?.occlusion?.destroy();
         // Detach from the bucket so it doesn't retain this dead renderer via the coordinator's closure.
         this.animation?.dispose();
         this.cameraEffects?.destroy();

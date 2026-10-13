@@ -11,6 +11,7 @@ import type {
     RawBuffer,
     RawCanvasContext,
     RawDevice,
+    RawTexture,
     RawTextureFormat,
     RawTextureView,
 } from 'murow/gpu';
@@ -95,6 +96,45 @@ export interface Presentation {
 }
 
 /** Everything the renderer needs from a backend, injected via the constructor. */
+/**
+ * Occlusion-culling backend port.
+ *
+ * The renderer gathers candidates and drives occlusion only through this port;
+ * the WebGPU package implements it with compute kernels (HZB build + cull +
+ * indirect), another backend with CPU or a different technique. Optional: a
+ * runtime without it simply has no occlusion.
+ */
+export interface OcclusionBatch {
+    modelId: number;
+    /** Offset into the candidate slot list. */
+    candidateOffset: number;
+    candidateCount: number;
+    /** Offset into the compacted visible-slot list. */
+    outputOffset: number;
+    /** Index count for this batch's indirect draw args. */
+    indexCount: number;
+}
+
+export interface Occlusion {
+    /** (Re)size for `maxBatches` batches and `maxInstances` candidate slots. */
+    configure(options: { maxBatches: number; maxInstances: number }): void;
+    /** Build the depth pyramid from the frame's depth (after the opaque pass). */
+    buildPyramid(encoder: RawCommandEncoder): void;
+    /** Point the port at the current depth texture (call after a resize recreates it). */
+    setDepth(texture: RawTexture): void;
+    /**
+     * Cull candidates against the last-built pyramid and write, per batch, the
+     * compacted visible-slot region and indirect draw args. `candidateSlots` is
+     * the packed candidate slot list (indexed by each batch's candidateOffset).
+     */
+    cull(encoder: RawCommandEncoder, candidateSlots: RawBuffer, batches: readonly OcclusionBatch[]): void;
+    /** Compacted visible slots the mesh VS reads (batch region = outputOffset). */
+    readonly visibleSlots: RawBuffer | null;
+    /** Per-batch `drawIndexedIndirect` args buffer. */
+    readonly indirectArgs: RawBuffer | null;
+    destroy(): void;
+}
+
 export interface RendererRuntime {
     /** Create the present target (device + surface) for a canvas. */
     createPresentation(canvas: HTMLCanvasElement): Promise<Presentation>;
@@ -112,6 +152,8 @@ export interface RendererRuntime {
     readonly skinning: Skinning;
     /** GPU particle simulation port. */
     readonly particles: Particles3D;
+    /** Optional occlusion-culling port. Absent ⇒ no occlusion. */
+    readonly occlusion?: Occlusion;
 }
 
 export { sizeOf } from 'murow/gpu/dsl';

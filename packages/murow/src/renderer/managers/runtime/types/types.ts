@@ -84,6 +84,10 @@ export interface MeshInstanceOptions<A extends AssetBucket<'3d', any, any> = Ass
      * instance switches level by distance to the camera, with hysteresis.
      */
     lod?: LodSpec[];
+    /** Set `false` to never occlusion-cull this instance. Default true. */
+    occlusion?: boolean;
+    /** Set `false` to exclude this instance from the occluder depth. Default true. */
+    occluder?: boolean;
     /** World position. Defaults to `[0, 0, 0]`. */
     position?: readonly [x: number, y: number, z: number];
     /** Euler rotation in radians. Defaults to `[0, 0, 0]`. */
@@ -100,6 +104,8 @@ export type Raycast = RaycastBase<MeshInstanceHandle, [number, number, number]>;
 export type RaycastMemo = RaycastMemoBase<MeshInstanceHandle, [number, number, number]>;
 
 export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Renderer3DOptions {
+    /** Occlusion culling. Only active when the backend runtime provides the port. */
+    occlusion?: { enabled?: boolean; debug?: boolean };
     maxSkinnedInstances?: number;
     maxBonesPerSkin?: number;
     /** Max simultaneously live dynamic lights. Defaults to 64. */

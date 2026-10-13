@@ -20,6 +20,8 @@ export class MainPass {
         let currentPipeline: RawRenderPipeline | null = null;
         const batches = this.instances.batchOffsets;
         const batchCount = this.instances.batchCount;
+        const indirectEnabled = this.core.pipelines.indirectEnabled;
+        const indirectArgs = this.core.pipelines.rawIndirectArgsBuffer;
 
         for (let passIndex = 0; passIndex < 2; passIndex++) {
             currentPipeline = null;
@@ -44,7 +46,8 @@ export class MainPass {
                     pass.setVertexBuffer(1, model.morphVertexBuffer ?? model.rawVertexBuffer);
                     if (model.rawIndexBuffer) {
                         pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                        pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
+                        if (indirectEnabled) pass.drawIndexedIndirect(indirectArgs, bi * 20);
+                        else pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
                     } else {
                         pass.draw(model.vertexCount, batch.count, 0, batch.offset);
                     }
@@ -73,7 +76,8 @@ export class MainPass {
                     pass.setVertexBuffer(1, model.morphVertexBuffer ?? model.rawVertexBuffer);
                     if (model.rawIndexBuffer) {
                         pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                        pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
+                        if (indirectEnabled) pass.drawIndexedIndirect(indirectArgs, bi * 20);
+                        else pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
                     } else {
                         pass.draw(model.vertexCount, batch.count, 0, batch.offset);
                     }
