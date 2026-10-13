@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { DYNAMIC_MESH_FLOATS } from '../engine-core/types';
-import { DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ } from './offsets';
+import { DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ, DYN_MORPH } from './offsets';
 import { InstanceLodStore } from './lod-store';
 
 function positions(n: number) {
@@ -71,5 +71,55 @@ describe('InstanceLodStore', () => {
         lod.clear(0);
         expect(lod.slots.size).toBe(0);
         expect(lod.levelOf(0)).toBe(0);
+    });
+});
+
+describe('InstanceLodStore geomorph', () => {
+    test('fades between adjacent levels when fadeTicks > 0', () => {
+        const lod = new InstanceLodStore(2);
+        const dyn = positions(2);
+        lod.setLevels({ slot: 0, modelIds: [7, 8, 9], distSq: [100, 10000, Infinity] });
+        lod.fadeTicks = 4;
+
+        const applied: [number, number][] = [];
+        const apply = (slot: number, id: number) => applied.push([slot, id]);
+
+        setPos(dyn, 0, 20, 0, 0);                                  // d² 400 → level 1 (adjacent)
+        expect(lod.select(dyn, 0, 0, 0, 1, 0.1, apply)).toBe(1);
+        expect(applied).toEqual([[0, 7]]);                          // batch held at lo (level 0)
+        expect(dyn[DYN_MORPH]).toBe(0);
+
+        lod.advanceFades(dyn, apply);
+        expect(dyn[DYN_MORPH]).toBeCloseTo(0.25);
+        lod.advanceFades(dyn, apply);
+        expect(dyn[DYN_MORPH]).toBeCloseTo(0.5);
+        lod.advanceFades(dyn, apply);
+        lod.advanceFades(dyn, apply);                              // settle → level 1
+        expect(lod.levelOf(0)).toBe(1);
+        expect(applied[applied.length - 1]).toEqual([0, 8]);
+        expect(dyn[DYN_MORPH]).toBe(0);
+    });
+
+    test('refining starts the morph at 1 (fully the higher level) and ramps down', () => {
+        const lod = new InstanceLodStore(2);
+        const dyn = positions(2);
+        lod.setLevels({ slot: 0, modelIds: [7, 8], distSq: [100, Infinity] });
+        lod.fadeTicks = 2;
+        const apply = () => {};
+
+        setPos(dyn, 0, 20, 0, 0);
+        lod.select(dyn, 0, 0, 0, 1, 0.1, apply);                    // 0 → 1
+        lod.advanceFades(dyn, apply);
+        lod.advanceFades(dyn, apply);                              // settle at level 1
+        expect(lod.levelOf(0)).toBe(1);
+
+        setPos(dyn, 0, 0, 0, 0);                                    // near → refine to 0
+        lod.select(dyn, 0, 0, 0, 1, 0.1, apply);
+        expect(dyn[DYN_MORPH]).toBe(1);                             // starts fully at level 1
+        lod.advanceFades(dyn, apply);
+        expect(dyn[DYN_MORPH]).toBeCloseTo(0.5);
+        lod.advanceFades(dyn, apply);
+        expect(lod.levelOf(0)).toBe(0);
+        expect(dyn[DYN_MORPH]).toBe(0);
     });
 });

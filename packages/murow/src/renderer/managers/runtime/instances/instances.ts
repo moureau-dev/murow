@@ -118,6 +118,8 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
     lodBias = 1;
     /** LOD: fractional band that must be crossed before a level change. */
     lodHysteresis = 0.1;
+    /** LOD geomorph fade length in ticks (0 = hard switch). Set by the renderer. */
+    lodFadeTicks = 0;
 
     constructor(deps: InstanceManagerDeps) {
         super({ poolSize: deps.poolSize, capacity: deps.capacity, logger: deps.logger });
@@ -214,16 +216,33 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         enabled = this.lodEnabled,
     ): number {
         if (!enabled) return 0;
-        return (
+        this.deps.store.lod.fadeTicks = this.lodFadeTicks;
+        const swaps =
             this.deps.store.selectLod(camX, camY, camZ, bias, hysteresis) +
-            this.deps.skinned.selectLod(camX, camY, camZ, bias, hysteresis)
-        );
+            this.deps.skinned.selectLod(camX, camY, camZ, bias, hysteresis);
+        this.deps.store.advanceFades();
+        return swaps;
+    }
+
+    /**
+     * Pair each level's model with the next level's vertex buffer for GPU
+     * geomorph. Correspondence between the two levels is the asset author's
+     * responsibility; the engine does not check or require it.
+     */
+    private pairMorphTargets(modelIds: readonly number[]): void {
+        for (let i = 0; i + 1 < modelIds.length; i++) {
+            const a = this.deps.models.get(modelIds[i]!);
+            const b = this.deps.models.get(modelIds[i + 1]!);
+            if (a) a.morphVertexBuffer = b ? b.rawVertexBuffer : null;
+        }
     }
 
     /** Attach a single-mesh LOD chain to a freshly spawned non-skinned slot. */
     private applyLod(slot: number, baseModelId: number, lods: readonly LodSpec[]): void {
         const chain = this.buildLodChains([baseModelId], lods);
-        this.deps.store.setLodLevels({ slot, modelIds: chain.levelPartIds.map((lp) => lp[0]!), distSq: chain.distSq });
+        const modelIds = chain.levelPartIds.map((lp) => lp[0]!);
+        this.pairMorphTargets(modelIds);
+        this.deps.store.setLodLevels({ slot, modelIds, distSq: chain.distSq });
     }
 
     /** Attach a single-mesh LOD chain to a freshly spawned skinned slot. */
@@ -617,6 +636,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             }
             if (handle !== null && chains !== null) {
                 const modelIds = chains.levelPartIds.map((lp) => lp[i]!);
+                if (!model?.skinned) this.pairMorphTargets(modelIds);
                 const target = model?.skinned ? this.deps.skinned : this.deps.store;
                 target.setLodLevels({ slot: handle.slot, modelIds, distSq: chains.distSq });
             }

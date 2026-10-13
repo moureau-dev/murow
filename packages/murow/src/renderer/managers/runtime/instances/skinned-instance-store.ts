@@ -209,6 +209,11 @@ export class SkinnedInstanceStore {
         this.swapModel(slot, modelId);
     };
 
+    /** Advance in-progress LOD geomorphs by one tick (no-op when `lod.fadeTicks` is 0). */
+    advanceFades(): void {
+        this.lod.advanceFades(this.dynamicData, this.applyModelSwap);
+    }
+
     spawn(
         opts: MeshInstanceOptions<any>,
         modelHandle: ModelHandle,

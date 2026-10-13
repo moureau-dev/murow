@@ -219,6 +219,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         });
         this.animation = managers.animation; this.materials = managers.materials; this.lights = managers.lights;
         this.particles = managers.particles; this.models = managers.models; this.instances = managers.instances;
+        // GPU geomorph: blend adjacent LOD levels over ~8 ticks (set 0 to hard-switch).
+        this.instances.lodFadeTicks = 8;
         this.shadows = managers.shadows; this.decals = managers.decals; this.mainPass = managers.mainPass;
         this.raycast = managers.raycast; this.interpolators = managers.interpolators as never;
         if (this._prefabs) { await this.models.upload(this._assets!); }

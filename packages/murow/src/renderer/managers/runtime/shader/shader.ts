@@ -35,6 +35,7 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             in: {
                 position: d.location(0, d.vec3f),
                 normal: d.location(1, d.vec3f),
+                positionB: d.location(3, d.vec3f),
                 instanceIndex: d.builtin.instanceIndex,
             },
             out: {
@@ -52,6 +53,14 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
         const dyn = mesh.dynamicInstances[slot];
         const stat = mesh.staticInstances[slot];
         const alpha = mesh.uniforms.alpha;
+
+        // LOD morph: blend the paired next-level position (same vertex index).
+        const morph = dyn.morph;
+        const pos = d.vec3f(
+            std.mix(input.position.x, input.positionB.x, morph),
+            std.mix(input.position.y, input.positionB.y, morph),
+            std.mix(input.position.z, input.positionB.z, morph),
+        );
 
         // Interpolate position
         const px = std.mix(dyn.prevPosX, dyn.currPosX, alpha);
@@ -71,9 +80,9 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
         // Build TRS inline: scale → rotateZ → rotateY → rotateX → translate
         // Scale the vertex
         const scaled = d.vec3f(
-            std.mul(input.position.x, sx),
-            std.mul(input.position.y, sy),
-            std.mul(input.position.z, sz),
+            std.mul(pos.x, sx),
+            std.mul(pos.y, sy),
+            std.mul(pos.z, sz),
         );
 
         // Rotate Z

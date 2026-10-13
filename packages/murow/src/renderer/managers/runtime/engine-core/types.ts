@@ -90,9 +90,11 @@ export const DynamicMesh = d.struct({
     currRotX: d.f32,
     currRotY: d.f32,
     currRotZ: d.f32,
+    /** LOD morph: 0 = `position` (level A), 1 = `positionB` (level B). */
+    morph: d.f32,
 });
 
-export const DYNAMIC_MESH_FLOATS = 12;
+export const DYNAMIC_MESH_FLOATS = 13;
 
 export const StaticMesh = d.struct({
     scaleX: d.f32,

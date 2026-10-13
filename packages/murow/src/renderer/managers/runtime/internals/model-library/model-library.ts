@@ -26,6 +26,11 @@ export interface ModelEntry {
     vertexCount: number;
     indexCount: number;
     indexFormat: RawIndexFormat;
+    /**
+     * Paired next-level vertex buffer for LOD geomorph, or null. Vertices must
+     * match `rawVertexBuffer` one-to-one (same count/order).
+     */
+    morphVertexBuffer: RawBuffer | null;
     boundingRadius: number;
     halfX: number;
     halfY: number;
@@ -236,6 +241,7 @@ export class ModelLibrary {
         this.models[id] = {
             rawVertexBuffer: vertexBuffer,
             rawIndexBuffer: indexBuffer,
+            morphVertexBuffer: null,
             vertexCount,
             indexCount,
             indexFormat: indices instanceof Uint32Array ? 'uint32' as const : 'uint16' as const,
@@ -351,6 +357,7 @@ export class ModelLibrary {
         this.models[id] = {
             rawVertexBuffer: vertexBuffer,
             rawIndexBuffer: indexBuffer,
+            morphVertexBuffer: null,
             vertexCount,
             indexCount,
             indexFormat: indices instanceof Uint32Array ? 'uint32' as const : 'uint16' as const,

@@ -41,6 +41,7 @@ export class MainPass {
                     }
                     pass.setBindGroup(1, material.bindGroup);
                     pass.setVertexBuffer(0, model.rawVertexBuffer);
+                    pass.setVertexBuffer(1, model.morphVertexBuffer ?? model.rawVertexBuffer);
                     if (model.rawIndexBuffer) {
                         pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
                         pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
@@ -69,6 +70,7 @@ export class MainPass {
 
                 if (!needsTextured) {
                     pass.setVertexBuffer(0, model.rawVertexBuffer);
+                    pass.setVertexBuffer(1, model.morphVertexBuffer ?? model.rawVertexBuffer);
                     if (model.rawIndexBuffer) {
                         pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
                         pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
@@ -79,6 +81,7 @@ export class MainPass {
                 }
 
                 pass.setVertexBuffer(0, model.rawVertexBuffer);
+                pass.setVertexBuffer(1, model.morphVertexBuffer ?? model.rawVertexBuffer);
                 if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
                 const whiteBG = this.core.textures.white;
                 for (let i = 0; i < batch.count; i++) {
@@ -135,6 +138,7 @@ export class MainPass {
 
                 if (!needsTextured) {
                     pass.setVertexBuffer(0, model.rawVertexBuffer);
+                    pass.setVertexBuffer(1, model.morphVertexBuffer ?? model.rawVertexBuffer);
                     if (model.rawIndexBuffer) {
                         pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
                         pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
@@ -145,6 +149,7 @@ export class MainPass {
                 }
 
                 pass.setVertexBuffer(0, model.rawVertexBuffer);
+                pass.setVertexBuffer(1, model.morphVertexBuffer ?? model.rawVertexBuffer);
                 if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
                 for (let i = 0; i < batch.count; i++) {
                     const slot = skinned.slotIndexData[batch.offset + i]!;
@@ -159,6 +164,7 @@ export class MainPass {
 
             // Per-instance material loop: draw each instance once per material.
             pass.setVertexBuffer(0, model.rawVertexBuffer);
+            pass.setVertexBuffer(1, model.morphVertexBuffer ?? model.rawVertexBuffer);
             if (model.rawIndexBuffer) pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
             for (let i = 0; i < batch.count; i++) {
                 const slot = skinned.slotIndexData[batch.offset + i]!;

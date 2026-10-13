@@ -370,6 +370,11 @@ export class InstanceStore {
         this.swapModel(slot, modelId);
     };
 
+    /** Advance in-progress LOD geomorphs by one tick (no-op when `lod.fadeTicks` is 0). */
+    advanceFades(): void {
+        this.lod.advanceFades(this.dynamicData, this.applyModelSwap);
+    }
+
     /** Remove `materialId` from every instance using it (falls back to default). */
     reassignMaterial(materialId: number): void {
         if (materialId <= 0) return;

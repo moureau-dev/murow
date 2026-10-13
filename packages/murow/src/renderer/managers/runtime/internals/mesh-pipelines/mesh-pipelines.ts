@@ -79,6 +79,7 @@ export class MeshPipelines {
     private device!: RawDevice;
     private format!: RawTextureFormat;
     private vertexBufferLayout!: RawVertexBufferLayout;
+    private morphBufferLayout!: RawVertexBufferLayout;
     skinnedVertexBufferLayout!: RawVertexBufferLayout;
     private rawMeshBGL!: RawBindGroupLayout;
 
@@ -120,6 +121,13 @@ export class MeshPipelines {
         };
         this.vertexBufferLayout = vertexBufferLayout;
 
+        // Binding 1: the paired next-level position for LOD geomorph.
+        this.morphBufferLayout = {
+            arrayStride: 12,
+            stepMode: 'vertex',
+            attributes: [{ shaderLocation: 3, offset: 0, format: 'float32x3' }],
+        };
+
         // --- Untextured pipeline (color only) ---
         const vertex = createMeshVertex(this.meshLayout);
         const fragment = createMeshFragment(this.meshLayout);
@@ -130,7 +138,7 @@ export class MeshPipelines {
 
         this.rawPipeline = device.createRenderPipeline({
             layout: device.createPipelineLayout({ bindGroupLayouts: [rawBGL] }),
-            vertex: { module: shaderModule, buffers: [vertexBufferLayout] },
+            vertex: { module: shaderModule, buffers: [vertexBufferLayout, this.morphBufferLayout] },
             fragment: { module: shaderModule, targets: [{ format }] },
             primitive,
             depthStencil,
@@ -146,7 +154,7 @@ export class MeshPipelines {
 
         this.rawTexturedPipeline = device.createRenderPipeline({
             layout: device.createPipelineLayout({ bindGroupLayouts: [rawBGL, rawTexBGL] }),
-            vertex: { module: texShaderModule, buffers: [vertexBufferLayout] },
+            vertex: { module: texShaderModule, buffers: [vertexBufferLayout, this.morphBufferLayout] },
             fragment: {
                 module: texShaderModule,
                 targets: [{
@@ -294,7 +302,7 @@ export class MeshPipelines {
         return this.device.createRenderPipeline({
             label: opts.label,
             layout: this.device.createPipelineLayout({ bindGroupLayouts: [opts.meshBGL ?? this.rawMeshBGL, rawMaterialBGL] }),
-            vertex: { module, buffers: opts.buffers ?? [this.vertexBufferLayout] },
+            vertex: { module, buffers: opts.buffers ?? [this.vertexBufferLayout, this.morphBufferLayout] },
             fragment: { module, targets: [target] },
             primitive: { topology: 'triangle-list', cullMode: opts.cull },
             depthStencil,
