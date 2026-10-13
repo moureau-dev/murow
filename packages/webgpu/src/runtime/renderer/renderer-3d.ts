@@ -342,6 +342,13 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         for (let i = 0; i < this.interpolators.length; i++) {
             this.interpolators[i]!.storePrevious();
         }
+        // LOD is a per-tick decision (stable, runs once per tick not per frame);
+        // the render path only draws whatever level was selected.
+        const cam = this.camera.position;
+        this.instances.selectLod(
+            cam[0], cam[1], cam[2],
+            this.camera.lodBias, this.instances.lodHysteresis, this.camera.lodEnabled,
+        );
     }
 
     render(alpha: number): void {
@@ -412,12 +419,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     /** Upload instance transforms and bone matrices for the frame's packed batches. */
     private uploadInstanceBuffers(): void {
         // Pick a level per LOD instance from the (interpolated) camera before culling.
-        const cam = this.camera.position;
-        this.instances.selectLod(
-            cam[0], cam[1], cam[2],
-            this.camera.lodBias, this.instances.lodHysteresis, this.camera.lodEnabled,
-        );
-
         // Gather, cull and pack the visible batch lists into the manager.
         this.instances.prepareFrame(this.core.frustum);
 
