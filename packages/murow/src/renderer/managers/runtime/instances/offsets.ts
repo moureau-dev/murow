@@ -3,6 +3,9 @@
 /** Maximum number of materials a single instance can be drawn with. */
 export const MAX_MATERIALS_PER_INSTANCE = 4;
 
+/** Maximum number of LOD levels a single instance can declare. */
+export const MAX_LOD_LEVELS = 4;
+
 // --- Dynamic offset constants ---
 export const DYN_PREV_PX = 0, DYN_PREV_PY = 1, DYN_PREV_PZ = 2;
 export const DYN_CURR_PX = 3, DYN_CURR_PY = 4, DYN_CURR_PZ = 5;

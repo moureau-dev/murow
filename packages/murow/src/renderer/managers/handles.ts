@@ -62,6 +62,8 @@ export declare namespace Handles {
         /** Source prefab id, or `null` if spawned from a raw model handle. */
         readonly prefabId: string | null;
         readonly textureId: string | null;
+        /** Current level of detail (0 when the instance has no LOD chain). */
+        readonly lodLevel: number;
         setPosition(x: number, y: number, z: number): void;
         setRotation(x: number, y: number, z: number): void;
         setScale(x: number, y: number, z: number): void;

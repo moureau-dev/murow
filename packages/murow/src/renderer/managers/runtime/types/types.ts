@@ -67,7 +67,22 @@ interface MeshInstance<A extends AssetBucket<'3d', any, any>> {
     materials?: readonly MaterialHandle<any, any>[] | Record<string, MaterialHandle<any, any>>;
 }
 
+/**
+ * One level of detail: a coarser model and the distance at which it takes over
+ * from the previous level. Order near -> far; the last entry may omit
+ * `distance` (it then renders to the far plane).
+ */
+export interface LodSpec {
+    model: ModelHandle | Prefab3D | string;
+    distance?: number;
+}
+
 export interface MeshInstanceOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends MeshInstance<A> {
+    /**
+     * Level-of-detail chain (coarser levels after the spawned model). The
+     * instance switches level by distance to the camera, with hysteresis.
+     */
+    lod?: LodSpec[];
     /** World position. Defaults to `[0, 0, 0]`. */
     position?: readonly [x: number, y: number, z: number];
     /** Euler rotation in radians. Defaults to `[0, 0, 0]`. */

@@ -275,6 +275,7 @@ export class SkinnedInstanceStore {
             prefabId,
             materials: EMPTY_MATERIALS,
             get textureId() { return currentTexId; },
+            get lodLevel() { return 0; },
             setPosition(nx: number, ny: number, nz: number) {
                 dyn[dynBase + DYN_CURR_PX] = nx;
                 dyn[dynBase + DYN_CURR_PY] = ny;

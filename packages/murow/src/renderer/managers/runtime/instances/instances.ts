@@ -6,7 +6,7 @@ import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { Hitbox } from 'murow/core/hitbox';
 import type { PlayOptions, Prefab3D, TexturePrefab, PrefabBucket3D, CompositePrefab } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../engine-core/types';
-import type { GltfModel, MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../types';
+import type { GltfModel, LodSpec, MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../types';
 import type { Handles } from '../handles';
 import type { MaterialHandle } from '../materials';
 import type { ModelLibrary } from '../internals/model-library';
@@ -112,6 +112,13 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
     /** @internal Skinned slot indices packed by `prepareFrame`. */
     skinnedSlotIndexCount = 0;
 
+    /** LOD: master switch. When false, every instance stays on level 0. */
+    lodEnabled = true;
+    /** LOD: distance multiplier applied to every authored level distance. */
+    lodBias = 1;
+    /** LOD: fractional band that must be crossed before a level change. */
+    lodHysteresis = 0.1;
+
     constructor(deps: InstanceManagerDeps) {
         super({ poolSize: deps.poolSize, capacity: deps.capacity, logger: deps.logger });
         this.deps = deps;
@@ -184,6 +191,52 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
     reassignMaterial(materialId: number): void {
         this.deps.store.reassignMaterial(materialId);
         this.deps.skinned.reassignMaterial(materialId);
+    }
+
+    /**
+     * Pick a level per LOD instance from the camera position, swapping batcher
+     * buckets only on change. Call once per frame (or tick) before
+     * `prepareFrame`.
+     * @returns the number of level swaps.
+     * @internal
+     */
+    selectLod(camX: number, camY: number, camZ: number): number {
+        if (!this.lodEnabled) return 0;
+        return this.deps.store.selectLod(camX, camY, camZ, this.lodBias, this.lodHysteresis);
+    }
+
+    /** Resolve one LOD level's model id, or null when unsupported (e.g. multi-part glTF). */
+    private resolveLevelModelId(level: LodSpec): number | null {
+        const m = level.model as ModelHandle | GltfModel | Prefab3D | string;
+        let resolved: ModelHandle | GltfModel | Prefab3D = m as never;
+        if (typeof m === 'string') {
+            const prefab = this.deps.prefabs?.get(m) as unknown as Prefab3D | undefined;
+            if (!prefab) return null;
+            resolved = resolvePrefabHandle(prefab);
+        } else if (isPrefab3D(m)) {
+            resolved = resolvePrefabHandle(m);
+        }
+        if ('parts' in (resolved as GltfModel)) return null;
+        return (resolved as ModelHandle).id ?? null;
+    }
+
+    /** Attach a resolved LOD chain to a freshly spawned slot. */
+    private applyLod(slot: number, baseModelId: number, lods: LodSpec[]): void {
+        const modelIds: number[] = [baseModelId];
+        const distSq: number[] = [];
+        for (const level of lods) {
+            const id = this.resolveLevelModelId(level);
+            if (id === null) return; // unsupported level → no LOD for this instance
+            modelIds.push(id);
+            const d = level.distance;
+            distSq.push(d === undefined ? Infinity : d * d);
+        }
+        distSq.push(Infinity); // the last level renders to the far plane
+        const radiiSq = modelIds.map((id) => {
+            const r = this.deps.models.get(id)?.boundingRadius ?? 0;
+            return r * r;
+        });
+        this.deps.store.setLodLevels(slot, modelIds, radiiSq, distSq);
     }
 
     /**
@@ -449,6 +502,9 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         this.pending = { kind: 'static', opts, modelHandle, prefabId, materialIds };
         const allocated = this.allocateItem();
         this.pending = null;
+        if (allocated && Array.isArray(opts.lod) && opts.lod.length > 0) {
+            this.applyLod(allocated.item.slot, modelHandle.id, opts.lod);
+        }
         return allocated ? allocated.item : null;
     }
 
@@ -552,6 +608,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             prefabId: composite.id,
             materials: this.makeMaterialsView(childHandles.map((h) => this.materialTarget(h))),
             get textureId() { return childHandles[0]!.textureId; },
+            get lodLevel() { return 0; },
             setPosition(x, y, z) {
                 posOut[0] = x; posOut[1] = y; posOut[2] = z;
                 for (let i = 0; i < childHandles.length; i++) {
@@ -605,6 +662,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             prefabId,
             materials: this.makeMaterialsView(childHandles.map((h) => this.materialTarget(h))),
             get textureId() { return lead.textureId; },
+            get lodLevel() { return 0; },
             setPosition(x, y, z) { for (const h of childHandles) h.setPosition(x, y, z); },
             setRotation(x, y, z) { for (const h of childHandles) h.setRotation(x, y, z); },
             setScale(x, y, z) { for (const h of childHandles) h.setScale(x, y, z); },

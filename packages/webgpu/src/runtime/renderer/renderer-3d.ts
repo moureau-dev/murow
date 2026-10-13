@@ -411,6 +411,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     /** Upload instance transforms and bone matrices for the frame's packed batches. */
     private uploadInstanceBuffers(): void {
+        // Pick a level per LOD instance from the (interpolated) camera before culling.
+        const cam = this.camera.position;
+        this.instances.selectLod(cam[0], cam[1], cam[2]);
+
         // Gather, cull and pack the visible batch lists into the manager.
         this.instances.prepareFrame(this.core.frustum);
 

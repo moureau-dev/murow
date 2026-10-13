@@ -1378,6 +1378,8 @@ API:
 
 The full guide — managers and handles, materials, lighting, shadows, decals, particles, cameras, animation, and 2D/3D usage — is in the [renderer guide](./docs/renderer.md), with [shader authoring](./docs/shaders.md) and [performance](./docs/performance.md) alongside.
 
+**Level of detail (LOD).** Attach a coarser-level chain at spawn: `instances.add({ prefab, lod: [{ model, distance }] })`, ordered near to far. Each `model` is a `ModelHandle`, prefab id, or `Prefab3D`; `distance` is where it takes over (omit on the last level for the far plane). The renderer picks a level per LOD instance from the camera distance each frame, before culling, with both a global budget (`renderer.instances.lodBias`) and hysteresis (`lodHysteresis`) to avoid boundary flicker; read the current level via `handle.lodLevel`, and disable with `lodEnabled = false`. Single-model instances only: `lod` is ignored on a glTF/composite prefab or a skinned model, and levels switch instantly (no morph). Each level is a distinct model id, so a chain spends one of the `SparseBatcher`'s 64 slots per material layer.
+
 ## Common Mistakes
 
 | Wrong | Right |
@@ -1393,6 +1395,7 @@ The full guide — managers and handles, materials, lighting, shadows, decals, p
 | Forgetting `renderer.storePreviousState()` in `pre-tick` | Add `loop.events.on('pre-tick', () => renderer.storePreviousState())` - without it, motion snaps at low tick rates |
 | Iterating `world.query(...)` to find despawned entities | Use `world.getDespawned()` + `world.flushDespawned()` - `O(deaths)`, not `O(maxEntities)` |
 | Calling `handle.destroy()` then `handle.setPosition(...)` later | `destroy()` invalidates the handle - calls after are undefined |
+| Expecting `lod` to work on a glTF/composite or skinned instance | LOD is single-model only (and switches without morphing) - pass `lod` on an instance whose `prefab` is a single mesh |
 | `new World()` with no `components` array | All components must be registered up-front; `world.add(eid, NewComponent, ...)` will fail otherwise |
 | `defineComponent('Pos', { x: f32 })` for networked state | Networked components use the descriptor form: `defineComponent('Pos', { schema: { x: f32 }, sync: networked({...}) })` |
 | `'KeyW'` for the *letter* W key, `'W'` for shift+w | DOM `code` strings are always `KeyW`, `KeyA`, `Space`, `ShiftLeft`, `Digit1`, etc. - never the printed character |
