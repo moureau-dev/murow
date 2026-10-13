@@ -1,7 +1,7 @@
 import { test, expect, describe } from 'bun:test';
 import { DYNAMIC_MESH_FLOATS } from '../engine-core/types';
 import { InstanceStore } from './instance-store';
-import type { ModelHandle } from '../../types';
+import type { ModelHandle } from '../types';
 import { DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ, DYN_PREV_PX } from './offsets';
 
 const model: ModelHandle = { id: 7, vertexCount: 3, indexCount: 0, skinned: false };

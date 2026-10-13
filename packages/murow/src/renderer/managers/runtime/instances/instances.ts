@@ -528,7 +528,8 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         let firstSkinnedSlot: number | undefined;
 
         for (const part of gltf.parts) {
-            const partOpts = { ...opts, prefab: part };
+            // LOD is single-model only; a multi-part prefab's parts must not inherit it.
+            const partOpts = { ...opts, prefab: part, lod: undefined };
             const model = this.deps.models.get(part.id);
             if (model?.skinned) {
                 const handle = this.spawnSkinned(partOpts, part, model.skinIndex, firstSkinnedSlot, prefabId, materialIds);
@@ -578,6 +579,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             const partOpts: MeshInstanceOptions<any> = {
                 ...opts,
                 prefab: partPrefab,
+                lod: undefined, // LOD is single-model only; parts do not inherit it
                 position: [basePos[0] + off.px, basePos[1] + off.py, basePos[2] + off.pz],
                 rotation: [baseRot[0] + off.rx, baseRot[1] + off.ry, baseRot[2] + off.rz],
             };
