@@ -35,11 +35,12 @@ export class InstanceLodStore {
      * Attach a level chain to a slot (near -> far; level 0 is the spawned model;
      * the last level's distance should be Infinity). No-op below two levels.
      */
-    setLevels(
-        slot: number,
-        modelIds: readonly number[],
-        distSq: readonly number[],
-    ): void {
+    setLevels(opts: {
+        slot: number;
+        modelIds: readonly number[];
+        distSq: readonly number[];
+    }): void {
+        const { slot, modelIds, distSq } = opts;
         const n = Math.min(modelIds.length, MAX_LOD_LEVELS);
         if (n < 2) return;
         const base = slot * MAX_LOD_LEVELS;

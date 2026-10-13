@@ -90,7 +90,7 @@ describe('InstanceStore LOD', () => {
     test('selects a level by distance and moves the batcher bucket', () => {
         const s = store();
         const h = s.spawn({ prefab: base, position: [0, 0, 0] }, base, null, ++idc);
-        s.setLodLevels(h.slot, [base.id, mid.id, low.id], [100, 10000, Infinity]);
+        s.setLodLevels({ slot: h.slot, modelIds: [base.id, mid.id, low.id], distSq: [100, 10000, Infinity] });
 
         expect(s.selectLod(0, 0, 0)).toBe(0);            // near → level 0
         expect(s.instanceModelIds[h.slot]).toBe(7);
@@ -107,7 +107,7 @@ describe('InstanceStore LOD', () => {
     test('hysteresis suppresses flip-flop at the boundary', () => {
         const s = store();
         const h = s.spawn({ prefab: base }, base, null, ++idc);
-        s.setLodLevels(h.slot, [base.id, mid.id], [100, Infinity]);
+        s.setLodLevels({ slot: h.slot, modelIds: [base.id, mid.id], distSq: [100, Infinity] });
 
         h.setPosition(10, 0, 0);                          // d² = 100 (at boundary) → stays level 0
         expect(s.selectLod(0, 0, 0, 1, 0.1)).toBe(0);
@@ -122,7 +122,7 @@ describe('InstanceStore LOD', () => {
     test('bias scales every authored distance', () => {
         const s = store();
         const h = s.spawn({ prefab: base }, base, null, ++idc);
-        s.setLodLevels(h.slot, [base.id, mid.id], [100, Infinity]);
+        s.setLodLevels({ slot: h.slot, modelIds: [base.id, mid.id], distSq: [100, Infinity] });
         h.setPosition(15, 0, 0);                          // d² = 225
         expect(s.selectLod(0, 0, 0, 2, 0.1)).toBe(0);     // bias 2 → boundary at 400
         expect(s.selectLod(0, 0, 0, 1, 0.1)).toBe(1);     // bias 1 → crosses 100
@@ -132,7 +132,7 @@ describe('InstanceStore LOD', () => {
         const s = store();
         const a = s.spawn({ prefab: base, position: [0, 0, 0] }, base, null, ++idc);
         const b = s.spawn({ prefab: base, position: [0, 0, 0] }, base, null, ++idc);
-        s.setLodLevels(a.slot, [base.id, mid.id], [100, Infinity]);
+        s.setLodLevels({ slot: a.slot, modelIds: [base.id, mid.id], distSq: [100, Infinity] });
         expect(s.selectLod(1e6, 0, 0, 1, 0.1)).toBe(1);   // only `a` swaps
         expect(s.instanceModelIds[a.slot]).toBe(8);
         expect(s.instanceModelIds[b.slot]).toBe(7);
@@ -141,7 +141,7 @@ describe('InstanceStore LOD', () => {
     test('destroying a LOD instance removes it from the LOD set', () => {
         const s = store();
         const h = s.spawn({ prefab: base }, base, null, ++idc);
-        s.setLodLevels(h.slot, [base.id, mid.id], [100, Infinity]);
+        s.setLodLevels({ slot: h.slot, modelIds: [base.id, mid.id], distSq: [100, Infinity] });
         expect(s.lod.slots.size).toBe(1);
         h.destroy();
         expect(s.lod.slots.size).toBe(0);

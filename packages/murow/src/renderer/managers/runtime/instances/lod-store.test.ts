@@ -18,7 +18,7 @@ describe('InstanceLodStore', () => {
         const lod = new InstanceLodStore(4);
         const dyn = positions(4);
         setPos(dyn, 0, 0, 0, 0);
-        lod.setLevels(0, [7, 8, 9], [100, 10000, Infinity]);
+        lod.setLevels({ slot: 0, modelIds: [7, 8, 9], distSq: [100, 10000, Infinity] });
 
         const applied: [number, number][] = [];
         const apply = (slot: number, id: number) => applied.push([slot, id]);
@@ -40,7 +40,7 @@ describe('InstanceLodStore', () => {
     test('hysteresis suppresses flip-flop at the boundary', () => {
         const lod = new InstanceLodStore(2);
         const dyn = positions(2);
-        lod.setLevels(0, [7, 8], [100, Infinity]);
+        lod.setLevels({ slot: 0, modelIds: [7, 8], distSq: [100, Infinity] });
         const noop = () => {};
 
         setPos(dyn, 0, 10, 0, 0);                         // d² 100, at boundary
@@ -54,7 +54,7 @@ describe('InstanceLodStore', () => {
     test('bias scales every authored distance', () => {
         const lod = new InstanceLodStore(2);
         const dyn = positions(2);
-        lod.setLevels(0, [7, 8], [100, Infinity]);
+        lod.setLevels({ slot: 0, modelIds: [7, 8], distSq: [100, Infinity] });
         const noop = () => {};
         setPos(dyn, 0, 15, 0, 0);                         // d² 225
         expect(lod.select(dyn, 0, 0, 0, 2, 0.1, noop)).toBe(0); // bias 2 → boundary 400
@@ -63,10 +63,10 @@ describe('InstanceLodStore', () => {
 
     test('setLevels below two levels is a no-op; clear forgets a slot', () => {
         const lod = new InstanceLodStore(2);
-        lod.setLevels(0, [7], [Infinity]);
+        lod.setLevels({ slot: 0, modelIds: [7], distSq: [Infinity] });
         expect(lod.slots.size).toBe(0);
 
-        lod.setLevels(0, [7, 8], [100, Infinity]);
+        lod.setLevels({ slot: 0, modelIds: [7, 8], distSq: [100, Infinity] });
         expect(lod.slots.size).toBe(1);
         lod.clear(0);
         expect(lod.slots.size).toBe(0);

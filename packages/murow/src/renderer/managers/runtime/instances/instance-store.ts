@@ -330,10 +330,14 @@ export class InstanceStore {
     }
 
     /** Attach LOD levels to a slot (near -> far; level 0 is the spawned model). */
-    setLodLevels(slot: number, modelIds: readonly number[], distSq: readonly number[]): void {
-        if (modelIds.length < 2) return;
-        this.lod.setLevels(slot, modelIds, distSq);
-        this.instanceModelIds[slot] = modelIds[0]!;
+    setLodLevels(opts: {
+        slot: number;
+        modelIds: readonly number[];
+        distSq: readonly number[];
+    }): void {
+        if (opts.modelIds.length < 2) return;
+        this.lod.setLevels(opts);
+        this.instanceModelIds[opts.slot] = opts.modelIds[0]!;
     }
 
     /** The slot's current LOD level (0 when it has no LOD chain). */

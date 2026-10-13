@@ -232,11 +232,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             distSq.push(d === undefined ? Infinity : d * d);
         }
         distSq.push(Infinity); // the last level renders to the far plane
-        const radiiSq = modelIds.map((id) => {
-            const r = this.deps.models.get(id)?.boundingRadius ?? 0;
-            return r * r;
-        });
-        this.deps.store.setLodLevels(slot, modelIds, radiiSq, distSq);
+        this.deps.store.setLodLevels({ slot, modelIds, distSq });
     }
 
     /**

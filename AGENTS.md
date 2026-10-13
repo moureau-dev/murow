@@ -104,6 +104,9 @@ Murow is data-oriented. Do not import patterns from Unity, Three.js, or Phaser.
 - Predictions must be deterministic: no `Math.random()`, `Date.now()`,
   `performance.now()`, no I/O, no module-level mutable state.
 - The server is the authority; gameplay decisions live in server handlers.
+- Prefer named (object) parameters for non-hot-path methods with more than one
+  argument; keep positional parameters on hot paths. The call site reads better
+  and the extra object is only allocated off the hot path.
 
 The full anti-pattern list is in `llms.txt` ("Do NOT" and "APIs that DO NOT
 EXIST"). Consult it before finalizing code.
