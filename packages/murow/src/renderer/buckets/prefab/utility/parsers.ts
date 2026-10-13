@@ -9,11 +9,11 @@ import { parseSpritesheet } from '../../../spritesheet/parser';
 import type {
     Prefab2D,
     Prefab2DSpec,
-    Prefab3D,
+    Prefab3DData,
     Prefab3DSpec,
 } from './specs';
 
-export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3D> = {
+export const parsers3d: PrefabParserMap<Prefab3DSpec, Prefab3DData> = {
     gltf: async (spec, ctx) => {
         if (spec.type !== 'gltf') throw new Error('gltf parser given non-gltf spec');
 

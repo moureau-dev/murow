@@ -362,7 +362,8 @@ export interface PlanePrefab<S extends PlaneSpec = PlaneSpec> {
     readonly hitbox?: string;
 }
 
-export type Prefab3D = WithLods<GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab | SpherePrefab | CylinderPrefab | ConePrefab | MeshPrefab>;
+export type Prefab3DData = WithLods<GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab | SpherePrefab | CylinderPrefab | ConePrefab | MeshPrefab>;
+export type Prefab3D = Prefab3DData & { setLods(lods?: readonly PrefabLodSpec[]): void };
 
 // ============================================================================
 // 2D
