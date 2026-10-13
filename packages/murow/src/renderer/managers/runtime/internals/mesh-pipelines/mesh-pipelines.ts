@@ -121,9 +121,11 @@ export class MeshPipelines {
         };
         this.vertexBufferLayout = vertexBufferLayout;
 
-        // Binding 1: the paired next-level position for LOD geomorph.
+        // Binding 1: the paired next-level position for LOD geomorph. Same
+        // interleaved stride as binding 0 (pos at offset 0), so it reads the
+        // position from the other level's full vertex buffer.
         this.morphBufferLayout = {
-            arrayStride: 12,
+            arrayStride: 32,
             stepMode: 'vertex',
             attributes: [{ shaderLocation: 3, offset: 0, format: 'float32x3' }],
         };

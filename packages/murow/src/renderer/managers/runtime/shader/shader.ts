@@ -221,6 +221,7 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
                 position: d.location(0, d.vec3f),
                 normal: d.location(1, d.vec3f),
                 uv: d.location(2, d.vec2f),
+                positionB: d.location(3, d.vec3f),
                 instanceIndex: d.builtin.instanceIndex,
             },
             out: {
@@ -256,10 +257,15 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
         const sz = stat.scaleZ;
 
         // Build TRS inline: scale → rotateZ → rotateY → rotateX → translate
+        const pos = d.vec3f(
+            std.mix(input.position.x, input.positionB.x, dyn.morph),
+            std.mix(input.position.y, input.positionB.y, dyn.morph),
+            std.mix(input.position.z, input.positionB.z, dyn.morph),
+        );
         const scaled = d.vec3f(
-            std.mul(input.position.x, sx),
-            std.mul(input.position.y, sy),
-            std.mul(input.position.z, sz),
+            std.mul(pos.x, sx),
+            std.mul(pos.y, sy),
+            std.mul(pos.z, sz),
         );
 
         // Rotate Z
@@ -341,6 +347,7 @@ export function createExtrudedMeshVertex(meshLayout: MeshDataLayout, matLayout: 
                 position: d.location(0, d.vec3f),
                 normal: d.location(1, d.vec3f),
                 uv: d.location(2, d.vec2f),
+                positionB: d.location(3, d.vec3f),
                 instanceIndex: d.builtin.instanceIndex,
             },
             out: {
@@ -373,10 +380,15 @@ export function createExtrudedMeshVertex(meshLayout: MeshDataLayout, matLayout: 
         const sy = stat.scaleY;
         const sz = stat.scaleZ;
 
+        const pos = d.vec3f(
+            std.mix(input.position.x, input.positionB.x, dyn.morph),
+            std.mix(input.position.y, input.positionB.y, dyn.morph),
+            std.mix(input.position.z, input.positionB.z, dyn.morph),
+        );
         const scaled = d.vec3f(
-            std.mul(std.add(input.position.x, std.mul(input.normal.x, ext)), sx),
-            std.mul(std.add(input.position.y, std.mul(input.normal.y, ext)), sy),
-            std.mul(std.add(input.position.z, std.mul(input.normal.z, ext)), sz),
+            std.mul(std.add(pos.x, std.mul(input.normal.x, ext)), sx),
+            std.mul(std.add(pos.y, std.mul(input.normal.y, ext)), sy),
+            std.mul(std.add(pos.z, std.mul(input.normal.z, ext)), sz),
         );
 
         const czr = std.cos(rz);
@@ -448,6 +460,7 @@ export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
                 position: d.location(0, d.vec3f),
                 normal: d.location(1, d.vec3f),
                 uv: d.location(2, d.vec2f),
+                positionB: d.location(3, d.vec3f),
                 instanceIndex: d.builtin.instanceIndex,
             },
             out: {
@@ -473,10 +486,15 @@ export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
         const ry = std.mix(dyn.prevRotY, dyn.currRotY, alpha);
         const rz = std.mix(dyn.prevRotZ, dyn.currRotZ, alpha);
 
+        const pos = d.vec3f(
+            std.mix(input.position.x, input.positionB.x, dyn.morph),
+            std.mix(input.position.y, input.positionB.y, dyn.morph),
+            std.mix(input.position.z, input.positionB.z, dyn.morph),
+        );
         const scaled = d.vec3f(
-            std.mul(input.position.x, stat.scaleX),
-            std.mul(input.position.y, stat.scaleY),
-            std.mul(input.position.z, stat.scaleZ),
+            std.mul(pos.x, stat.scaleX),
+            std.mul(pos.y, stat.scaleY),
+            std.mul(pos.z, stat.scaleZ),
         );
 
         const czr = std.cos(rz);
