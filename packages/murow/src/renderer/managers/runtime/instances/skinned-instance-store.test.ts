@@ -64,3 +64,33 @@ describe('SkinnedInstanceStore', () => {
         expect(s.slots.size).toBe(0);
     });
 });
+
+describe('SkinnedInstanceStore LOD', () => {
+    test('setLodLevels + selectLod move the skinned batcher bucket', () => {
+        const s = store();
+        const h = spawn(s); // model id 3
+        s.setLodLevels({ slot: h.slot, modelIds: [3, 8], distSq: [100, Infinity] });
+        expect(s.lodLevelOf(h.slot)).toBe(0);
+
+        h.setPosition(20, 0, 0);                        // d² 400 > 100
+        expect(s.selectLod(0, 0, 0)).toBe(1);
+        expect(s.instanceModelIds[h.slot]).toBe(8);
+        expect(s.lodLevelOf(h.slot)).toBe(1);
+
+        const batched: number[] = [];
+        s.batcher.each((modelId, _instances, count) => {
+            for (let i = 0; i < count; i++) batched.push(modelId);
+        });
+        expect(batched).toContain(8);
+        expect(batched).not.toContain(3);
+    });
+
+    test('destroying a LOD skinned instance clears its levels', () => {
+        const s = store();
+        const h = spawn(s);
+        s.setLodLevels({ slot: h.slot, modelIds: [3, 8], distSq: [100, Infinity] });
+        expect(s.lod.slots.size).toBe(1);
+        h.destroy();
+        expect(s.lod.slots.size).toBe(0);
+    });
+});

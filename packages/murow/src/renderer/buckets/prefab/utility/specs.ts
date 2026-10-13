@@ -172,7 +172,18 @@ export interface MeshSpec {
     readonly hitbox?: string;
 }
 
-export type Prefab3DSpec = GltfSpec | GridSpec | CubeSpec | CompositeSpec | PlaneSpec | SphereSpec | CylinderSpec | ConeSpec | MeshSpec;
+/**
+ * A LOD level declared on a prefab. `model` is another prefab id (or a model
+ * id); the instance switches to it past `distance`. Ordered near -> far.
+ */
+export interface PrefabLodSpec {
+    readonly model: string;
+    readonly distance?: number;
+}
+
+type WithLods<T> = T & { readonly lods?: readonly PrefabLodSpec[] };
+
+export type Prefab3DSpec = WithLods<GltfSpec | GridSpec | CubeSpec | CompositeSpec | PlaneSpec | SphereSpec | CylinderSpec | ConeSpec | MeshSpec>;
 
 /**
  * Map a spec's `animations` tuple to a record-keyed-by-name. Used to type
@@ -351,7 +362,7 @@ export interface PlanePrefab<S extends PlaneSpec = PlaneSpec> {
     readonly hitbox?: string;
 }
 
-export type Prefab3D = GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab | SpherePrefab | CylinderPrefab | ConePrefab | MeshPrefab;
+export type Prefab3D = WithLods<GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab | SpherePrefab | CylinderPrefab | ConePrefab | MeshPrefab>;
 
 // ============================================================================
 // 2D

@@ -158,6 +158,11 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         const userPrefabId = prefab ? prefab.id : null;
         const materialIds = materialIdsFromOptions(resolvedOpts);
 
+        // LOD: explicit per-instance chain wins; else inherit the prefab's.
+        let lods: readonly LodSpec[] | undefined = Array.isArray(resolvedOpts.lod) ? resolvedOpts.lod : undefined;
+        const prefabLods = prefab === undefined ? undefined : (prefab as unknown as { lods?: readonly LodSpec[] }).lods;
+        if (lods === undefined && Array.isArray(prefabLods)) lods = prefabLods;
+
         if (prefab?.type === 'composite') {
             return this.addComposite(resolvedOpts, prefab);
         }
@@ -172,10 +177,10 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         const model = this.deps.models.get(modelHandle.id);
 
         if (model?.skinned) {
-            return this.spawnSkinned(resolvedOpts, modelHandle, model.skinIndex, undefined, userPrefabId, materialIds);
+            return this.spawnSkinned(resolvedOpts, modelHandle, model.skinIndex, undefined, userPrefabId, materialIds, lods);
         }
 
-        return this.spawnStatic(resolvedOpts, modelHandle, userPrefabId, materialIds);
+        return this.spawnStatic(resolvedOpts, modelHandle, userPrefabId, materialIds, lods);
     }
 
     /**
@@ -202,7 +207,10 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
      */
     selectLod(camX: number, camY: number, camZ: number): number {
         if (!this.lodEnabled) return 0;
-        return this.deps.store.selectLod(camX, camY, camZ, this.lodBias, this.lodHysteresis);
+        return (
+            this.deps.store.selectLod(camX, camY, camZ, this.lodBias, this.lodHysteresis) +
+            this.deps.skinned.selectLod(camX, camY, camZ, this.lodBias, this.lodHysteresis)
+        );
     }
 
     /** Resolve one LOD level's model id, or null when unsupported (e.g. multi-part glTF). */
@@ -220,19 +228,31 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         return (resolved as ModelHandle).id ?? null;
     }
 
-    /** Attach a resolved LOD chain to a freshly spawned slot. */
-    private applyLod(slot: number, baseModelId: number, lods: LodSpec[]): void {
+    /** Resolve a LOD chain to model ids + squared boundaries, or null if unsupported. */
+    private resolveLodChain(baseModelId: number, lods: readonly LodSpec[]): { modelIds: number[]; distSq: number[] } | null {
         const modelIds: number[] = [baseModelId];
         const distSq: number[] = [];
         for (const level of lods) {
             const id = this.resolveLevelModelId(level);
-            if (id === null) return; // unsupported level → no LOD for this instance
+            if (id === null) return null; // unsupported level → no LOD for this instance
             modelIds.push(id);
             const d = level.distance;
             distSq.push(d === undefined ? Infinity : d * d);
         }
         distSq.push(Infinity); // the last level renders to the far plane
-        this.deps.store.setLodLevels({ slot, modelIds, distSq });
+        return { modelIds, distSq };
+    }
+
+    /** Attach a resolved LOD chain to a freshly spawned non-skinned slot. */
+    private applyLod(slot: number, baseModelId: number, lods: readonly LodSpec[]): void {
+        const chain = this.resolveLodChain(baseModelId, lods);
+        if (chain !== null) this.deps.store.setLodLevels({ slot, ...chain });
+    }
+
+    /** Attach a resolved LOD chain to a freshly spawned skinned slot. */
+    private applySkinnedLod(slot: number, baseModelId: number, lods: readonly LodSpec[]): void {
+        const chain = this.resolveLodChain(baseModelId, lods);
+        if (chain !== null) this.deps.skinned.setLodLevels({ slot, ...chain });
     }
 
     /**
@@ -494,12 +514,13 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         modelHandle: ModelHandle,
         prefabId: string | null,
         materialIds: number[],
+        lods: readonly LodSpec[] | undefined,
     ): MeshInstanceHandle | null {
         this.pending = { kind: 'static', opts, modelHandle, prefabId, materialIds };
         const allocated = this.allocateItem();
         this.pending = null;
-        if (allocated && Array.isArray(opts.lod) && opts.lod.length > 0) {
-            this.applyLod(allocated.item.slot, modelHandle.id, opts.lod);
+        if (allocated && lods !== undefined && lods.length > 0) {
+            this.applyLod(allocated.item.slot, modelHandle.id, lods);
         }
         return allocated ? allocated.item : null;
     }
@@ -511,6 +532,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         linkedSlot: number | undefined,
         prefabId: string | null,
         materialIds: number[],
+        lods: readonly LodSpec[] | undefined,
     ): MeshInstanceHandle | null {
         const skinModel = this.deps.models.skinnedModel(skinIndex);
         if (!skinModel) return null;
@@ -520,6 +542,9 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         };
         const allocated = this.allocateItem();
         this.pending = null;
+        if (allocated && lods !== undefined && lods.length > 0) {
+            this.applySkinnedLod(allocated.item.slot, modelHandle.id, lods);
+        }
         return allocated ? allocated.item : null;
     }
 
@@ -532,13 +557,13 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             const partOpts = { ...opts, prefab: part, lod: undefined };
             const model = this.deps.models.get(part.id);
             if (model?.skinned) {
-                const handle = this.spawnSkinned(partOpts, part, model.skinIndex, firstSkinnedSlot, prefabId, materialIds);
+                const handle = this.spawnSkinned(partOpts, part, model.skinIndex, firstSkinnedSlot, prefabId, materialIds, undefined);
                 if (handle) {
                     if (firstSkinnedSlot === undefined) firstSkinnedSlot = handle.slot;
                     childHandles.push(handle);
                 }
             } else {
-                const handle = this.spawnStatic(partOpts, part, prefabId, materialIds);
+                const handle = this.spawnStatic(partOpts, part, prefabId, materialIds, undefined);
                 if (handle) childHandles.push(handle);
             }
         }

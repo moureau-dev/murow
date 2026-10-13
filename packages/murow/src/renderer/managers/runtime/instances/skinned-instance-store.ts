@@ -2,6 +2,7 @@ import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent,
 
 import { SlotMap } from 'murow/core/slot-map';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
+import { InstanceLodStore } from './lod-store';
 import type { SkeletalAnimState, PlayOptions, TexturePrefab } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../engine-core/types';
 import type { MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../types';
@@ -81,6 +82,8 @@ export class SkinnedInstanceStore {
     readonly materialIds: Uint16Array;
     /** Number of materials in each slot's list (always at least 1). */
     readonly materialCount: Uint8Array;
+    /** Level-of-detail state and selection (skinned slots share the dynamic layout). */
+    readonly lod: InstanceLodStore;
 
     constructor(private readonly deps: SkinnedInstanceStoreDeps) {
         const n = deps.maxSkinnedInstances;
@@ -95,6 +98,7 @@ export class SkinnedInstanceStore {
         this.textureBGs = new Array(n).fill(null);
         this.materialIds = new Uint16Array(n * MAX_MATERIALS_PER_INSTANCE);
         this.materialCount = new Uint8Array(n);
+        this.lod = new InstanceLodStore(n);
         this.slots = new SlotMap(n);
         this.batcher = new SparseBatcher(n);
 
@@ -173,6 +177,37 @@ export class SkinnedInstanceStore {
             if (m > 0) this.deps.retainMaterial?.(m);
         }
     }
+
+    /** Attach a LOD chain to a skinned slot (levels must share the skeleton). */
+    setLodLevels(opts: { slot: number; modelIds: readonly number[]; distSq: readonly number[] }): void {
+        if (opts.modelIds.length < 2) return;
+        this.lod.setLevels(opts);
+        this.instanceModelIds[opts.slot] = opts.modelIds[0]!;
+    }
+
+    /** The slot's current LOD level (0 when it has no LOD chain). */
+    lodLevelOf(slot: number): number {
+        return this.lod.levelOf(slot);
+    }
+
+    /** Move a skinned instance to another model, relocating it in the skinned batcher. */
+    swapModel(slot: number, newModelId: number): void {
+        const old = this.instanceModelIds[slot]!;
+        if (old === newModelId) return;
+        this.batcher.remove(0, old, slot);
+        this.batcher.add(0, newModelId, slot);
+        this.instanceModelIds[slot] = newModelId;
+        this.dynamicVersion++;
+    }
+
+    /** Select a level per LOD skinned instance from the camera position. */
+    selectLod(camX: number, camY: number, camZ: number, bias = 1, hysteresis = 0.1): number {
+        return this.lod.select(this.dynamicData, camX, camY, camZ, bias, hysteresis, this.applyModelSwap);
+    }
+
+    private readonly applyModelSwap = (slot: number, modelId: number): void => {
+        this.swapModel(slot, modelId);
+    };
 
     spawn(
         opts: MeshInstanceOptions<any>,
@@ -275,7 +310,7 @@ export class SkinnedInstanceStore {
             prefabId,
             materials: EMPTY_MATERIALS,
             get textureId() { return currentTexId; },
-            get lodLevel() { return 0; },
+            get lodLevel() { return self.lod.levelOf(slot); },
             setPosition(nx: number, ny: number, nz: number) {
                 dyn[dynBase + DYN_CURR_PX] = nx;
                 dyn[dynBase + DYN_CURR_PY] = ny;
@@ -354,6 +389,7 @@ export class SkinnedInstanceStore {
                 }
                 self.materialCount[slot] = 0;
                 self.batcher.remove(0, modelHandle.id, slot);
+                self.lod.clear(slot);
                 self.slots.remove(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 stat.fill(0, statBase, statBase + SKINNED_STATIC_MESH_FLOATS);

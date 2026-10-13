@@ -113,6 +113,10 @@ export class Bucket<
                 const parser = this._parsers![spec.type];
                 if (!parser) throw new Error(`Bucket: no parser registered for type '${spec.type}'`);
                 const prefab = await parser(spec, ctx);
+                // Carry spec fields the parser does not model (e.g. a LOD chain).
+                if ((spec as { lods?: unknown }).lods !== undefined) {
+                    (prefab as { lods?: unknown }).lods = (spec as { lods?: unknown }).lods;
+                }
                 loaded++;
                 (this.events as EventSystem<any>).emit('loading', { loaded, total, id: spec.id });
                 return prefab;
