@@ -413,7 +413,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private uploadInstanceBuffers(): void {
         // Pick a level per LOD instance from the (interpolated) camera before culling.
         const cam = this.camera.position;
-        this.instances.selectLod(cam[0], cam[1], cam[2]);
+        this.instances.selectLod(
+            cam[0], cam[1], cam[2],
+            this.camera.lodBias, this.instances.lodHysteresis, this.camera.lodEnabled,
+        );
 
         // Gather, cull and pack the visible batch lists into the manager.
         this.instances.prepareFrame(this.core.frustum);

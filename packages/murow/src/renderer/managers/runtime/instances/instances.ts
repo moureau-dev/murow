@@ -205,48 +205,31 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
      * @returns the number of level swaps.
      * @internal
      */
-    selectLod(camX: number, camY: number, camZ: number): number {
-        if (!this.lodEnabled) return 0;
+    selectLod(
+        camX: number,
+        camY: number,
+        camZ: number,
+        bias = this.lodBias,
+        hysteresis = this.lodHysteresis,
+        enabled = this.lodEnabled,
+    ): number {
+        if (!enabled) return 0;
         return (
-            this.deps.store.selectLod(camX, camY, camZ, this.lodBias, this.lodHysteresis) +
-            this.deps.skinned.selectLod(camX, camY, camZ, this.lodBias, this.lodHysteresis)
+            this.deps.store.selectLod(camX, camY, camZ, bias, hysteresis) +
+            this.deps.skinned.selectLod(camX, camY, camZ, bias, hysteresis)
         );
     }
 
-    /** Resolve one LOD level's model id, or null when unsupported (e.g. multi-part glTF). */
-    private resolveLevelModelId(level: LodSpec): number | null {
-        const prefab = this.deps.prefabs?.get(level.prefabId) as unknown as Prefab3D | undefined;
-        if (!prefab) return null;
-        const resolved = resolvePrefabHandle(prefab);
-        if ('parts' in (resolved as GltfModel)) return null;
-        return (resolved as ModelHandle).id ?? null;
-    }
-
-    /** Resolve a LOD chain to model ids + squared boundaries, or null if unsupported. */
-    private resolveLodChain(baseModelId: number, lods: readonly LodSpec[]): { modelIds: number[]; distSq: number[] } | null {
-        const modelIds: number[] = [baseModelId];
-        const distSq: number[] = [];
-        for (const level of lods) {
-            const id = this.resolveLevelModelId(level);
-            if (id === null) return null; // unsupported level → no LOD for this instance
-            modelIds.push(id);
-            const d = level.distance;
-            distSq.push(d === undefined ? Infinity : d * d);
-        }
-        distSq.push(Infinity); // the last level renders to the far plane
-        return { modelIds, distSq };
-    }
-
-    /** Attach a resolved LOD chain to a freshly spawned non-skinned slot. */
+    /** Attach a single-mesh LOD chain to a freshly spawned non-skinned slot. */
     private applyLod(slot: number, baseModelId: number, lods: readonly LodSpec[]): void {
-        const chain = this.resolveLodChain(baseModelId, lods);
-        if (chain !== null) this.deps.store.setLodLevels({ slot, ...chain });
+        const chain = this.buildLodChains([baseModelId], lods);
+        this.deps.store.setLodLevels({ slot, modelIds: chain.levelPartIds.map((lp) => lp[0]!), distSq: chain.distSq });
     }
 
-    /** Attach a resolved LOD chain to a freshly spawned skinned slot. */
+    /** Attach a single-mesh LOD chain to a freshly spawned skinned slot. */
     private applySkinnedLod(slot: number, baseModelId: number, lods: readonly LodSpec[]): void {
-        const chain = this.resolveLodChain(baseModelId, lods);
-        if (chain !== null) this.deps.skinned.setLodLevels({ slot, ...chain });
+        const chain = this.buildLodChains([baseModelId], lods);
+        this.deps.skinned.setLodLevels({ slot, modelIds: chain.levelPartIds.map((lp) => lp[0]!), distSq: chain.distSq });
     }
 
     /**
@@ -546,26 +529,26 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
      * Model ids of a prefab's parts (one for a single-mesh prefab, N for a
      * multi-part glTF or a composite). Used to build matching-part LOD chains.
      */
-    private resolvePartModelIds(prefab: Prefab3D | string): number[] | null {
+    private collectPartModelIds(prefab: Prefab3D | string, out: number[]): boolean {
         const bucket = this.deps.prefabs;
         const p = typeof prefab === 'string'
             ? (bucket?.get(prefab) as unknown as Prefab3D | undefined)
             : prefab;
-        if (!p) return null;
+        if (!p) return false;
         if (p.type === 'composite') {
-            if (!bucket) return null;
-            const ids: number[] = [];
+            if (!bucket) return false;
             for (const part of p.parts) {
-                const partPrefab = bucket.get(part.partId) as unknown as Prefab3D;
-                const r = resolvePrefabHandle(partPrefab);
-                if ('parts' in (r as GltfModel)) return null;
-                ids.push((r as ModelHandle).id);
+                if (!this.collectPartModelIds(bucket.get(part.partId) as unknown as Prefab3D, out)) return false;
             }
-            return ids;
+            return true;
         }
         const r = resolvePrefabHandle(p);
-        if ('parts' in (r as GltfModel)) return (r as GltfModel).parts.map((part) => part.id);
-        return [(r as ModelHandle).id];
+        if ('parts' in (r as GltfModel)) {
+            for (const part of (r as GltfModel).parts) out.push(part.id);
+            return true;
+        }
+        out.push((r as ModelHandle).id);
+        return true;
     }
 
     /**
@@ -577,17 +560,37 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         const levelPartIds: number[][] = [basePartIds];
         const distSq: number[] = [];
         for (const level of lods) {
-            const parts = this.resolvePartModelIds(level.prefabId);
-            if (parts === null || parts.length !== basePartIds.length) {
+            const parts: number[] = [];
+            if (!this.collectPartModelIds(level.prefabId, parts) || parts.length !== basePartIds.length) {
                 throw new Error(
-                    `instances.add: LOD level '${level.prefabId}' has ${parts?.length ?? 0} part(s); the base has ${basePartIds.length}`,
+                    `instances.add: LOD level '${level.prefabId}' has ${parts.length} part(s); the base has ${basePartIds.length}`,
                 );
             }
             levelPartIds.push(parts);
             distSq.push(level.distance === undefined ? Infinity : level.distance * level.distance);
         }
         distSq.push(Infinity); // last level renders to the far plane
+        this.assertMatchingSkeletons(levelPartIds);
         return { levelPartIds, distSq };
+    }
+
+    /** Skinned LOD levels must share the base part's skeleton (skin index). */
+    private assertMatchingSkeletons(levelPartIds: number[][]): void {
+        const base = levelPartIds[0]!;
+        for (let k = 1; k < levelPartIds.length; k++) {
+            const level = levelPartIds[k]!;
+            for (let i = 0; i < base.length; i++) {
+                const b = this.deps.models.get(base[i]!);
+                const l = this.deps.models.get(level[i]!);
+                const bSkinned = b?.skinned ?? false;
+                if (bSkinned !== (l?.skinned ?? false)) {
+                    throw new Error(`instances.add: LOD level part ${i} skinned=${l?.skinned ?? false} but the base is skinned=${bSkinned}`);
+                }
+                if (bSkinned && l?.skinIndex !== b?.skinIndex) {
+                    throw new Error(`instances.add: skinned LOD level part ${i} uses skin ${l?.skinIndex} but the base uses skin ${b?.skinIndex}`);
+                }
+            }
+        }
     }
 
     private addGltf(opts: MeshInstanceOptions<any>, gltf: GltfModel, prefabId: string | null, materialIds: number[], lods: readonly LodSpec[] | undefined): MeshInstanceHandle {
@@ -647,17 +650,20 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             rz: p.offset?.rotation?.[2] ?? 0,
         }));
 
-        let chains: { levelPartIds: number[][]; distSq: number[] } | null = null;
+        // Nested LOD: each part's chain is the corresponding part of every level
+        // composite, pushed down through `add` (works at any depth).
+        let levelComposites: CompositePrefab[] | null = null;
         if (lods !== undefined && lods.length > 0) {
-            const baseIds = composite.parts.map((p) => {
-                const pf = bucket.get(p.partId) as unknown as Prefab3D;
-                const r = resolvePrefabHandle(pf);
-                if ('parts' in (r as GltfModel)) {
-                    throw new Error(`instances.add: composite '${composite.id}' part '${p.partId}' is multi-part; not supported`);
+            levelComposites = [];
+            for (const level of lods) {
+                const p = bucket.get(level.prefabId) as unknown as Prefab3D;
+                if (p.type !== 'composite' || p.parts.length !== composite.parts.length) {
+                    throw new Error(
+                        `instances.add: LOD level '${level.prefabId}' is not a composite with ${composite.parts.length} part(s)`,
+                    );
                 }
-                return (r as ModelHandle).id;
-            });
-            chains = this.buildLodChains(baseIds, lods);
+                levelComposites.push(p);
+            }
         }
 
         const childHandles: MeshInstanceHandle[] = [];
@@ -665,21 +671,18 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             const part = composite.parts[i]!;
             const off = offsets[i]!;
             const partPrefab = bucket.get(part.partId) as unknown as Prefab3D;
+            const subLods = levelComposites === null
+                ? undefined
+                : lods!.map((L, k) => ({ prefabId: levelComposites![k]!.parts[i]!.partId, distance: L.distance }));
             const partOpts: MeshInstanceOptions<any> = {
                 ...opts,
                 prefab: partPrefab,
-                lod: undefined, // the composite applies matching-part chains itself
+                lod: subLods,
                 position: [basePos[0] + off.px, basePos[1] + off.py, basePos[2] + off.pz],
                 rotation: [baseRot[0] + off.rx, baseRot[1] + off.ry, baseRot[2] + off.rz],
             };
             const handle = this.add(partOpts);
-            if (handle) {
-                childHandles.push(handle);
-                if (chains !== null) {
-                    const modelIds = chains.levelPartIds.map((lp) => lp[i]!);
-                    this.deps.store.setLodLevels({ slot: handle.slot, modelIds, distSq: chains.distSq });
-                }
-            }
+            if (handle) childHandles.push(handle);
         }
         if (childHandles.length === 0) {
             throw new Error(`instances.add: composite '${composite.id}' produced no parts`);

@@ -24,6 +24,10 @@ export class Camera3D implements Camera3DState, Interpolator {
     far: number = 1000;
     aspect: number = 1;
     movement: 'local' | 'grounded' | 'global' = 'local';
+    /** LOD distance multiplier for this camera (`>1` keeps detail farther out). Default 1. */
+    lodBias: number = 1;
+    /** Whether this camera drives LOD selection. Default true. */
+    lodEnabled: boolean = true;
     /** Ordered fullscreen camera effects. Non-empty enables the off-screen path. */
     readonly effects: CameraEffectList;
 
