@@ -1,6 +1,6 @@
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 
-import { SlotMap } from 'murow/core/slot-map';
+import { SlotMap, SlotSet } from 'murow/core/slot-map';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { TexturePrefab } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS } from '../engine-core/types';
@@ -58,6 +58,8 @@ export class InstanceStore {
     readonly lod: InstanceLodStore;
     /** Per-slot LOD fade companion slot (a ghost at the target level), or -1. */
     private readonly companions: Int32Array;
+    /** Dense set of main slots that currently have an active companion. */
+    private readonly companionSlots: SlotSet;
 
     constructor(private readonly deps: InstanceStoreDeps) {
         const n = deps.maxInstances;
@@ -71,6 +73,7 @@ export class InstanceStore {
         this.textureBGs = new Array(n).fill(null);
         this.lod = new InstanceLodStore(n);
         this.companions = new Int32Array(n).fill(-1);
+        this.companionSlots = new SlotSet(n);
         this.slots = new SlotMap(n);
         this.batcher = new SparseBatcher(n);
     }
@@ -397,6 +400,7 @@ export class InstanceStore {
             this.batcher.add(m, modelId, c);
         }
         this.companions[slot] = c;
+        this.companionSlots.add(slot);
         this.staticDirty = true;
         return c;
     }
@@ -414,18 +418,19 @@ export class InstanceStore {
         this.instanceHandles[c] = null;
         this.slots.remove(c);
         this.companions[slot] = -1;
+        this.companionSlots.remove(slot);
         this.staticDirty = true;
     }
 
-    /** Mirror each companion's transform from its main slot (morph excluded). */
+    /** Mirror each companion's transform from its main slot (morph excluded). O(companions). */
     syncCompanions(): void {
+        const size = this.companionSlots.size;
+        if (size === 0) return;
         const dyn = this.dynamicData;
-        const active = this.slots.activeSlots;
-        const size = this.slots.size;
+        const active = this.companionSlots.denseBuffer;
         for (let i = 0; i < size; i++) {
             const slot = active[i]!;
             const c = this.companions[slot]!;
-            if (c < 0) continue;
             const sDyn = slot * DYNAMIC_MESH_FLOATS, cDyn = c * DYNAMIC_MESH_FLOATS;
             for (let k = 0; k < DYN_MORPH; k++) dyn[cDyn + k] = dyn[sDyn + k]!;
         }

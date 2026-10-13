@@ -70,6 +70,14 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
             helpers: { std, tonemap },
         },
         (input, { mesh, mat }) => {
+        // LOD dithered cross-fade — discarded pixels skip all shading below.
+        const lodMorph = input.vMorph;
+        if (lodMorph > 0.0) {
+            const lodDither = std.fract(std.sin(input.position.x * 12.9898 + input.position.y * 78.233) * 43758.5453);
+            if (lodMorph < 1.0) { if (lodDither < lodMorph) { std.discard(); } }
+            else { if (lodDither >= lodMorph - 1.0) { std.discard(); } }
+        }
+
         const u = mesh.uniforms;
         const m = mat.material;
         const uv = d.vec2f(input.vUV.x * m.uvScaleU + m.uvOffsetU, input.vUV.y * m.uvScaleV + m.uvOffsetV);
@@ -189,13 +197,6 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
         const alpha = std.mul(tex.w, m.opacity);
         if (alpha < m.alphaTest) { std.discard(); }
 
-        // LOD dithered cross-fade: the main slot fades out as `vMorph` goes
-        // 0 -> 1; a companion slot (vMorph 1 -> 2) fades in. Screen-door dither.
-        const morph = input.vMorph;
-        const dither = std.fract(std.sin(input.position.x * 12.9898 + input.position.y * 78.233) * 43758.5453);
-        if (morph < 1.0) { if (dither < morph) { std.discard(); } }
-        else { if (dither >= morph - 1.0) { std.discard(); } }
-
         const mapped = std.tonemap(acc);
         return d.vec4f(mapped.x, mapped.y, mapped.z, alpha);
         },
@@ -205,11 +206,17 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
 export function createUnlitMaterialFragment(_meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
     return GpuShader.fragment(
         {
-            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f },
+            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, vMorph: d.f32, position: d.builtin.position },
             out: d.vec4f,
             bindings: { mat: matLayout },
         },
         (input, { mat }) => {
+        const lodMorph = input.vMorph;
+        if (lodMorph > 0.0) {
+            const lodDither = std.fract(std.sin(input.position.x * 12.9898 + input.position.y * 78.233) * 43758.5453);
+            if (lodMorph < 1.0) { if (lodDither < lodMorph) { std.discard(); } }
+            else { if (lodDither >= lodMorph - 1.0) { std.discard(); } }
+        }
         const m = mat.material;
         const uv = d.vec2f(input.vUV.x * m.uvScaleU + m.uvOffsetU, input.vUV.y * m.uvScaleV + m.uvOffsetV);
         const tex = std.textureSample(mat.map, mat.mapSampler, uv);
@@ -228,11 +235,17 @@ export function createUnlitMaterialFragment(_meshLayout: MeshDataLayout, matLayo
 export function createEmissiveMaterialFragment(_meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
     return GpuShader.fragment(
         {
-            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f },
+            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, vMorph: d.f32, position: d.builtin.position },
             out: d.vec4f,
             bindings: { mat: matLayout },
         },
         (input, { mat }) => {
+        const lodMorph = input.vMorph;
+        if (lodMorph > 0.0) {
+            const lodDither = std.fract(std.sin(input.position.x * 12.9898 + input.position.y * 78.233) * 43758.5453);
+            if (lodMorph < 1.0) { if (lodDither < lodMorph) { std.discard(); } }
+            else { if (lodDither >= lodMorph - 1.0) { std.discard(); } }
+        }
         const m = mat.material;
         const uv = d.vec2f(input.vUV.x * m.uvScaleU + m.uvOffsetU, input.vUV.y * m.uvScaleV + m.uvOffsetV);
         const tex = std.textureSample(mat.map, mat.mapSampler, uv);
