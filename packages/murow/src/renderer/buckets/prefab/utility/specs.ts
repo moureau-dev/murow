@@ -177,7 +177,7 @@ export interface MeshSpec {
  * id); the instance switches to it past `distance`. Ordered near -> far.
  */
 export interface PrefabLodSpec {
-    readonly model: string;
+    readonly prefabId: string;
     readonly distance?: number;
 }
 

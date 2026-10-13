@@ -164,13 +164,13 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         if (lods === undefined && Array.isArray(prefabLods)) lods = prefabLods;
 
         if (prefab?.type === 'composite') {
-            return this.addComposite(resolvedOpts, prefab);
+            return this.addComposite(resolvedOpts, prefab, lods);
         }
 
         const resolved = prefab ? resolvePrefabHandle(prefab) : resolvedOpts.prefab;
 
         if ('parts' in (resolved as ModelHandle | GltfModel)) {
-            return this.addGltf(resolvedOpts, resolved as GltfModel, userPrefabId, materialIds);
+            return this.addGltf(resolvedOpts, resolved as GltfModel, userPrefabId, materialIds, lods);
         }
 
         const modelHandle = resolved as ModelHandle;
@@ -215,15 +215,9 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
 
     /** Resolve one LOD level's model id, or null when unsupported (e.g. multi-part glTF). */
     private resolveLevelModelId(level: LodSpec): number | null {
-        const m = level.model as ModelHandle | GltfModel | Prefab3D | string;
-        let resolved: ModelHandle | GltfModel | Prefab3D = m as never;
-        if (typeof m === 'string') {
-            const prefab = this.deps.prefabs?.get(m) as unknown as Prefab3D | undefined;
-            if (!prefab) return null;
-            resolved = resolvePrefabHandle(prefab);
-        } else if (isPrefab3D(m)) {
-            resolved = resolvePrefabHandle(m);
-        }
+        const prefab = this.deps.prefabs?.get(level.prefabId) as unknown as Prefab3D | undefined;
+        if (!prefab) return null;
+        const resolved = resolvePrefabHandle(prefab);
         if ('parts' in (resolved as GltfModel)) return null;
         return (resolved as ModelHandle).id ?? null;
     }
@@ -548,23 +542,80 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         return allocated ? allocated.item : null;
     }
 
-    private addGltf(opts: MeshInstanceOptions<any>, gltf: GltfModel, prefabId: string | null, materialIds: number[]): MeshInstanceHandle {
+    /**
+     * Model ids of a prefab's parts (one for a single-mesh prefab, N for a
+     * multi-part glTF or a composite). Used to build matching-part LOD chains.
+     */
+    private resolvePartModelIds(prefab: Prefab3D | string): number[] | null {
+        const bucket = this.deps.prefabs;
+        const p = typeof prefab === 'string'
+            ? (bucket?.get(prefab) as unknown as Prefab3D | undefined)
+            : prefab;
+        if (!p) return null;
+        if (p.type === 'composite') {
+            if (!bucket) return null;
+            const ids: number[] = [];
+            for (const part of p.parts) {
+                const partPrefab = bucket.get(part.partId) as unknown as Prefab3D;
+                const r = resolvePrefabHandle(partPrefab);
+                if ('parts' in (r as GltfModel)) return null;
+                ids.push((r as ModelHandle).id);
+            }
+            return ids;
+        }
+        const r = resolvePrefabHandle(p);
+        if ('parts' in (r as GltfModel)) return (r as GltfModel).parts.map((part) => part.id);
+        return [(r as ModelHandle).id];
+    }
+
+    /**
+     * Build matching-part LOD chains: level k's part i is `levelPartIds[k][i]`.
+     * Throws if a level's part count differs from the base (matching structure
+     * is required — levels are lower-detail versions of the same prefab).
+     */
+    private buildLodChains(basePartIds: number[], lods: readonly LodSpec[]): { levelPartIds: number[][]; distSq: number[] } {
+        const levelPartIds: number[][] = [basePartIds];
+        const distSq: number[] = [];
+        for (const level of lods) {
+            const parts = this.resolvePartModelIds(level.prefabId);
+            if (parts === null || parts.length !== basePartIds.length) {
+                throw new Error(
+                    `instances.add: LOD level '${level.prefabId}' has ${parts?.length ?? 0} part(s); the base has ${basePartIds.length}`,
+                );
+            }
+            levelPartIds.push(parts);
+            distSq.push(level.distance === undefined ? Infinity : level.distance * level.distance);
+        }
+        distSq.push(Infinity); // last level renders to the far plane
+        return { levelPartIds, distSq };
+    }
+
+    private addGltf(opts: MeshInstanceOptions<any>, gltf: GltfModel, prefabId: string | null, materialIds: number[], lods: readonly LodSpec[] | undefined): MeshInstanceHandle {
+        const chains = lods !== undefined && lods.length > 0
+            ? this.buildLodChains(gltf.parts.map((p) => p.id), lods)
+            : null;
         const childHandles: MeshInstanceHandle[] = [];
         let firstSkinnedSlot: number | undefined;
 
-        for (const part of gltf.parts) {
-            // LOD is single-model only; a multi-part prefab's parts must not inherit it.
+        for (let i = 0; i < gltf.parts.length; i++) {
+            const part = gltf.parts[i]!;
             const partOpts = { ...opts, prefab: part, lod: undefined };
             const model = this.deps.models.get(part.id);
+            let handle: MeshInstanceHandle | null = null;
             if (model?.skinned) {
-                const handle = this.spawnSkinned(partOpts, part, model.skinIndex, firstSkinnedSlot, prefabId, materialIds, undefined);
+                handle = this.spawnSkinned(partOpts, part, model.skinIndex, firstSkinnedSlot, prefabId, materialIds, undefined);
                 if (handle) {
                     if (firstSkinnedSlot === undefined) firstSkinnedSlot = handle.slot;
                     childHandles.push(handle);
                 }
             } else {
-                const handle = this.spawnStatic(partOpts, part, prefabId, materialIds, undefined);
+                handle = this.spawnStatic(partOpts, part, prefabId, materialIds, undefined);
                 if (handle) childHandles.push(handle);
+            }
+            if (handle !== null && chains !== null) {
+                const modelIds = chains.levelPartIds.map((lp) => lp[i]!);
+                const target = model?.skinned ? this.deps.skinned : this.deps.store;
+                target.setLodLevels({ slot: handle.slot, modelIds, distSq: chains.distSq });
             }
         }
 
@@ -577,7 +628,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         return this.groupHandle(childHandles, lead, gltf.skinned, prefabId, skinnedHandle);
     }
 
-    private addComposite(opts: MeshInstanceOptions<any>, composite: CompositePrefab): MeshInstanceHandle {
+    private addComposite(opts: MeshInstanceOptions<any>, composite: CompositePrefab, lods: readonly LodSpec[] | undefined): MeshInstanceHandle {
         const bucket = this.deps.prefabs;
         if (!bucket) {
             throw new Error(
@@ -596,6 +647,19 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             rz: p.offset?.rotation?.[2] ?? 0,
         }));
 
+        let chains: { levelPartIds: number[][]; distSq: number[] } | null = null;
+        if (lods !== undefined && lods.length > 0) {
+            const baseIds = composite.parts.map((p) => {
+                const pf = bucket.get(p.partId) as unknown as Prefab3D;
+                const r = resolvePrefabHandle(pf);
+                if ('parts' in (r as GltfModel)) {
+                    throw new Error(`instances.add: composite '${composite.id}' part '${p.partId}' is multi-part; not supported`);
+                }
+                return (r as ModelHandle).id;
+            });
+            chains = this.buildLodChains(baseIds, lods);
+        }
+
         const childHandles: MeshInstanceHandle[] = [];
         for (let i = 0; i < composite.parts.length; i++) {
             const part = composite.parts[i]!;
@@ -604,12 +668,18 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             const partOpts: MeshInstanceOptions<any> = {
                 ...opts,
                 prefab: partPrefab,
-                lod: undefined, // LOD is single-model only; parts do not inherit it
+                lod: undefined, // the composite applies matching-part chains itself
                 position: [basePos[0] + off.px, basePos[1] + off.py, basePos[2] + off.pz],
                 rotation: [baseRot[0] + off.rx, baseRot[1] + off.ry, baseRot[2] + off.rz],
             };
             const handle = this.add(partOpts);
-            if (handle) childHandles.push(handle);
+            if (handle) {
+                childHandles.push(handle);
+                if (chains !== null) {
+                    const modelIds = chains.levelPartIds.map((lp) => lp[i]!);
+                    this.deps.store.setLodLevels({ slot: handle.slot, modelIds, distSq: chains.distSq });
+                }
+            }
         }
         if (childHandles.length === 0) {
             throw new Error(`instances.add: composite '${composite.id}' produced no parts`);

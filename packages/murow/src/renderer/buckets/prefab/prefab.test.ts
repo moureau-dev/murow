@@ -148,10 +148,10 @@ describe('PrefabBucket — LOD', () => {
     test('a spec lods field is carried onto the parsed prefab', async () => {
         const bucket = new PrefabBucket('3d').add({
             type: 'cube', id: 'a', size: 1,
-            lods: [{ model: 'b', distance: 10 }],
+            lods: [{ prefabId: 'b', distance: 10 }],
         } as never);
         await bucket.load();
-        expect((bucket.get('a') as { lods?: unknown }).lods).toEqual([{ model: 'b', distance: 10 }]);
+        expect((bucket.get('a') as { lods?: unknown }).lods).toEqual([{ prefabId: 'b', distance: 10 }]);
     });
 
     test('prefab.setLods() assigns a chain after load and can clear it', async () => {
@@ -161,8 +161,8 @@ describe('PrefabBucket — LOD', () => {
         await bucket.load();
 
         const tree = bucket.get('tree_hi');
-        tree.setLods([{ model: 'tree_mid', distance: 40 }]);
-        expect((tree as { lods?: unknown }).lods).toEqual([{ model: 'tree_mid', distance: 40 }]);
+        tree.setLods([{ prefabId: 'tree_mid', distance: 40 }]);
+        expect((tree as { lods?: unknown }).lods).toEqual([{ prefabId: 'tree_mid', distance: 40 }]);
 
         tree.setLods();
         expect((tree as { lods?: unknown }).lods).toBeUndefined();

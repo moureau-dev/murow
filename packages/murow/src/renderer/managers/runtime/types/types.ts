@@ -73,7 +73,8 @@ interface MeshInstance<A extends AssetBucket<'3d', any, any>> {
  * `distance` (it then renders to the far plane).
  */
 export interface LodSpec {
-    model: ModelHandle | Prefab3D | string;
+    /** Prefab id of this level (resolved through the renderer's prefab bucket). */
+    prefabId: string;
     distance?: number;
 }
 
