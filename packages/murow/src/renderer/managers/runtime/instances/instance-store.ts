@@ -1,6 +1,6 @@
 import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent, RawBlendState, RawBuffer, RawBufferSource, RawBufferUsage, RawCanvasContext, RawColorTargetState, RawCommandEncoder, RawComputePipeline, RawDepthStencilState, RawDevice, RawIndexFormat, RawPipelineLayout, RawPrimitiveState, RawRenderPassEncoder, RawRenderPipeline, RawSampler, RawShaderModule, RawShaderStage, RawTexture, RawTextureFormat, RawTextureUsage, RawTextureView, RawVertexBufferLayout } from 'murow/gpu';
 
-import { SlotMap, SlotSet } from 'murow/core/slot-map';
+import { SlotMap } from 'murow/core/slot-map';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { TexturePrefab } from 'murow/renderer';
 import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS } from '../engine-core/types';
@@ -12,8 +12,9 @@ import {
     DYN_CURR_RX, DYN_CURR_RY, DYN_CURR_RZ,
     STAT_SX, STAT_SY, STAT_SZ, STAT_CR, STAT_CG, STAT_CB,
     STAT_MATERIAL_ID, STAT_CUSTOM0, STAT_CUSTOM1,
-    MAX_MATERIALS_PER_INSTANCE, MAX_LOD_LEVELS,
+    MAX_MATERIALS_PER_INSTANCE,
 } from './offsets';
+import { InstanceLodStore } from './lod-store';
 import { resolveTransform } from './transform';
 import { EMPTY_MATERIALS } from './empty-materials';
 
@@ -53,19 +54,8 @@ export class InstanceStore {
     /** Per-slot texture override bind group, or null for the model default. */
     private readonly textureBGs: (RawBindGroup | null)[];
 
-    // --- LOD (level of detail) ---
-    /** Dense membership of slots that have more than one LOD level. */
-    readonly lodSlots: SlotSet;
-    /** Per-slot level count (0 = no LOD). */
-    private readonly lodCount: Uint8Array;
-    /** Per-slot, per-level model id. */
-    private readonly lodModelIds: Uint8Array;
-    /** Per-slot, per-level bounding radius squared (for a future screen-size metric). */
-    private readonly lodRadiusSq: Float32Array;
-    /** Per-slot, per-level max distance squared (last level = Infinity). */
-    private readonly lodDistSq: Float32Array;
-    /** Per-slot currently selected level. */
-    private readonly lodCurrent: Uint8Array;
+    /** Level-of-detail state and selection. */
+    readonly lod: InstanceLodStore;
 
     constructor(private readonly deps: InstanceStoreDeps) {
         const n = deps.maxInstances;
@@ -77,12 +67,7 @@ export class InstanceStore {
         this.materialIds = new Uint16Array(n * MAX_MATERIALS_PER_INSTANCE);
         this.materialCount = new Uint8Array(n);
         this.textureBGs = new Array(n).fill(null);
-        this.lodSlots = new SlotSet(n);
-        this.lodCount = new Uint8Array(n);
-        this.lodModelIds = new Uint8Array(n * MAX_LOD_LEVELS);
-        this.lodRadiusSq = new Float32Array(n * MAX_LOD_LEVELS);
-        this.lodDistSq = new Float32Array(n * MAX_LOD_LEVELS);
-        this.lodCurrent = new Uint8Array(n);
+        this.lod = new InstanceLodStore(n);
         this.slots = new SlotMap(n);
         this.batcher = new SparseBatcher(n);
     }
@@ -231,7 +216,7 @@ export class InstanceStore {
             prefabId: userPrefabId,
             materials: EMPTY_MATERIALS,
             get textureId() { return currentTexId; },
-            get lodLevel() { return self.lodCurrent[slot] ?? 0; },
+            get lodLevel() { return self.lod.levelOf(slot); },
             setPosition(nx: number, ny: number, nz: number) {
                 dyn[dynBase + DYN_CURR_PX] = nx;
                 dyn[dynBase + DYN_CURR_PY] = ny;
@@ -326,9 +311,7 @@ export class InstanceStore {
                     if (m > 0) self.deps.releaseMaterial?.(m);
                 }
                 self.materialCount[slot] = 0;
-                self.lodSlots.remove(slot);
-                self.lodCount[slot] = 0;
-                self.lodCurrent[slot] = 0;
+                self.lod.clear(slot);
                 self.slots.remove(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 stat.fill(0, statBase, statBase + STATIC_MESH_FLOATS);
@@ -346,33 +329,19 @@ export class InstanceStore {
         return handle;
     }
 
-    /**
-     * Attach LOD levels to a slot. `modelIds`/`radiiSq`/`maxDistSq` are ordered
-     * near -> far; level 0 is the model the instance was spawned with. The last
-     * level's `maxDistSq` should be `Infinity`. No-op with fewer than two levels.
-     */
-    setLodLevels(slot: number, modelIds: readonly number[], radiiSq: readonly number[], maxDistSq: readonly number[]): void {
-        const count = Math.min(modelIds.length, MAX_LOD_LEVELS);
-        if (count < 2) return;
-        const base = slot * MAX_LOD_LEVELS;
-        for (let i = 0; i < count; i++) {
-            this.lodModelIds[base + i] = modelIds[i]!;
-            this.lodRadiusSq[base + i] = radiiSq[i]!;
-            this.lodDistSq[base + i] = maxDistSq[i]!;
-        }
-        this.lodCount[slot] = count;
-        this.lodCurrent[slot] = 0;
-        this.lodSlots.add(slot);
-        // Ensure the batcher reflects the (unchanged) level-0 model.
+    /** Attach LOD levels to a slot (near -> far; level 0 is the spawned model). */
+    setLodLevels(slot: number, modelIds: readonly number[], distSq: readonly number[]): void {
+        if (modelIds.length < 2) return;
+        this.lod.setLevels(slot, modelIds, distSq);
         this.instanceModelIds[slot] = modelIds[0]!;
     }
 
-    /** The slot's current LOD level (0 when it has no LOD). */
+    /** The slot's current LOD level (0 when it has no LOD chain). */
     lodLevelOf(slot: number): number {
-        return this.lodCurrent[slot] ?? 0;
+        return this.lod.levelOf(slot);
     }
 
-    /** Swap an instance to another model, moving it in the batcher. */
+    /** Move an instance to another model, relocating it in the batcher. */
     swapModel(slot: number, newModelId: number): void {
         const old = this.instanceModelIds[slot]!;
         if (old === newModelId) return;
@@ -385,47 +354,17 @@ export class InstanceStore {
     }
 
     /**
-     * Select a LOD level per LOD instance from the camera position, swapping the
-     * batcher bucket only on change. `bias` scales every authored distance
-     * (`>1` keeps detail farther out); `hysteresis` is the fractional band that
-     * must be crossed before a change (prevents boundary flicker).
-     * @returns the number of level swaps performed.
+     * Select a level per LOD instance from the camera position, swapping the
+     * batcher bucket only on change (`bias` scales distances, `hysteresis` is the
+     * anti-flicker band). Returns the number of level swaps.
      */
     selectLod(camX: number, camY: number, camZ: number, bias = 1, hysteresis = 0.1): number {
-        const bias2 = bias * bias;
-        const dyn = this.dynamicData;
-        const active = this.lodSlots.denseBuffer;
-        const n = this.lodSlots.size;
-        let swaps = 0;
-        for (let i = 0; i < n; i++) {
-            const slot = active[i]!;
-            const count = this.lodCount[slot]!;
-            if (count < 2) continue;
-            const dynBase = slot * DYNAMIC_MESH_FLOATS;
-            const dx = dyn[dynBase + DYN_CURR_PX]! - camX;
-            const dy = dyn[dynBase + DYN_CURR_PY]! - camY;
-            const dz = dyn[dynBase + DYN_CURR_PZ]! - camZ;
-            const d2 = dx * dx + dy * dy + dz * dz;
-
-            const base = slot * MAX_LOD_LEVELS;
-            let target = 0;
-            while (target < count - 1 && d2 > this.lodDistSq[base + target]! * bias2) target++;
-
-            const cur = this.lodCurrent[slot]!;
-            if (target === cur) continue;
-            if (target > cur) {
-                // Only coarsen once clearly past the current level's boundary.
-                if (d2 <= this.lodDistSq[base + cur]! * bias2 * (1 + hysteresis)) continue;
-            } else {
-                // Only refine once clearly inside the target level's boundary.
-                if (d2 >= this.lodDistSq[base + target]! * bias2 * (1 - hysteresis)) continue;
-            }
-            this.swapModel(slot, this.lodModelIds[base + target]!);
-            this.lodCurrent[slot] = target;
-            swaps++;
-        }
-        return swaps;
+        return this.lod.select(this.dynamicData, camX, camY, camZ, bias, hysteresis, this.applyModelSwap);
     }
+
+    private readonly applyModelSwap = (slot: number, modelId: number): void => {
+        this.swapModel(slot, modelId);
+    };
 
     /** Remove `materialId` from every instance using it (falls back to default). */
     reassignMaterial(materialId: number): void {
