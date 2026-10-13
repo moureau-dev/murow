@@ -64,7 +64,7 @@ type FragInput = {
 export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
     return GpuShader.fragment(
         {
-            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, vMorph: d.f32, frontFacing: d.builtin.frontFacing, position: d.builtin.position },
+            in: { vMorph: d.f32, vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, frontFacing: d.builtin.frontFacing, position: d.builtin.position },
             out: d.vec4f,
             bindings: { mesh: meshLayout, mat: matLayout },
             helpers: { std, tonemap },
@@ -206,7 +206,7 @@ export function createStandardMaterialFragment(meshLayout: MeshDataLayout, matLa
 export function createUnlitMaterialFragment(_meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
     return GpuShader.fragment(
         {
-            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, vMorph: d.f32, position: d.builtin.position },
+            in: { vMorph: d.f32, vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, position: d.builtin.position },
             out: d.vec4f,
             bindings: { mat: matLayout },
         },
@@ -235,7 +235,7 @@ export function createUnlitMaterialFragment(_meshLayout: MeshDataLayout, matLayo
 export function createEmissiveMaterialFragment(_meshLayout: MeshDataLayout, matLayout: EngineMaterialLayout) {
     return GpuShader.fragment(
         {
-            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, vMorph: d.f32, position: d.builtin.position },
+            in: { vMorph: d.f32, vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, position: d.builtin.position },
             out: d.vec4f,
             bindings: { mat: matLayout },
         },

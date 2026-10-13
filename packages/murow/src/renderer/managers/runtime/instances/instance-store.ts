@@ -399,6 +399,8 @@ export class InstanceStore {
             this.materialIds[kC + i] = m;
             this.batcher.add(m, modelId, c);
         }
+        // Inherit the slot's texture override so both levels sample the same map.
+        this.textureBGs[c] = this.textureBGs[slot] ?? null;
         this.companions[slot] = c;
         this.companionSlots.add(slot);
         this.staticDirty = true;
@@ -416,6 +418,7 @@ export class InstanceStore {
         this.dynamicData.fill(0, cDyn, cDyn + DYNAMIC_MESH_FLOATS);
         this.staticData.fill(0, cStat, cStat + STATIC_MESH_FLOATS);
         this.instanceHandles[c] = null;
+        this.textureBGs[c] = null;
         this.slots.remove(c);
         this.companions[slot] = -1;
         this.companionSlots.remove(slot);

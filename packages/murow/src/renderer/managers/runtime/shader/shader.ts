@@ -40,6 +40,7 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             },
             out: {
                 pos: d.builtin.position,
+                vMorph: d.f32,
                 vNormal: d.vec3f,
                 vColor: d.vec3f,
                 vWorldPos: d.vec3f,
@@ -140,6 +141,7 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
             vCustom: d.vec2f(stat.custom0, stat.custom1),
+            vMorph: dyn.morph,
         };
         },
     );
@@ -148,12 +150,18 @@ export function createMeshVertex(meshLayout: MeshDataLayout) {
 export function createMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout) {
     return GpuShader.fragment(
         {
-            in: { vNormal: d.vec3f, vColor: d.vec3f, vWorldPos: d.vec3f },
+            in: { vMorph: d.f32, vNormal: d.vec3f, vColor: d.vec3f, vWorldPos: d.vec3f, position: d.builtin.position },
             out: d.vec4f,
             bindings: { mesh: meshLayout },
             helpers: { std, tonemap },
         },
         (input, { mesh }) => {
+        const lodMorph = input.vMorph;
+        if (lodMorph > 0.0) {
+            const lodDither = std.fract(std.sin(input.position.x * 12.9898 + input.position.y * 78.233) * 43758.5453);
+            if (lodMorph < 1.0) { if (lodDither < lodMorph) { std.discard(); } }
+            else { if (lodDither >= lodMorph - 1.0) { std.discard(); } }
+        }
         const u = mesh.uniforms;
         const baseColor = input.vColor;
         const worldPos = input.vWorldPos;
@@ -225,6 +233,7 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
                 vUV: d.vec2f,
                 vWorldPos: d.vec3f,
                 vCustom: d.vec2f,
+                vMorph: d.f32,
             },
             bindings: { mesh: meshLayout },
         },
@@ -320,6 +329,7 @@ export function createTexturedMeshVertex(meshLayout: MeshDataLayout) {
             vUV: input.uv,
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
             vCustom: d.vec2f(stat.custom0, stat.custom1),
+            vMorph: dyn.morph,
         };
         },
     );
@@ -342,11 +352,11 @@ export function createExtrudedMeshVertex(meshLayout: MeshDataLayout, matLayout: 
             },
             out: {
                 pos: d.builtin.position,
+                vMorph: d.f32,
                 vNormal: d.vec3f,
                 vColor: d.vec3f,
                 vUV: d.vec2f,
                 vWorldPos: d.vec3f,
-                vMorph: d.f32,
                 vCustom: d.vec2f,
             },
             bindings: { mesh: meshLayout, mat: matLayout },
@@ -456,6 +466,7 @@ export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
                 vColor: d.vec3f,
                 vUV: d.vec2f,
                 vCustom: d.vec2f,
+                vMorph: d.f32,
             },
             bindings: { mesh: meshLayout },
         },
@@ -519,6 +530,7 @@ export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vUV: input.uv,
             vCustom: d.vec2f(stat.custom0, stat.custom1),
+            vMorph: dyn.morph,
         };
         },
     );
@@ -527,12 +539,18 @@ export function createUnlitMeshVertex(meshLayout: MeshDataLayout) {
 export function createTexturedMeshFragment(meshLayout: MeshDataLayout | SkinnedMeshDataLayout, texLayout: TextureBindGroupLayout) {
     return GpuShader.fragment(
         {
-            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f },
+            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, vCustom: d.vec2f, vMorph: d.f32, position: d.builtin.position },
             out: d.vec4f,
             bindings: { mesh: meshLayout, tex: texLayout },
             helpers: { std, tonemap },
         },
         (input, { mesh, tex }) => {
+        const lodMorph = input.vMorph;
+        if (lodMorph > 0.0) {
+            const lodDither = std.fract(std.sin(input.position.x * 12.9898 + input.position.y * 78.233) * 43758.5453);
+            if (lodMorph < 1.0) { if (lodDither < lodMorph) { std.discard(); } }
+            else { if (lodDither >= lodMorph - 1.0) { std.discard(); } }
+        }
         const u = mesh.uniforms;
         const worldPos = input.vWorldPos;
         const normal = std.normalize(input.vNormal);
@@ -622,6 +640,7 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
                 vUV: d.vec2f,
                 vWorldPos: d.vec3f,
                 vCustom: d.vec2f,
+                vMorph: d.f32,
             },
             bindings: { mesh: layout },
         },
@@ -759,6 +778,7 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
             vWorldPos: d.vec3f(worldPos.x, worldPos.y, worldPos.z),
             // SkinnedStaticMesh has no custom slots; keep the varying at location 4.
             vCustom: d.vec2f(0.0, 0.0),
+            vMorph: dyn.morph,
         };
         },
     );
@@ -781,11 +801,11 @@ export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, m
             },
             out: {
                 pos: d.builtin.position,
+                vMorph: d.f32,
                 vNormal: d.vec3f,
                 vColor: d.vec3f,
                 vUV: d.vec2f,
                 vWorldPos: d.vec3f,
-                vMorph: d.f32,
                 vCustom: d.vec2f,
             },
             bindings: { mesh: layout, mat: matLayout },
@@ -931,12 +951,18 @@ export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, m
 export function createSkinnedMeshFragment(meshLayout: SkinnedMeshDataLayout) {
     return GpuShader.fragment(
         {
-            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f },
+            in: { vNormal: d.vec3f, vColor: d.vec3f, vUV: d.vec2f, vWorldPos: d.vec3f, vCustom: d.vec2f, vMorph: d.f32, position: d.builtin.position },
             out: d.vec4f,
             bindings: { mesh: meshLayout },
             helpers: { std, tonemap },
         },
         (input, { mesh }) => {
+        const lodMorph = input.vMorph;
+        if (lodMorph > 0.0) {
+            const lodDither = std.fract(std.sin(input.position.x * 12.9898 + input.position.y * 78.233) * 43758.5453);
+            if (lodMorph < 1.0) { if (lodDither < lodMorph) { std.discard(); } }
+            else { if (lodDither >= lodMorph - 1.0) { std.discard(); } }
+        }
         const u = mesh.uniforms;
         const baseColor = input.vColor;
         const worldPos = input.vWorldPos;
