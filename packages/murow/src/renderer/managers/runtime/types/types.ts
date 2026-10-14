@@ -104,8 +104,12 @@ export type Raycast = RaycastBase<MeshInstanceHandle, [number, number, number]>;
 export type RaycastMemo = RaycastMemoBase<MeshInstanceHandle, [number, number, number]>;
 
 export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Renderer3DOptions {
-    /** Occlusion culling. Only active when the backend runtime provides the port. */
-    occlusion?: { enabled?: boolean; debug?: boolean; bias?: number };
+    /**
+     * Occlusion culling. Only active when the backend runtime provides the port.
+     * `interval` is how many ticks between tracked-handle refreshes (default 15);
+     * `bias` is the NDC depth margin, higher = less eager.
+     */
+    occlusion?: { enabled?: boolean; bias?: number; interval?: number };
     maxSkinnedInstances?: number;
     maxBonesPerSkin?: number;
     /** Max simultaneously live dynamic lights. Defaults to 64. */

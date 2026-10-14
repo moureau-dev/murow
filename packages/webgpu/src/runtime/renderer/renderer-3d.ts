@@ -84,6 +84,10 @@ function cameraBasis(
     return outRight;
 }
 
+import { OcclusionTrackerImpl, type OcclusionTrackable, type OcclusionTracker } from './occlusion-tracker';
+export type { OcclusionTrackable, OcclusionTracker } from './occlusion-tracker';
+export { OcclusionTrackerImpl } from './occlusion-tracker';
+
 /** The WebGPU 3D renderer: instances, materials, lights, skinning, and camera effects. */
 export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Base3DRenderer {
     private core!: RendererCore;
@@ -107,6 +111,12 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     private modelBoundsBuffer: import('murow/gpu').RawBuffer | null = null;
     private readonly modelBoundsCapacity = 4096;
     private boundsScratch: Float32Array | null = null;
+
+    // Occlusion trackers: { isOccluded(handle) } caches refreshed on a tick counter.
+    private readonly occlusionTrackers: OcclusionTrackerImpl[] = [];
+    private occlusionTicks = 0;
+    private occlusionPending = false;
+    private readonly occlusionInterval: number;
 
     private readonly skinCull: SkinCull;
 
@@ -153,7 +163,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
      */
     readonly occlusion: {
         enabled: boolean;
-        debug: boolean;
         /** NDC depth margin before culling; higher = less eager. Tunable live. */
         bias: number;
         readonly stats: { batches: number; candidates: number };
@@ -163,6 +172,16 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         readVisibility(): Promise<{ static: Uint32Array; skinned: Uint32Array }>;
         /** Whether an instance handle is currently occluded. */
         isOccluded(handle: { slot: number; skinned?: boolean }): Promise<boolean>;
+        /**
+         * Watch a fixed set of handles. The renderer refreshes their occlusion
+         * state automatically; read it synchronously off the hot path.
+         */
+        track(handles: readonly OcclusionTrackable[]): OcclusionTracker;
+        /**
+         * Refresh every live tracker. Called from `storePreviousState`; no-op
+         * unless `interval` ticks have passed and no readback is in flight.
+         */
+        update(): void;
     };
 
     private hitboxDebug = new HitboxDebugRenderer();
@@ -200,16 +219,25 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.maxTotalBones = this.maxSkinnedInstances * this.maxBonesPerSkin * 2;
 
         const occlusionOptions = (options as WebGPU3DRendererOptions & {
-            occlusion?: { enabled?: boolean; debug?: boolean; bias?: number };
+            occlusion?: { enabled?: boolean; bias?: number; interval?: number };
         }).occlusion;
+        this.occlusionInterval = Math.max(1, occlusionOptions?.interval ?? 15);
         this.occlusion = {
             enabled: occlusionOptions !== undefined && occlusionOptions.enabled !== false,
-            debug: occlusionOptions?.debug ?? false,
             bias: occlusionOptions?.bias ?? 0.005,
             stats: { batches: 0, candidates: 0 },
             readArgs: () => this.runtime.occlusion?.readArgs() ?? Promise.resolve(new Uint32Array(0)),
             readVisibility: () => this.runtime.occlusion?.readVisibility() ?? Promise.resolve({ static: new Uint32Array(0), skinned: new Uint32Array(0) }),
             isOccluded: (handle) => this.runtime.occlusion?.isOccluded(handle) ?? Promise.resolve(false),
+            track: (handles) => {
+                const tracker = new OcclusionTrackerImpl(handles, () => {
+                    const i = this.occlusionTrackers.indexOf(tracker);
+                    if (i >= 0) this.occlusionTrackers.splice(i, 1);
+                });
+                this.occlusionTrackers.push(tracker);
+                return tracker;
+            },
+            update: () => this.updateOcclusionTracks(),
         };
     }
 
@@ -433,6 +461,27 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.instances.selectLod(
             cam[0], cam[1], cam[2],
             this.camera.lodBias, this.instances.lodHysteresis, this.camera.lodEnabled,
+        );
+        // Refresh tracked occlusion on a tick counter, like LOD. The readback is
+        // fire-and-forget: the flags land on the microtask queue, never blocking
+        // the tick, and it is skipped while a previous readback is still in flight.
+        this.occlusion.update();
+    }
+
+    private updateOcclusionTracks(): void {
+        if (this.occlusionTrackers.length === 0) return;
+        if (++this.occlusionTicks < this.occlusionInterval) return;
+        this.occlusionTicks = 0;
+        if (this.occlusionPending) return;
+        const port = this.runtime?.occlusion;
+        if (!port || !this.occlusion.enabled) return;
+        this.occlusionPending = true;
+        port.readVisibility().then(
+            (vis) => {
+                for (let i = 0; i < this.occlusionTrackers.length; i++) this.occlusionTrackers[i]!.apply(vis);
+                this.occlusionPending = false;
+            },
+            () => { this.occlusionPending = false; },
         );
     }
 

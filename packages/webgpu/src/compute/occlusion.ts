@@ -208,7 +208,7 @@ class WebGpuOcclusion implements Occlusion {
     async isOccluded(handle: { slot: number; skinned?: boolean }): Promise<boolean> {
         const vis = await this.readVisibility();
         const arr = handle.skinned ? vis.skinned : vis.static;
-        return (arr[handle.slot >>> 0] || 0) === 0;
+        return arr[handle.slot >>> 0] === 0;
     }
 
     private async readBuffer(b: RawBuffer | null): Promise<Uint32Array> {
