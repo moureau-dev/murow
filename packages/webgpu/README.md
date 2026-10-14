@@ -37,6 +37,7 @@ Shader bodies are parsed from their source at link time, so no build plugin is n
 - **glTF loading** — `.glb` meshes with textures and skinned animation (via `AssetBucket`)
 - **Skeletal animation** — Crossfading, looping, event callbacks; typed animation names
 - **Frustum culling** — Automatic per-instance visibility checks
+- **Occlusion culling** — Optional depth-pyramid (HZB) occlusion, on by default when the backend supports compute (`occlusion: { enabled }`). Static and skinned batches are culled on the GPU; skinned instances collapse in the vertex shader via a per-slot visibility flag, so custom-shader models cull too. Live tunables: `renderer.occlusion.enabled`, `renderer.occlusion.bias`. Read the per-slot result back on the CPU with `await renderer.occlusion.readVisibility()` (1 = drawn, 0 = occluded)
 - **Distance-based animation culling** — Skip compute-shader skinning for instances outside `animationCullDistance`
 - **Composites** — a `{ type: 'composite', parts: [...] }` spec wires several prefabs into one spawnable instance with baked offsets
 - **Instance recycling** — `handle.destroy()` frees slots and bone-matrix blocks; respawns reuse them without growing buffers

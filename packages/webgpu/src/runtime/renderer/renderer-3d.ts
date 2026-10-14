@@ -9,6 +9,7 @@
  */
 
 import type { RawBuffer, RawCommandEncoder, RawRenderPassEncoder } from 'murow/gpu';
+import { RawBufferUsage } from 'murow/gpu';
 import { Base3DRenderer } from 'murow/renderer';
 import { runtime } from '../runtime';
 import { createOcclusion } from '../../compute/occlusion';
@@ -153,11 +154,15 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
      * provides an occlusion port.
      */
     readonly occlusion: {
-        readonly enabled: boolean;
-        readonly debug: boolean;
+        enabled: boolean;
+        debug: boolean;
+        /** NDC depth margin before culling; higher = less eager. Tunable live. */
+        bias: number;
         readonly stats: { batches: number; candidates: number };
         /** Diagnostic readback of the per-batch indirect args (forces a GPU sync). */
         readArgs(): Promise<Uint32Array>;
+        /** Per-slot visibility (1 = drawn, 0 = occluded), async readback. */
+        readVisibility(): Promise<Uint32Array>;
     };
 
     private hitboxDebug = new HitboxDebugRenderer();
@@ -195,13 +200,15 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.maxTotalBones = this.maxSkinnedInstances * this.maxBonesPerSkin * 2;
 
         const occlusionOptions = (options as WebGPU3DRendererOptions & {
-            occlusion?: { enabled?: boolean; debug?: boolean };
+            occlusion?: { enabled?: boolean; debug?: boolean; bias?: number };
         }).occlusion;
         this.occlusion = {
             enabled: occlusionOptions !== undefined && occlusionOptions.enabled !== false,
             debug: occlusionOptions?.debug ?? false,
+            bias: occlusionOptions?.bias ?? 0.005,
             stats: { batches: 0, candidates: 0 },
             readArgs: () => this.runtime.occlusion?.readArgs() ?? Promise.resolve(new Uint32Array(0)),
+            readVisibility: () => this.runtime.occlusion?.readVisibility() ?? Promise.resolve(new Uint32Array(0)),
         };
     }
 
@@ -269,10 +276,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         if (this.occlusion.enabled && this.runtime.occlusion === undefined) {
             // Capacity-sized so models added later (async glTF uploads) fit;
             // repopulated every frame from the live model list.
-            const modelBounds = this.runtime.createRawBuffer(
-                d.arrayOf(d.vec4f, this.modelBoundsCapacity * 2),
-                'storage',
-            );
+            const modelBounds = this.core.device.createBuffer({
+                size: this.modelBoundsCapacity * 8 * 4,
+                usage: RawBufferUsage.STORAGE | RawBufferUsage.COPY_DST | RawBufferUsage.COPY_SRC,
+            });
             this.modelBoundsBuffer = modelBounds;
             this.updateModelBounds();
             // Sized to the full MeshUniforms struct the cull binds (only the
@@ -293,6 +300,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                 },
             );
             this.runtime.occlusion?.configure({ maxBatches: this.maxInstances, maxInstances: this.maxInstances });
+            this.updateModelBounds();
             this.runtime.occlusion?.setDepth(this.core.pipelines.depthTexture);
         }
         this.shadows = managers.shadows; this.decals = managers.decals; this.mainPass = managers.mainPass;
@@ -463,6 +471,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         if (occlusionActive) {
             // Project with the camera the pyramid was built with (last frame).
             if (this.occlusionVp) this.core.device.queue.writeBuffer(this.occlusionVp, 0, this.prevVp);
+            (occ as { bias?: number }).bias = this.occlusion.bias;
             occ!.cull(encoder, occlusionCandidates!, this.instances.occlusionBatches);
             // Skinned instances: cull against their own buffers and clear the
             // per-slot visibility the skinned vertex shader reads.
@@ -556,7 +565,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             bd[i * 8 + 5] = m.centerY;
             bd[i * 8 + 6] = m.centerZ;
         }
-        this.core.device.queue.writeBuffer(buf, 0, bd.subarray(0, n * 8));
+        (this.runtime.occlusion as any)?.writeModelBounds?.(bd, n);
     }
 
     /** Upload instance transforms and bone matrices for the frame's packed batches. */
@@ -595,13 +604,13 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             this.instances.skinnedStore.dynamicData.buffer, this.instances.skinnedStore.dynamicData.byteOffset, this.instances.skinnedStore.dynamicData.byteLength,
         );
 
-        if (this.instances.skinnedStore.staticDirty) {
-            this.core.device.queue.writeBuffer(
-                this.core.pipelines.rawSkinnedStaticBuffer, 0,
-                this.instances.skinnedStore.staticData.buffer, this.instances.skinnedStore.staticData.byteOffset, this.instances.skinnedStore.staticData.byteLength,
-            );
-            this.instances.skinnedStore.staticDirty = false;
-        }
+        // Always upload the skinned static data: the bounds cull reads it and a
+        // missed dirty flip leaves the buffer zeroed.
+        this.core.device.queue.writeBuffer(
+            this.core.pipelines.rawSkinnedStaticBuffer, 0,
+            this.instances.skinnedStore.staticData.buffer, this.instances.skinnedStore.staticData.byteOffset, this.instances.skinnedStore.staticData.byteLength,
+        );
+        this.instances.skinnedStore.staticDirty = false;
 
         // Upload bone matrices from CPU only if GPU compute is not active
         this.animation.flushBoneMatrices();

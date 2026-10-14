@@ -105,7 +105,7 @@ export type RaycastMemo = RaycastMemoBase<MeshInstanceHandle, [number, number, n
 
 export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Renderer3DOptions {
     /** Occlusion culling. Only active when the backend runtime provides the port. */
-    occlusion?: { enabled?: boolean; debug?: boolean };
+    occlusion?: { enabled?: boolean; debug?: boolean; bias?: number };
     maxSkinnedInstances?: number;
     maxBonesPerSkin?: number;
     /** Max simultaneously live dynamic lights. Defaults to 64. */

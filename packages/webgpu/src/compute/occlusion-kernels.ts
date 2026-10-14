@@ -36,6 +36,10 @@ export const FrameParams = d.struct({
     globalsBase: d.u32,
     /** 1 to write the per-slot occlusion visibility, 0 to skip (non-skinned). */
     writeOcclusion: d.u32,
+    /** Extra NDC depth margin added to the tile max before culling. Tunable. */
+    bias: d.f32,
+    /** Floats per static-instance record (9 for static, 8 for skinned). */
+    staticsStride: d.u32,
 });
 
 /** Depth source plus the mip 0 storage target. */
@@ -61,8 +65,8 @@ export const CULL_LAYOUT = new GpuBindGroupLayout({
     slots: { storage: d.arrayOf(d.u32, 1), readwrite: true },
     batches: { storage: d.arrayOf(d.u32, 1) },
     dynamic: { storage: d.arrayOf(DynamicMesh, 1) },
-    statics: { storage: d.arrayOf(StaticMesh, 1) },
-    modelBounds: { storage: d.arrayOf(d.vec4f, 1) },
+    statics: { storage: d.arrayOf(d.f32, 1) },
+    modelBounds: { storage: d.arrayOf(d.f32, 1) },
     vp: { uniform: MeshUniforms },
     hzb: { texture: 'unfilterable-float' },
     args: { storage: d.arrayOf(d.atomic(d.u32), 1), readwrite: true },
@@ -162,9 +166,23 @@ export const cullBody = ({ globalId }, { res }) => {
     const dm = res.dynamic[slot];
     const sm = res.statics[slot];
     // modelBounds holds two vec4 per model: [2*id] = half extents, [2*id+1] = center offset.
-    const halfExtents = d.vec3f(sm.scaleX, sm.scaleY, sm.scaleZ) * res.modelBounds[modelId * d.u32(2)].xyz;
+    const mb = modelId * d.u32(8);
+    const sb = slot * params.staticsStride;
+    const sSX = res.statics[sb];
+    const sSY = res.statics[sb + d.u32(1)];
+    const sSZ = res.statics[sb + d.u32(2)];
+    const halfExtents = d.vec3f(
+        res.modelBounds[mb + d.u32(0)], res.modelBounds[mb + d.u32(1)], res.modelBounds[mb + d.u32(2)],
+    ) * d.vec3f(sSX, sSY, sSZ);
     const center = d.vec3f(dm.currPosX, dm.currPosY, dm.currPosZ)
-        + d.vec3f(sm.scaleX, sm.scaleY, sm.scaleZ) * res.modelBounds[modelId * d.u32(2) + d.u32(1)].xyz;
+        + d.vec3f(sSX, sSY, sSZ)
+            * d.vec3f(res.modelBounds[mb + d.u32(4)], res.modelBounds[mb + d.u32(5)], res.modelBounds[mb + d.u32(6)]);
+
+    // Degenerate box (missing model bounds): never cull, draw it.
+    if (halfExtents.x + halfExtents.y + halfExtents.z < d.f32(0.01)) {
+        if (params.writeOcclusion == d.u32(0)) { const w = std.atomicAdd(res.args[b * d.u32(5) + d.u32(1)], d.u32(1)); res.slots[outputOffset + w] = slot; }
+        return;
+    }
 
     if (params.mipCount == d.u32(0)) {
         if (params.writeOcclusion == d.u32(0)) { const w = std.atomicAdd(res.args[b * d.u32(5) + d.u32(1)], d.u32(1)); res.slots[outputOffset + w] = slot; }
@@ -173,6 +191,7 @@ export const cullBody = ({ globalId }, { res }) => {
 
     let behind = false;
     let nearest = d.f32(1e30);
+    let farthest = d.f32(-1e30);
     let minX = d.f32(1e30);
     let minY = d.f32(1e30);
     let maxX = d.f32(-1e30);
@@ -186,6 +205,7 @@ export const cullBody = ({ globalId }, { res }) => {
         if (clip.w <= d.f32(0)) { behind = true; }
         const ndc = clip.xyz / clip.w;
         nearest = std.min(nearest, ndc.z);
+        farthest = std.max(farthest, ndc.z);
         const px = (ndc.x * d.f32(0.5) + d.f32(0.5)) * d.f32(params.screenW);
         const py = (d.f32(1) - (ndc.y * d.f32(0.5) + d.f32(0.5))) * d.f32(params.screenH);
         minX = std.min(minX, px);
@@ -208,7 +228,7 @@ export const cullBody = ({ globalId }, { res }) => {
         // Sample a mip finer than the object's own size so the object spans
         // several tiles: culling then requires the occluder to cover the whole
         // footprint, instead of a single oversized tile.
-        mip = d.u32(std.max(d.f32(0), std.ceil(std.log2(extent)) - d.f32(3)));
+        mip = d.u32(std.max(d.f32(0), std.ceil(std.log2(extent)) - d.f32(4)));
     }
     mip = std.min(mip, params.mipCount - d.u32(1));
 
@@ -244,14 +264,8 @@ export const cullBody = ({ globalId }, { res }) => {
         }
     }
 
-    if (nearest > tileMax + d.f32(0.002)) {
-        // reason 2: culled by the depth test (record nearest / tileMax / mip)
+    if (nearest > tileMax + params.bias) {
         if (params.writeOcclusion == d.u32(1)) { res.occlusion[slot] = d.u32(0); }
-        const db = params.debugBase + b * d.u32(4);
-        std.atomicStore(res.args[db + d.u32(0)], d.u32(std.max(d.f32(0), nearest) * d.f32(10000.0)));
-        std.atomicStore(res.args[db + d.u32(1)], d.u32(tileMax * d.f32(10000.0)));
-        std.atomicStore(res.args[db + d.u32(2)], modelId);
-        std.atomicStore(res.args[db + d.u32(3)], d.u32(2));
         return;
     }
     if (params.writeOcclusion == d.u32(0)) { const w = std.atomicAdd(res.args[b * d.u32(5) + d.u32(1)], d.u32(1)); res.slots[outputOffset + w] = slot; }

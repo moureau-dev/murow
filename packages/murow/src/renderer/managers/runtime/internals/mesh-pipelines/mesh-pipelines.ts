@@ -283,7 +283,10 @@ export class MeshPipelines {
         this.rawSkinnedDynamicBuffer = this.runtime.createRawBuffer(d.arrayOf(DynamicMesh, msi), 'storage');
         this.rawSkinnedStaticBuffer = this.runtime.createRawBuffer(d.arrayOf(SkinnedStaticMesh, msi), 'storage');
         this.rawSkinnedSlotIndexBuffer = this.runtime.createRawBuffer(d.arrayOf(d.u32, msi), 'storage');
-        this.rawSkinnedOcclusionBuffer = this.runtime.createRawBuffer(d.arrayOf(d.u32, msi), 'storage');
+        this.rawSkinnedOcclusionBuffer = this.device.createBuffer({
+            size: msi * 4,
+            usage: RawBufferUsage.STORAGE | RawBufferUsage.COPY_DST | RawBufferUsage.COPY_SRC,
+        });
         this.rawBoneMatrixBuffer = this.runtime.createRawBuffer(d.arrayOf(d.mat4x4f, maxTotalBones), 'storage');
 
         this.rebuildSkinnedBindGroup();

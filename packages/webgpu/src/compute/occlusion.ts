@@ -104,6 +104,9 @@ class WebGpuOcclusion implements Occlusion {
     private frameParams: RawBuffer | null = null;
     private batchTableCPU = new Uint32Array(0);
     private frameParamsCPU = new Uint32Array(12);
+    private readonly frameParamsF32 = new Float32Array(12);
+    /** NDC depth margin before culling. Higher = less eager. Tunable at runtime. */
+    bias = 0.005;
 
     private hzb: [RawTexture, RawTexture] | null = null;
     private hzbW0 = 0;
@@ -184,6 +187,22 @@ class WebGpuOcclusion implements Occlusion {
         if (this.candidateSlots) this.rebuildCullBG();
     }
 
+    /** CPU readback of the per-slot visibility (1 = drawn, 0 = culled). */
+    async readVisibility(): Promise<Uint32Array> {
+        const b = this.deps.occlusionBuffer;
+        if (!b) return new Uint32Array(0);
+        const size = (b as any).size as number;
+        const staging = this.device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        const encoder = this.device.createCommandEncoder();
+        encoder.copyBufferToBuffer(b, 0, staging, 0, size);
+        this.device.queue.submit([encoder.finish()]);
+        await staging.mapAsync(GPUMapMode.READ);
+        const out = new Uint32Array(staging.getMappedRange().slice(0));
+        staging.unmap();
+        staging.destroy();
+        return out;
+    }
+
     async readArgs(): Promise<Uint32Array> {
         const args = this.args;
         if (!args) return new Uint32Array(0);
@@ -241,10 +260,14 @@ class WebGpuOcclusion implements Occlusion {
         const count = batches.length;
         if (count === 0 || !this.args || !this.resetBG) return;
 
+        // Reset to the default (non-skinned) buffers when none are passed, so the
+        // static and skinned passes don't leave each other's bindings in place.
         let rebuild = candidateSlots !== this.candidateSlots;
         this.candidateSlots = candidateSlots;
-        if (dynamicBuffer !== undefined && dynamicBuffer !== this.cullDynamic) { this.cullDynamic = dynamicBuffer; rebuild = true; }
-        if (staticBuffer !== undefined && staticBuffer !== this.cullStatic) { this.cullStatic = staticBuffer; rebuild = true; }
+        const dyn = dynamicBuffer ?? this.deps.dynamicBuffer;
+        const st = staticBuffer ?? this.deps.staticBuffer;
+        if (dyn !== this.cullDynamic) { this.cullDynamic = dyn; rebuild = true; }
+        if (st !== this.cullStatic) { this.cullStatic = st; rebuild = true; }
         if (rebuild) this.rebuildCullBG();
         if (!this.cullBG) return;
         this.writeOcclusion = writeOcclusion;
@@ -276,6 +299,8 @@ class WebGpuOcclusion implements Occlusion {
         params[6] = (this.maxBatches * ARGS_STRIDE) >>> 0;
         params[7] = (this.maxBatches * (ARGS_STRIDE + 4)) >>> 0;
         params[8] = this.writeOcclusion ? 1 : 0;
+        this.frameParamsF32[9] = this.bias;
+        params[10] = writeOcclusion ? 8 : 9;
         this.device.queue.writeBuffer(this.frameParams!, 0, params);
 
         const reset = encoder.beginComputePass();
@@ -289,6 +314,11 @@ class WebGpuOcclusion implements Occlusion {
         pass.setBindGroup(0, this.cullBG[this.builtChain]);
         pass.dispatchWorkgroups(ceilDiv(maxCandidates, WORKGROUP), count);
         pass.end();
+    }
+
+    /** Write the per-model bounds into the buffer the cull binds. */
+    writeModelBounds(data: Float32Array, count: number): void {
+        this.device.queue.writeBuffer(this.deps.modelBounds, 0, data.subarray(0, count * 8));
     }
 
     destroy(): void {
