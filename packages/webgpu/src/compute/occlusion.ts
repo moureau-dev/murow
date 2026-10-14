@@ -139,7 +139,11 @@ class WebGpuOcclusion implements Occlusion {
     /** Buffers the current cull bind group points at (default: non-skinned). */
     private cullDynamic: RawBuffer | null = null;
     private cullStatic: RawBuffer | null = null;
+    private cullVis: RawBuffer | null = null;
     private writeOcclusion = false;
+    /** Non-skinned per-slot visibility (skinned lives on the renderer deps). */
+    private staticVis: RawBuffer | null = null;
+    private visOnes = new Uint32Array(0);
 
     constructor(root: { device: RawDevice }, deps: CreateOcclusionDeps) {
         this.device = root.device;
@@ -176,6 +180,10 @@ class WebGpuOcclusion implements Occlusion {
             usage: RawBufferUsage.UNIFORM | RawBufferUsage.COPY_DST,
         });
         this.batchTableCPU = new Uint32Array(this.maxBatches * BATCH_STRIDE);
+        this.staticVis = device.createBuffer({
+            size: this.maxInstances * 4,
+            usage: RawBufferUsage.STORAGE | RawBufferUsage.COPY_DST | RawBufferUsage.COPY_SRC,
+        });
 
         this.ensurePipelines();
         this.ensureHzb();
@@ -188,8 +196,22 @@ class WebGpuOcclusion implements Occlusion {
     }
 
     /** CPU readback of the per-slot visibility (1 = drawn, 0 = culled). */
-    async readVisibility(): Promise<Uint32Array> {
-        const b = this.deps.occlusionBuffer;
+    async readVisibility(): Promise<{ static: Uint32Array; skinned: Uint32Array }> {
+        const [statics, skinned] = await Promise.all([
+            this.readBuffer(this.staticVis),
+            this.readBuffer(this.deps.occlusionBuffer ?? null),
+        ]);
+        return { static: statics, skinned };
+    }
+
+    /** Whether an instance handle is currently occluded (not drawn). */
+    async isOccluded(handle: { slot: number; skinned?: boolean }): Promise<boolean> {
+        const vis = await this.readVisibility();
+        const arr = handle.skinned ? vis.skinned : vis.static;
+        return (arr[handle.slot >>> 0] || 0) === 0;
+    }
+
+    private async readBuffer(b: RawBuffer | null): Promise<Uint32Array> {
         if (!b) return new Uint32Array(0);
         const size = (b as any).size as number;
         const staging = this.device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
@@ -268,9 +290,18 @@ class WebGpuOcclusion implements Occlusion {
         const st = staticBuffer ?? this.deps.staticBuffer;
         if (dyn !== this.cullDynamic) { this.cullDynamic = dyn; rebuild = true; }
         if (st !== this.cullStatic) { this.cullStatic = st; rebuild = true; }
+        const vis = (writeOcclusion ? this.deps.occlusionBuffer : this.staticVis) ?? this.staticVis;
+        if (vis !== this.cullVis) { this.cullVis = vis; rebuild = true; }
         if (rebuild) this.rebuildCullBG();
         if (!this.cullBG) return;
         this.writeOcclusion = writeOcclusion;
+
+        // Reset every slot to visible; the cull clears the ones it rejects.
+        if (vis) {
+            const n = (((vis as any).size as number) / 4) | 0;
+            if (this.visOnes.length < n) this.visOnes = new Uint32Array(n).fill(1);
+            this.device.queue.writeBuffer(vis, 0, this.visOnes.subarray(0, n));
+        }
 
         const table = this.batchTableCPU;
         let maxCandidates = 0;
@@ -464,7 +495,7 @@ class WebGpuOcclusion implements Occlusion {
                 { binding: 6, resource: this.sampledView(this.hzb[chain]) },
                 { binding: 7, resource: { buffer: this.args } },
                 { binding: 8, resource: { buffer: this.frameParams } },
-                { binding: 9, resource: { buffer: this.deps.occlusionBuffer ?? this.frameParams } },
+                { binding: 9, resource: { buffer: this.cullVis ?? this.staticVis ?? this.deps.occlusionBuffer ?? this.frameParams } },
             ]);
         this.cullBG = [group(0), group(1)];
     }
@@ -506,9 +537,12 @@ class WebGpuOcclusion implements Occlusion {
         this.batchTable?.destroy();
         this.args?.destroy();
         this.frameParams?.destroy();
+        this.staticVis?.destroy();
         this.batchTable = null;
         this.args = null;
         this.frameParams = null;
+        this.staticVis = null;
+        this.cullVis = null;
         this.resetBG = null;
         this.candidateSlots = null;
     }

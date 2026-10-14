@@ -96,8 +96,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     private readonly maxSkinnedInstances: number;
     private readonly maxBonesPerSkin: number;
-    /** Reused "all visible" reset for the skinned occlusion buffer. */
-    private skinnedOcclusionReset: Uint32Array | null = null;
     /**
      * View-projection the occlusion cull uses. The pyramid is built from the
      * previous frame's depth, so the cull must project with the same camera the
@@ -162,7 +160,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         /** Diagnostic readback of the per-batch indirect args (forces a GPU sync). */
         readArgs(): Promise<Uint32Array>;
         /** Per-slot visibility (1 = drawn, 0 = occluded), async readback. */
-        readVisibility(): Promise<Uint32Array>;
+        readVisibility(): Promise<{ static: Uint32Array; skinned: Uint32Array }>;
+        /** Whether an instance handle is currently occluded. */
+        isOccluded(handle: { slot: number; skinned?: boolean }): Promise<boolean>;
     };
 
     private hitboxDebug = new HitboxDebugRenderer();
@@ -208,7 +208,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             bias: occlusionOptions?.bias ?? 0.005,
             stats: { batches: 0, candidates: 0 },
             readArgs: () => this.runtime.occlusion?.readArgs() ?? Promise.resolve(new Uint32Array(0)),
-            readVisibility: () => this.runtime.occlusion?.readVisibility() ?? Promise.resolve(new Uint32Array(0)),
+            readVisibility: () => this.runtime.occlusion?.readVisibility() ?? Promise.resolve({ static: new Uint32Array(0), skinned: new Uint32Array(0) }),
+            isOccluded: (handle) => this.runtime.occlusion?.isOccluded(handle) ?? Promise.resolve(false),
         };
     }
 
@@ -623,15 +624,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             );
         }
 
-        // Default every skinned slot to visible. The occlusion cull clears the
-        // slots it culls, and the skinned vertex shader collapses a 0 slot.
-        const occBuf = this.core.pipelines.rawSkinnedOcclusionBuffer;
-        if (occBuf) {
-            if (this.skinnedOcclusionReset === null || this.skinnedOcclusionReset.length !== this.maxSkinnedInstances) {
-                this.skinnedOcclusionReset = new Uint32Array(this.maxSkinnedInstances).fill(1);
-            }
-            this.core.device.queue.writeBuffer(occBuf, 0, this.skinnedOcclusionReset);
-        }
+        // (Skinned slot visibility is reset to 1 by the occlusion cull pass; the
+        // cull clears the slots it rejects and the vertex shader collapses a 0.)
     }
 
     /** Delegate each shadow pass to its manager (caster gather plus encode). */

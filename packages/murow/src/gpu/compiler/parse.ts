@@ -304,6 +304,14 @@ class Parser {
                 this.consumeSemicolon();
                 return [discardStmt()];
             }
+            if (token.value === 'void') {
+                // `void expr;` discards a value; treat it as a no-op statement.
+                // Bundlers rewrite bare statements into `void expr`, so tolerate it.
+                this.next();
+                this.parseExpression();
+                this.consumeSemicolon();
+                return [];
+            }
         }
         // Expression statement, possibly a comma sequence (`a = x, b = y`).
         const stmts: IrStmt[] = [];

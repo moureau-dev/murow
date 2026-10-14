@@ -127,8 +127,10 @@ export interface Occlusion {
      * per batch). Diagnostic only; forces a GPU-to-CPU sync.
      */
     readArgs(): Promise<Uint32Array>;
-    /** Async readback of per-slot visibility (1 = drawn, 0 = occluded). */
-    readVisibility?(): Promise<Uint32Array>;
+    /** Async readback of per-slot visibility (1 = drawn, 0 = occluded), keyed by batch type. */
+    readVisibility?(): Promise<{ static: Uint32Array; skinned: Uint32Array }>;
+    /** Whether an instance handle is currently occluded. */
+    isOccluded?(handle: { slot: number; skinned?: boolean }): Promise<boolean>;
     /**
      * Cull candidates against the last-built pyramid and write, per batch, the
      * compacted visible-slot region and indirect draw args. `candidateSlots` is

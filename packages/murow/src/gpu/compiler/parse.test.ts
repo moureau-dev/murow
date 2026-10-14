@@ -98,6 +98,11 @@ describe('parseShaderBody', () => {
         expect(() => wgsl('(_v, _m, s) => s.vec4f(unknownThing, 0, 0, 1)')).toThrow();
     });
 
+    test('tolerates a void no-op statement (bundler rewrite)', () => {
+        const body = onlyBody('(_v, _m, s) => { const frame = s.vec4f(0, 0, 0, 1); void frame; return frame; }');
+        expect(body.length).toBeGreaterThan(0);
+    });
+
     test('lowers a for loop to init plus a guarded loop', () => {
         const body = onlyBody(
             '(_v, _m, s) => { for (let i = d.u32(1); i <= d.u32(7); i = i + d.u32(1)) { } return s.vec4f(0, 0, 0, 1); }',

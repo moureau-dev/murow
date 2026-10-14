@@ -162,7 +162,7 @@ export const cullBody = ({ globalId }, { res }) => {
     if (ci >= candidateCount) { return; }
 
     const slot = res.slots[candidateOffset + ci];
-    if (params.writeOcclusion == d.u32(1)) { res.occlusion[slot] = d.u32(1); }
+    res.occlusion[slot] = d.u32(1);
     const dm = res.dynamic[slot];
     const sm = res.statics[slot];
     // modelBounds holds two vec4 per model: [2*id] = half extents, [2*id+1] = center offset.
@@ -265,7 +265,7 @@ export const cullBody = ({ globalId }, { res }) => {
     }
 
     if (nearest > tileMax + params.bias) {
-        if (params.writeOcclusion == d.u32(1)) { res.occlusion[slot] = d.u32(0); }
+        res.occlusion[slot] = d.u32(0);
         return;
     }
     if (params.writeOcclusion == d.u32(0)) { const w = std.atomicAdd(res.args[b * d.u32(5) + d.u32(1)], d.u32(1)); res.slots[outputOffset + w] = slot; }
