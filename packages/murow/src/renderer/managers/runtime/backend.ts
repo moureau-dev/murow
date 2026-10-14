@@ -132,7 +132,14 @@ export interface Occlusion {
      * compacted visible-slot region and indirect draw args. `candidateSlots` is
      * the packed candidate slot list (indexed by each batch's candidateOffset).
      */
-    cull(encoder: RawCommandEncoder, candidateSlots: RawBuffer, batches: readonly OcclusionBatch[]): void;
+    cull(
+        encoder: RawCommandEncoder,
+        candidateSlots: RawBuffer,
+        batches: readonly OcclusionBatch[],
+        dynamicBuffer?: RawBuffer,
+        staticBuffer?: RawBuffer,
+        writeOcclusion?: boolean,
+    ): void;
     /** Compacted visible slots the mesh VS reads (batch region = outputOffset). */
     readonly visibleSlots: RawBuffer | null;
     /** Per-batch `drawIndexedIndirect` args buffer. */

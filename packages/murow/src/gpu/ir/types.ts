@@ -73,7 +73,7 @@ export function texture(
     base: GpuScalar,
     dim: TextureDim,
     access: TextureAccess,
-    opts: { depth?: boolean; format?: string } = {},
+    opts: { depth?: boolean; format?: string; sampleType?: string } = {},
 ): TextureType {
     return {
         kind: 'texture',
@@ -82,6 +82,7 @@ export function texture(
         access,
         ...(opts.depth ? { depth: true } : {}),
         ...(opts.format ? { format: opts.format } : {}),
+        ...(opts.sampleType ? { sampleType: opts.sampleType } : {}),
     };
 }
 

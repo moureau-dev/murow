@@ -617,6 +617,9 @@ export function createSkinnedMeshLayout(maxInstances: number, maxBones: number, 
         // operator, and the vertex shader reads them as full mat4x4f values.
         boneMatrices: { storage: d.arrayOf(d.mat4x4f, maxBones) },
         lights: { storage: d.arrayOf(Light, maxLights) },
+        // Per-slot occlusion visibility (1 = draw, 0 = culled). Written by the
+        // occlusion cull; a 0 collapses the instance to a clipped position.
+        occlusion: { storage: d.arrayOf(d.u32, maxInstances) },
     });
 }
 
@@ -771,7 +774,7 @@ export function createSkinnedMeshVertex(layout: SkinnedMeshDataLayout) {
         const clipPos = mesh.uniforms.viewProjection * worldPos as unknown as d.v4f;
 
         return {
-            pos: clipPos,
+            pos: std.select(clipPos, d.vec4f(0.0, 0.0, 2.0, 1.0), mesh.occlusion[slot] == d.u32(0)),
             vNormal: nRx,
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vUV: input.uv,
@@ -929,7 +932,7 @@ export function createExtrudedSkinnedMeshVertex(layout: SkinnedMeshDataLayout, m
         const clipPos = mesh.uniforms.viewProjection * worldPos as unknown as d.v4f;
 
         return {
-            pos: clipPos,
+            pos: std.select(clipPos, d.vec4f(0.0, 0.0, 2.0, 1.0), mesh.occlusion[slot] == d.u32(0)),
             vNormal: nRx,
             vColor: d.vec3f(stat.colorR, stat.colorG, stat.colorB),
             vUV: input.uv,

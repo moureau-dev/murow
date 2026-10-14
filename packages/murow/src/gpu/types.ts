@@ -60,6 +60,8 @@ export interface TextureType {
     readonly depth?: boolean;
     /** Storage-texture format, for example `rgba16float`. Storage textures only. */
     readonly format?: string;
+    /** Sample type of a sampled texture, for example `unfilterable-float`. */
+    readonly sampleType?: string;
 }
 
 export interface SamplerType {

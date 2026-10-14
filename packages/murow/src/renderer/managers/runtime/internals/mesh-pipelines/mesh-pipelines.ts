@@ -94,6 +94,8 @@ export class MeshPipelines {
     rawSkinnedDynamicBuffer!: RawBuffer;
     rawSkinnedStaticBuffer!: RawBuffer;
     rawSkinnedSlotIndexBuffer!: RawBuffer;
+    /** Per-slot occlusion visibility written by the cull, read by the VS. */
+    rawSkinnedOcclusionBuffer!: RawBuffer;
     rawBoneMatrixBuffer!: RawBuffer;
 
     rawPipeline!: RawRenderPipeline;
@@ -281,6 +283,7 @@ export class MeshPipelines {
         this.rawSkinnedDynamicBuffer = this.runtime.createRawBuffer(d.arrayOf(DynamicMesh, msi), 'storage');
         this.rawSkinnedStaticBuffer = this.runtime.createRawBuffer(d.arrayOf(SkinnedStaticMesh, msi), 'storage');
         this.rawSkinnedSlotIndexBuffer = this.runtime.createRawBuffer(d.arrayOf(d.u32, msi), 'storage');
+        this.rawSkinnedOcclusionBuffer = this.runtime.createRawBuffer(d.arrayOf(d.u32, msi), 'storage');
         this.rawBoneMatrixBuffer = this.runtime.createRawBuffer(d.arrayOf(d.mat4x4f, maxTotalBones), 'storage');
 
         this.rebuildSkinnedBindGroup();
@@ -394,6 +397,7 @@ export class MeshPipelines {
                 { binding: 3, resource: { buffer: this.rawSkinnedSlotIndexBuffer } },
                 { binding: 4, resource: { buffer: this.rawBoneMatrixBuffer } },
                 { binding: 5, resource: { buffer: this.rawLightBuffer } },
+                { binding: 6, resource: { buffer: this.rawSkinnedOcclusionBuffer } },
             ],
         });
     }
@@ -409,6 +413,7 @@ export class MeshPipelines {
         this.rawSkinnedDynamicBuffer?.destroy();
         this.rawSkinnedStaticBuffer?.destroy();
         this.rawSkinnedSlotIndexBuffer?.destroy();
+        this.rawSkinnedOcclusionBuffer?.destroy();
         this.rawBoneMatrixBuffer?.destroy();
     }
 }

@@ -95,6 +95,19 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     private readonly maxSkinnedInstances: number;
     private readonly maxBonesPerSkin: number;
+    /** Reused "all visible" reset for the skinned occlusion buffer. */
+    private skinnedOcclusionReset: Uint32Array | null = null;
+    /**
+     * View-projection the occlusion cull uses. The pyramid is built from the
+     * previous frame's depth, so the cull must project with the same camera the
+     * pyramid was built with; using the current one makes silhouettes flicker.
+     */
+    private occlusionVp: import('murow/gpu').RawBuffer | null = null;
+    private readonly prevVp = new Float32Array(16);
+    /** Per-model [half, center] bounds buffer the occlusion cull reads. */
+    private modelBoundsBuffer: import('murow/gpu').RawBuffer | null = null;
+    private readonly modelBoundsCapacity = 4096;
+    private boundsScratch: Float32Array | null = null;
 
     private readonly skinCull: SkinCull;
 
@@ -249,22 +262,22 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         // GPU geomorph: blend adjacent LOD levels over ~8 ticks (set 0 to hard-switch).
         this.instances.lodFadeTicks = 8;
 
+        // Models must exist before the occlusion port reads their bounds.
+        if (this._prefabs) { await this.models.upload(this._assets!); }
+
         // Build the occlusion port once the depth + instance buffers exist.
         if (this.occlusion.enabled && this.runtime.occlusion === undefined) {
-            const models = this.core.models.models;
-            const modelCount = Math.max(1, models.length);
+            // Capacity-sized so models added later (async glTF uploads) fit;
+            // repopulated every frame from the live model list.
             const modelBounds = this.runtime.createRawBuffer(
-                d.arrayOf(d.vec4f, modelCount),
+                d.arrayOf(d.vec4f, this.modelBoundsCapacity * 2),
                 'storage',
             );
-            const boundsData = new Float32Array(modelCount * 4);
-            for (let i = 0; i < models.length; i++) {
-                const m = models[i]!;
-                boundsData[i * 4] = m.halfX;
-                boundsData[i * 4 + 1] = m.halfY;
-                boundsData[i * 4 + 2] = m.halfZ;
-            }
-            this.core.device.queue.writeBuffer(modelBounds as never, 0, boundsData);
+            this.modelBoundsBuffer = modelBounds;
+            this.updateModelBounds();
+            // Sized to the full MeshUniforms struct the cull binds (only the
+            // leading mat4 is written; the rest is uniform padding).
+            this.occlusionVp = this.runtime.createRawBuffer(d.arrayOf(d.f32, 40), 'uniform');
             (this.runtime as { occlusion?: import('murow/renderer/managers').RendererRuntime['occlusion'] }).occlusion = createOcclusion(
                 { device: this.core.device },
                 {
@@ -273,7 +286,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                     dynamicBuffer: this.core.pipelines.rawDynamicBuffer,
                     staticBuffer: this.core.pipelines.rawStaticBuffer,
                     modelBounds,
-                    viewProjection: this.core.pipelines.rawUniformBuffer,
+                    viewProjection: this.occlusionVp,
+                    occlusionBuffer: this.core.pipelines.rawSkinnedOcclusionBuffer,
                     maxInstances: this.maxInstances,
                     maxBatches: this.maxInstances,
                 },
@@ -283,7 +297,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         }
         this.shadows = managers.shadows; this.decals = managers.decals; this.mainPass = managers.mainPass;
         this.raycast = managers.raycast; this.interpolators = managers.interpolators as never;
-        if (this._prefabs) { await this.models.upload(this._assets!); }
 
         this.hitboxDebug.init(this.runtime, this.core.device, this.core.format);
         this.resize = new ResizeController(
@@ -448,7 +461,21 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         // Cull candidates against the pyramid built from last frame's depth.
         if (occlusionActive) {
+            // Project with the camera the pyramid was built with (last frame).
+            if (this.occlusionVp) this.core.device.queue.writeBuffer(this.occlusionVp, 0, this.prevVp);
             occ!.cull(encoder, occlusionCandidates!, this.instances.occlusionBatches);
+            // Skinned instances: cull against their own buffers and clear the
+            // per-slot visibility the skinned vertex shader reads.
+            if (this.instances.skinnedOcclusionBatchCount > 0) {
+                occ!.cull(
+                    encoder,
+                    this.core.pipelines.rawSkinnedSlotIndexBuffer,
+                    this.instances.skinnedOcclusionBatches,
+                    this.core.pipelines.rawSkinnedDynamicBuffer,
+                    this.core.pipelines.rawSkinnedStaticBuffer,
+                    true,
+                );
+            }
         }
         let candidateTotal = 0;
         for (let i = 0; i < this.instances.occlusionBatchCount; i++) {
@@ -493,6 +520,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.renderPost(encoder, swapchainView, enabledEffects);
 
         this.core.device.queue.submit([encoder.finish()]);
+        // Remember this frame's camera for next frame's cull.
+        this.prevVp.set(vpMatrix);
     }
 
     /** Advance the render clock and skeletal animations; returns the frame delta. */
@@ -508,8 +537,31 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         return frameDelta;
     }
 
+    /** Refresh the per-model bounds the occlusion cull reads (models can load late). */
+    private updateModelBounds(): void {
+        const buf = this.modelBoundsBuffer;
+        if (!buf) return;
+        const models = this.core.models.models;
+        const n = Math.min(models.length, this.modelBoundsCapacity);
+        if (this.boundsScratch === null || this.boundsScratch.length < n * 8) {
+            this.boundsScratch = new Float32Array(Math.max(n, 1) * 8);
+        }
+        const bd = this.boundsScratch;
+        for (let i = 0; i < n; i++) {
+            const m = models[i]!;
+            bd[i * 8] = m.halfX;
+            bd[i * 8 + 1] = m.halfY;
+            bd[i * 8 + 2] = m.halfZ;
+            bd[i * 8 + 4] = m.centerX;
+            bd[i * 8 + 5] = m.centerY;
+            bd[i * 8 + 6] = m.centerZ;
+        }
+        this.core.device.queue.writeBuffer(buf, 0, bd.subarray(0, n * 8));
+    }
+
     /** Upload instance transforms and bone matrices for the frame's packed batches. */
     private uploadInstanceBuffers(): void {
+        this.updateModelBounds();
         // Pick a level per LOD instance from the (interpolated) camera before culling.
         // Gather, cull and pack the visible batch lists into the manager.
         this.instances.prepareFrame(this.core.frustum);
@@ -560,6 +612,16 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                 this.instances.skinnedStore.slotIndexData.buffer, this.instances.skinnedStore.slotIndexData.byteOffset,
                 this.instances.skinnedSlotIndexCount * 4,
             );
+        }
+
+        // Default every skinned slot to visible. The occlusion cull clears the
+        // slots it culls, and the skinned vertex shader collapses a 0 slot.
+        const occBuf = this.core.pipelines.rawSkinnedOcclusionBuffer;
+        if (occBuf) {
+            if (this.skinnedOcclusionReset === null || this.skinnedOcclusionReset.length !== this.maxSkinnedInstances) {
+                this.skinnedOcclusionReset = new Uint32Array(this.maxSkinnedInstances).fill(1);
+            }
+            this.core.device.queue.writeBuffer(occBuf, 0, this.skinnedOcclusionReset);
         }
     }
 

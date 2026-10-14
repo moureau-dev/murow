@@ -293,7 +293,7 @@ function entryToGpu(entry: BindingEntry): Pick<GPUBindGroupLayoutEntry, 'buffer'
         case 'readonly-storage':
             return { buffer: { type: 'read-only-storage' } };
         case 'texture': {
-            const type = entry.gpuType as { kind?: string; depth?: boolean; access?: string; format?: string } | undefined;
+            const type = entry.gpuType as { kind?: string; depth?: boolean; access?: string; format?: string; sampleType?: string } | undefined;
             const viewDimension = textureDimension(entry.gpuType);
             if (type?.kind === 'texture' && type.depth) {
                 return { texture: { sampleType: 'depth', viewDimension } };
@@ -301,13 +301,13 @@ function entryToGpu(entry: BindingEntry): Pick<GPUBindGroupLayoutEntry, 'buffer'
             if (type?.kind === 'texture' && type.access !== undefined && type.access !== 'sample') {
                 return {
                     storageTexture: {
-                        access: type.access as GPUStorageTextureAccess,
+                        access: storageAccess(type.access),
                         format: (type.format ?? 'rgba8unorm') as GPUTextureFormat,
                         viewDimension,
                     },
                 };
             }
-            return { texture: { sampleType: 'float', viewDimension } };
+            return { texture: { sampleType: (type?.sampleType ?? 'float') as GPUTextureSampleType, viewDimension } };
         }
         case 'sampler':
             return { sampler: { type: 'filtering' } };
@@ -318,6 +318,18 @@ function entryToGpu(entry: BindingEntry): Pick<GPUBindGroupLayoutEntry, 'buffer'
 function textureDimension(type: unknown): GPUTextureViewDimension {
     const dim = (type as { kind?: string; dim?: string } | undefined);
     return (dim && dim.kind === 'texture' && dim.dim ? dim.dim : '2d') as GPUTextureViewDimension;
+}
+
+/** WebGPU storage-texture access spelling for a WGSL access mode. */
+function storageAccess(access: string): GPUStorageTextureAccess {
+    switch (access) {
+        case 'read':
+            return 'read-only';
+        case 'read-write':
+            return 'read-write';
+        default:
+            return 'write-only';
+    }
 }
 
 function toGpuBlend(blend: { color?: any; alpha?: any }): GPUBlendState {

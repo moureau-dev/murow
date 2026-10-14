@@ -59,7 +59,9 @@ function bindingType(spec: BindingSpec): GpuType {
         const type = (spec.storage as { type: GpuType }).type;
         return type.kind === 'array' && type.count !== null ? { ...type, count: null } : type;
     }
-    if (spec.texture) return textureType('f32', textureDim(spec.viewDimension), 'sample');
+    if (spec.texture) {
+        return textureType('f32', textureDim(spec.viewDimension), 'sample', sampleTypeOf(spec.texture));
+    }
     if (spec.depthTexture) return textureType('f32', textureDim(spec.viewDimension), 'sample', { depth: true });
     if (spec.storageTexture) {
         return textureType('f32', textureDim(spec.viewDimension), spec.storageTexture.access ?? 'write', {
@@ -81,6 +83,13 @@ function textureDim(dim: string | undefined): TextureDim {
         default:
             return '2d';
     }
+}
+
+/** Sample-type options for a sampled texture, from its declared sample type. */
+function sampleTypeOf(texture: unknown): { sampleType?: string } {
+    return texture === 'unfilterable-float' || texture === 'sint' || texture === 'uint'
+        ? { sampleType: texture as string }
+        : {};
 }
 
 /** The role of a binding spec. */
@@ -148,12 +157,16 @@ export class GpuBindGroupLayout<S extends Record<string, BindingSpec> = Record<s
     toDescriptor(): BindGroupLayout {
         const entries = this.slots.map((slot) => {
             const readwrite = slot.kind === 'storage' && slot.readwrite;
+            // Storage textures (and read-write storage) are compute-only in WebGPU:
+            // write-only/read-write storage textures must not be visible to a vertex stage.
+            const computeOnly = readwrite
+                || (slot.type.kind === 'texture' && slot.type.access !== 'sample');
             return bindingEntry({
                 name: slot.name,
                 binding: slot.binding,
                 type: descriptorType(slot),
                 gpuType: slot.type,
-                visibility: readwrite ? { compute: true } : { vertex: true, fragment: true, compute: true },
+                visibility: computeOnly ? { compute: true } : { vertex: true, fragment: true, compute: true },
             });
         });
         return new BindGroupLayout({ entries });

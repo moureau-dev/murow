@@ -123,6 +123,12 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
     /** Pooled batch records, reused so `prepareFrame` stays allocation-free. */
     private readonly occlusionBatchPool: OcclusionBatch[] = [];
 
+    /** @internal Skinned occlusion candidate batches, mirroring the above. */
+    readonly skinnedOcclusionBatches: OcclusionBatch[] = [];
+    /** @internal Number of valid entries in `skinnedOcclusionBatches`. */
+    skinnedOcclusionBatchCount = 0;
+    private readonly skinnedOcclusionBatchPool: OcclusionBatch[] = [];
+
     /** LOD: master switch. When false, every instance stays on level 0. */
     lodEnabled = true;
     /** LOD: distance multiplier applied to every authored level distance. */
@@ -329,6 +335,8 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
 
         let skinnedIndexOffset = 0;
         let skinnedBatchCount = 0;
+        this.skinnedOcclusionBatches.length = 0;
+        let skinnedOccCount = 0;
         const sDyn = skinned.dynamicData;
         const sStat = skinned.staticData;
         skinned.batcher.each((modelId, instances, count) => {
@@ -359,10 +367,19 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
                 batch.modelId = modelId;
                 batch.offset = batchStart;
                 batch.count = visibleCount;
+
+                const occ = this.skinnedOcclusionBatchAt(skinnedOccCount++);
+                occ.modelId = modelId;
+                occ.candidateOffset = batchStart;
+                occ.candidateCount = visibleCount;
+                occ.outputOffset = batchStart;
+                occ.indexCount = model.indexCount;
+                this.skinnedOcclusionBatches.push(occ);
             }
         });
         this.skinnedBatchCount = skinnedBatchCount;
         this.skinnedSlotIndexCount = skinnedIndexOffset;
+        this.skinnedOcclusionBatchCount = skinnedOccCount;
     }
 
     /**
@@ -462,6 +479,16 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         if (batch === undefined) {
             batch = { modelId: 0, candidateOffset: 0, candidateCount: 0, outputOffset: 0, indexCount: 0 };
             this.occlusionBatchPool[index] = batch;
+        }
+        return batch;
+    }
+
+    /** Pooled record for a skinned occlusion batch. */
+    private skinnedOcclusionBatchAt(index: number): OcclusionBatch {
+        let batch = this.skinnedOcclusionBatchPool[index];
+        if (batch === undefined) {
+            batch = { modelId: 0, candidateOffset: 0, candidateCount: 0, outputOffset: 0, indexCount: 0 };
+            this.skinnedOcclusionBatchPool[index] = batch;
         }
         return batch;
     }

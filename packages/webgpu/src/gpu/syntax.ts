@@ -49,7 +49,10 @@ export function wgslType(type: GpuType): string {
 function formatScalar(scalar: GpuScalar, value: number): string {
     if (scalar === 'u32') return `${Math.trunc(value)}u`;
     if (scalar === 'i32') return String(Math.trunc(value));
-    return Number.isInteger(value) ? `${value}.0` : `${value}`;
+    const text = String(value);
+    // Exponent forms (`1e+30`) are already valid float literals; appending `.0` is not.
+    if (/[eE]/.test(text)) return text;
+    return Number.isInteger(value) ? `${text}.0` : text;
 }
 
 /** WGSL target syntax. */
