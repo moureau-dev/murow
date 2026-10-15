@@ -3,7 +3,7 @@ import { Octree } from './octree';
 
 const box3 = (minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number) =>
     ({ minX, minY, minZ, maxX, maxY, maxZ });
-const tree = () => new Octree({ bounds: box3(0, 0, 0, 100, 100, 100), maxItems: 2, maxDepth: 6 });
+const tree = () => new Octree({ bounds: box3(0, 0, 0, 100, 100, 100), capacity: 64, maxItems: 2, maxDepth: 6 });
 
 describe('Octree', () => {
     test('subdivides and returns overlapping ids once each', () => {

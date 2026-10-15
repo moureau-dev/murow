@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { Quadtree } from './quadtree';
 
 const box = (minX: number, minY: number, maxX: number, maxY: number) => ({ minX, minY, maxX, maxY });
-const tree = () => new Quadtree({ bounds: box(0, 0, 100, 100), maxItems: 2, maxDepth: 6 });
+const tree = () => new Quadtree({ bounds: box(0, 0, 100, 100), capacity: 64, maxItems: 2, maxDepth: 6 });
 
 describe('Quadtree', () => {
     test('subdivides and still returns overlapping ids once each', () => {
