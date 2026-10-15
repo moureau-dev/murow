@@ -23,16 +23,11 @@ export type ButtonState = {
     released: boolean;
 };
 
-export type Vector2 = {
-    x: number;
-    y: number;
-};
-
 export type InputSnapshot = {
     keys: Record<string, ButtonState>;
     mouse: {
-        position: Vector2;
-        delta: { position: Vector2, scroll: Vector2 };
+        position: { x: number; y: number };
+        delta: { position: { x: number; y: number }, scroll: { x: number; y: number } };
         left: ButtonState;
         middle: ButtonState;
         right: ButtonState;

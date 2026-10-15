@@ -176,3 +176,40 @@ loop.events.on('tick', () => {
     if (merged.keys['Space']?.hit) jump();
 });
 ```
+
+## Custom input sources
+
+Implement `InputEventSource` and hand it to `InputManager.listen`. The manager
+drives hit/release and snapshots; your source just forwards events. You can then
+feed that manager to `GameLoop` via `inputManager` (see the
+[game loop](../../game/loop/README.md)).
+
+```ts
+import { InputManager, type InputEventSource, type InputHandlers } from 'murow/core/input';
+
+// A source for anything that is not the DOM: gamepad, replay, network, tests.
+class GamepadSource implements InputEventSource {
+    private handlers!: InputHandlers;
+    private raf = 0;
+
+    attach(handlers: InputHandlers): void {
+        this.handlers = handlers;
+        const poll = () => {
+            // navigator.getGamepads() -> emit edge events on button transitions:
+            //   this.handlers.keydown({ code: 'Pad0-A' } as KeyboardEvent)
+            //   this.handlers.keyup({ code: 'Pad0-A' } as KeyboardEvent)
+            this.raf = requestAnimationFrame(poll);
+        };
+        this.raf = requestAnimationFrame(poll);
+    }
+
+    detach(): void { cancelAnimationFrame(this.raf); }
+}
+
+const pad = new InputManager();
+pad.listen(new GamepadSource());
+```
+
+The handlers are DOM-shaped (`keydown`/`keyup`/`mousemove`/…), so a non-DOM
+source synthesizes those event objects with a `code` (or mouse fields); the
+manager only reads `code`, `clientX/Y`, `button`, `deltaX/Y`, `movementX/Y`.
