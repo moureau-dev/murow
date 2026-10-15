@@ -489,7 +489,7 @@ Filters per-peer snapshots to entities within
 ```ts
 server.use(new AoiGrid({
   name: 'aoi',
-  cellSize: 32,        // reserved for grid acceleration
+  cellSize: 32,        // uniform-grid cell size (world units)
   radius: 50,
   hysteresisRadius: 4,
   positionComponent: Position,

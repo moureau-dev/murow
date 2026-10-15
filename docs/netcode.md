@@ -147,7 +147,7 @@ server.use(new LagCompensation({ tickRate: 20, historyMs: 500, components: [Posi
 
 ### Area of interest — filtering what each peer receives
 
-Full snapshots of a thousand entities do not scale. `AoiGrid` filters each peer's snapshot to entities within `radius + hysteresisRadius` of that peer's assigned entity. The server tracks each peer's visible set and sends a despawn when an entity leaves it (including a peer-driven leave), so clients never keep a stale entity on screen.
+Full snapshots of a thousand entities do not scale. `AoiGrid` filters each peer's snapshot to entities within `radius + hysteresisRadius` of that peer's assigned entity. It maintains a uniform grid over the position component (rebuilt each tick) and exposes a `nearby` fast path, so the server iterates only the entities around each peer instead of the whole dirty set — the cost is O(peers × nearby + dirty), not O(peers × dirty). The server tracks each peer's visible set and sends a despawn when an entity leaves it (including a peer-driven leave), so clients never keep a stale entity on screen.
 
 Interest plugins are **independent, not composed**: each plugin is consulted against the candidate set on its own, and a component's `sync.interest` picks the one plugin that governs it. So one entity can ship different components to different peers (e.g. `Position` under an `AoiGrid`, a team-only component under a visibility plugin). A `'global'` component is never filtered and forces its entity into the snapshot — mark spatially-filtered components with the AOI plugin's name, not `'global'`, or they leak.
 
@@ -160,7 +160,7 @@ Both `GameServer` and `GameClient` accept an optional `debug?: boolean | Logger`
 ```ts
 server.use(new AoiGrid({
   name: 'aoi',
-  cellSize: 32,             // reserved for grid acceleration; v1 scans naively
+  cellSize: 32,             // uniform-grid cell size (world units)
   radius: 50,
   hysteresisRadius: 4,      // boundary slack to stop despawn flicker
   positionComponent: Position,
@@ -631,7 +631,7 @@ Register with `server.use(plugin)` / `client.use(plugin)`. Plugins compose in re
 ```ts
 interface AoiGridOptions {
   name?: string;                                              // Default 'aoi'
-  cellSize: number;                                           // reserved for grid acceleration; v1 scans naively
+  cellSize: number;                                           // uniform-grid cell size (world units)
   radius: number;                                             // AOI radius (world units)
   hysteresisRadius?: number;                                  // extra despawn slack. Default 0
   positionComponent: Component<{ x: number; y: number }>;     // any 2D position component

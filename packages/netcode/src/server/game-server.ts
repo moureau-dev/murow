@@ -135,6 +135,11 @@ export class GameServer<
     private interestSets: SlotSet[] = [];
     private interestIndex: Record<string, number> = Object.create(null);
     private readonly interestOut: Entity[] = [];
+    /** First plugin providing a spatial `nearby` fast path, if any. */
+    private nearbyPlugin: ServerPlugin | null = null;
+    private readonly nearbyOut: Entity[] = [];
+    /** Dirty entities the spatial plugin does not cover (pass-through). */
+    private readonly passThrough: Entity[] = [];
     private tickCounter = 0;
     private kickAckTimeout: number;
     private rng: SimpleRNG;
@@ -436,6 +441,16 @@ export class GameServer<
         }
         this.retainDirty.clear();
 
+        // Entities the spatial plugin does not cover (no position) ride along
+        // unfiltered; collect them once, not per peer.
+        this.passThrough.length = 0;
+        if (this.nearbyPlugin !== null && typeof this.nearbyPlugin.covers === 'function') {
+            for (let i = 0; i < this.scratch.length; i++) {
+                const eid = this.scratch[i]!;
+                if (!this.nearbyPlugin.covers(this.world, eid)) this.passThrough.push(eid);
+            }
+        }
+
         // Built lazily; only if at least one peer needs a baseline.
         let baseline: Entity[] | null = null;
         const computeBaseline = (): Entity[] => {
@@ -455,9 +470,17 @@ export class GameServer<
         this.peers.forEach((peer) => {
             if (peer.kicking !== null) return;
 
-            const source: ReadonlyArray<Entity> = peer.needsBaseline
-                ? computeBaseline()
-                : this.scratch;
+            let source: ReadonlyArray<Entity>;
+            if (this.nearbyPlugin !== null && !peer.needsBaseline) {
+                // Spatial fast path: only entities near this peer (plus pass-through).
+                const nearby = this.nearbyOut;
+                nearby.length = 0;
+                this.nearbyPlugin.nearby!(peer, this.world, nearby);
+                for (let i = 0; i < this.passThrough.length; i++) nearby.push(this.passThrough[i]!);
+                source = nearby;
+            } else {
+                source = peer.needsBaseline ? computeBaseline() : this.scratch;
+            }
 
             // Candidates for interest: everything this peer saw last tick plus
             // the dirty set. Re-checking last tick's visible entities is what
@@ -578,7 +601,7 @@ export class GameServer<
                     if (this.world.has(eid, c)) this.world.markDirty(eid, (c as any).__worldIndex);
                 }
             }
-            this.retainDirty.clear();
+        this.retainDirty.clear();
         }
     }
 
@@ -778,6 +801,7 @@ export class GameServer<
         const plugin = bundle as ServerPlugin;
         this.plugins.push(plugin);
         plugin.onMount?.(this);
+        if (typeof plugin.nearby === 'function') this.nearbyPlugin = plugin;
         if (plugin.name === 'lag-compensation' || (plugin as any).rewind !== undefined) {
             this.lagComp = plugin as unknown as LagCompensation;
         }

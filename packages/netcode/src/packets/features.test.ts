@@ -282,6 +282,59 @@ describe('AOI enter/leave', () => {
         const after = (client as any).serverToLocal.get(enemy as number);
         expect(after === undefined || !clientWorld.has(after, Pos)).toBe(true);
     });
+
+    test('a position-less global entity keeps shipping under AOI', async () => {
+        const Global = defineComponent('Global', {
+            schema: { n: f32 },
+            sync: networked({ rate: 'every-tick', interest: 'global' }),
+        });
+        const intents = defineIntents({ noop: { x: f32 } });
+        const rpcs = defineRpcs({});
+        const serverWorld = new World({ maxEntities: 32, components: [Pos, Global] });
+        const clientWorld = new World({ maxEntities: 32, components: [Pos, Global] });
+        const serverLoop = new GameLoop({ tickRate: 60, type: 'manual-server' });
+        const clientLoop = new GameLoop({ tickRate: 60, type: 'manual-client' });
+        const transport = new MemoryServerTransport();
+        const server = new GameServer({
+            world: serverWorld,
+            loop: serverLoop,
+            transport,
+            protocol: { intents, rpcs },
+            snapshot: { rate: 60 },
+        });
+        server.use(new AoiGrid({ cellSize: 8, radius: 10, positionComponent: Pos }));
+        const { client: clientTransport } = transport.connectClient();
+        const client = new GameClient({
+            world: clientWorld,
+            loop: clientLoop,
+            transport: clientTransport,
+            protocol: { intents, rpcs },
+        });
+
+        const player = serverWorld.spawn();
+        serverWorld.add(player, Pos, { x: 0, y: 0 });
+        server.assignEntity({ peerId: transport.getPeerIds()[0]!, entity: -1 }, player);
+
+        // No Pos → AOI does not cover it; it must ride the pass-through.
+        const board = serverWorld.spawn();
+        serverWorld.add(board, Global, { n: 1 });
+
+        const roundTrip = async () => {
+            serverLoop.step(1 / 60 + 0.001);
+            await flush();
+            clientLoop.step(1 / 60 + 0.001);
+            await flush();
+        };
+
+        await roundTrip();                      // baseline sends everything
+        serverWorld.update(board, Global, { n: 2 });
+        // Advance past the client's interpolation delay so the value settles.
+        for (let i = 0; i < 20; i++) await roundTrip();
+
+        const cb = (client as any).serverToLocal.get(board as number) as number | undefined;
+        expect(cb).toBeDefined();
+        expect(clientWorld.get(cb!, Global).n).toBeCloseTo(2, 5);
+    });
 });
 
 describe('wire quantization', () => {
