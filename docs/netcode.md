@@ -341,17 +341,17 @@ export const Cosmetic = defineComponent('Cosmetic', {
 });
 ```
 
-Not every field is honored at runtime yet. Setting them compiles; the component still syncs with default behavior:
+Every field is honored at runtime:
 
 | field | value | honored | behavior today |
 |---|---|---|---|
 | `rate` | `'every-tick'` | yes | sent every snapshot tick if dirty |
 | `rate` | `'on-change'` | yes | sent only when the entity is dirty for this component since the last snapshot |
 | `rate` | `{ every: N }` | yes | sent on change, or on `tick % N === 0` |
-| `interest` | any | no | server plugins run `filterSnapshot` on every dirty entity regardless |
+| `interest` | `'global'` / plugin name | yes | `'global'` never filters and forces the entity in; a plugin name ships the component only for peers that plugin deems visible |
 | `interp` | `'lerp'`, `'step'`, `'none'` | yes | per-component dispatch on the client interpolation buffer |
-| `interp` | `'slerp'` | no | falls through to `'lerp'` |
-| `snapThreshold` | number | no | unread |
+| `interp` | `'slerp'` | yes | treats the component as a quaternion and slerps along the shortest arc (other shapes fall back to `'lerp'`) |
+| `snapThreshold` | number | yes | the client snaps instead of smoothing once the desync exceeds it |
 
 ### Message schemas — `defineIntents`, `defineRpcs`
 
@@ -473,7 +473,7 @@ interface GameServerOptions<I, R> {
   kick?: {
     ackTimeout?: number;        // ms with no ack before forcing transport close. Default: 2000
   };
-  schemaFingerprint?: string;   // reserved version tag — accepted but not enforced; mismatched clients are NOT kicked yet
+  schemaFingerprint?: string;   // override the derived synced-schema fingerprint; a client mismatch fires 'error' (context 'schema-fingerprint')
 }
 ```
 
@@ -750,8 +750,8 @@ Murow's WebSocket transports (`BunWebSocketServerTransport`, browser `BrowserWeb
 ## Gotchas
 
 - **`interest` is wired up.** `networked({ interest: 'aoi' })` ships the component only for peers the plugin named `'aoi'` (an `AoiGrid`) deems visible; `'global'` is never filtered and forces the entity into the snapshot.
-- **`interp: 'slerp'` is not wired up.** It falls through to `'lerp'`. `'lerp'`, `'step'`, and `'none'` work. Interp dispatch is per-component, not per-field, so put discrete fields (ids, flags) on a `'step'` component rather than mixing them into a `'lerp'` one.
-- **`snapThreshold` is not wired up.** It is in the type and unread. Use the client-level `maxDesync` and `maxBridgeGap` knobs for snap-vs-smooth behavior.
+- **`interp: 'slerp'` treats the component as a quaternion.** It slerps along the shortest arc; a component that is not quaternion-shaped falls back to `'lerp'`. Interp dispatch is per-component, not per-field, so put discrete fields (ids, flags) on a `'step'` component rather than mixing them into a `'lerp'` one.
+- **`snapThreshold` causes a per-component snap.** Once the client's desync for that component exceeds it, the value snaps instead of smoothing; the client-level `maxDesync` and `maxBridgeGap` knobs govern the play-out clock.
 - **Predictions must write networked components only.** Rollback restores networked state; a prediction that touched local UI leaves it corrupted. Drive UI from networked state.
 - **`ctx.fields(C)` marks dirty; `ctx.world.fields(C)` does not.** If you reach into the world directly, call `ctx.markDirty(C, entity)` — including for a different entity (`ctx.markDirty(Health, victimId)`). Cross-entity writes that skip this never reach the snapshot.
 - **`lagCompensated` is a no-op without the plugin**, and only rewinds components registered with `LagCompensation`. Without registration you are hitting the live world and calling it lag compensation.
@@ -773,7 +773,7 @@ Murow's WebSocket transports (`BunWebSocketServerTransport`, browser `BrowserWeb
 | local-only state (camera, UI, handles) | plain component with **no** `sync` |
 | who decides the truth | server (client predicts, server reconciles) |
 | bind a player to an entity | `server.assignEntity(peer, e)`; read `client.assignedEntity` |
-| limit what peers see | `AoiGrid` plugin; forget `interest` for now |
+| limit what peers see | `AoiGrid` plugin + `networked({ interest: 'aoi' })` |
 | hitscan against the shooter's view | `LagCompensation` + `ctx.lagCompensated` |
 | control interpolation smoothness | `delay` / `staleWindow` / `maxDesync` / `maxBridgeGap` |
 | probe latency | `client.ping()` on the tick → `'pong'` → `client.setInterpolationDelay(...)` |

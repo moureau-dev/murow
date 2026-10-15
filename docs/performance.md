@@ -13,7 +13,7 @@ Referenced from [llms.txt](../llms.txt).
 5. **Budget shadows.** The sun's map is cached and re-rendered only on change; spot (≤4) and point (≤2) maps re-render every frame. Disable unused shadow systems.
 6. **Every camera effect is a fullscreen pass.** A non-empty `camera.effects` chain forces the off-screen path; each enabled effect is one ping-pong pass over the capped resolution.
 7. **Keep the hot path zero-GC.** Read the [zero-allocation guide](./zero-allocation.md) before writing per-frame systems; no `world.get`/`world.update` in hot loops.
-8. **Design around the gaps.** No occlusion culling, no LOD, no user GPU-driven/indirect path, no shadow cascades, no compressed textures. Cull and simplify yourself where they matter.
+8. **Design around the gaps.** No user GPU-driven/indirect path, no shadow cascades, no compressed textures. Cull and simplify yourself where they matter.
 
 ## The model
 
@@ -31,6 +31,8 @@ You get these for free as long as you call `storePreviousState()` in `pre-tick` 
 | Instance recycling | `handle.destroy()` returns the slot and bone-matrix block to a free list; respawns reuse buffers. |
 | Shadow-map caching | The directional map re-renders only when the sun, the snapped shadow box, or a caster changes (version counters); a static scene reuses the previous map. |
 | Particle emitter culling | 3D particles set the camera frustum each frame, so an off-screen emitter spawns nothing (live particles still finish). |
+| Occlusion culling | 3D: a GPU depth pyramid (HZB) hides instances behind geometry, not just off-screen ones. On when the backend provides the compute port; tune or disable via `occlusion` options. |
+| Distance-based LOD | 3D: a per-prefab LOD chain draws a nearer/farther model by camera distance, with a dithered cross-fade. Declared on the prefab; selected per tick. |
 
 ### The frame-budget levers
 
@@ -121,8 +123,6 @@ renderer.shadows.point.enabled = false;
 
 These do not exist in the current renderer; assume them and compensate in game code:
 
-- **No occlusion culling.** Frustum culling only removes off-screen instances. Geometry hidden behind walls still draws. Avoid dense overlapping interiors; split or stream large occluded regions yourself.
-- **No LOD.** Every visible instance draws its full mesh (skinned meshes share bone math but not a reduced mesh). Keep crowd meshes low-poly, or swap prefabs by distance manually.
 - **No GPU-driven / indirect path for user geometry.** Particles use indirect batching internally, but there is no public API to drive arbitrary geometry from GPU-side culling/compaction. `GeometryBuilder.fromBuffer` is zero-copy, not GPU-driven.
 - **Single directional shadow box, no cascades.** One fixed box around the camera (`renderer.shadows.directional.distance`); casters beyond it do not cast and detail falls off with distance. There is no cascade split, so wide outdoor ranges will alias or drop shadows.
 - **No compressed textures.** Textures upload as decoded images and get a mip chain; there is no KTX/Basis/ASTC path. Large texture sets pay full VRAM, so budget texture memory yourself.

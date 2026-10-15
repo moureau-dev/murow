@@ -441,7 +441,7 @@ Defaults: `strategy = { kind: 'snapshot-interpolation' }` (`delay = 100`,
   kinds ship: **`'snapshot-interpolation'`** (default; render behind newest),
   **`'extrapolation'`** (dead reckoning at `now`, capped by
   `maxExtrapolationMs`), and **`'hybrid'`** (interpolate when a snapshot is
-  ahead, extrapolate the starved tail — the production default). Extend the
+  ahead, extrapolate the starved tail). Extend the
   exported `PeerRenderStrategy` base class to add one.
 - `delay`: ms behind newest snapshot the buffer renders.
 - `staleWindow`: max ms gap between snapshots before history is dropped as stale.
@@ -468,7 +468,8 @@ networked({
 
 - `rate`: snapshot eligibility cadence.
 - `interest`: visibility filter; declares a plugin's `name`, or
-  `'global'` for "every peer sees this". Currently unread - see
+  `'global'` for "every peer sees this". The named plugin's
+  `filterSnapshot` decides which peers receive the component. See
   "`networked()` fields" below.
 - `interp`: interpolation mode, dispatched per-component (not per-field).
 - `snapThreshold`: per-component override of the reconciliation
