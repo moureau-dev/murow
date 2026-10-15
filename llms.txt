@@ -553,6 +553,8 @@ events.clear('bar');     // remove all listeners for one event
 
 `GameLoop` wires up input automatically — the `tick` payload's `input` is an `InputSnapshot`. If you're not using `GameLoop`, set up `InputManager` directly.
 
+To supply your own manager(s), pass `inputManager` (one) or `inputManagers` (several, OR-merged into the single tick snapshot — e.g. keyboard + gamepad; the pointer comes from the most active source). The loop then attaches **no** browser source, so call `manager.listen(source)` yourself. Swap at runtime with `loop.setInputManager(m | null)` / `loop.setInputManagers(list)` (`[]`/`null` restores the loop's own browser manager); read the active set with `loop.inputManager` / `loop.inputManagers`.
+
 ### From inside the loop (typical)
 
 ```ts

@@ -56,8 +56,8 @@ export class InputManager {
     };
 
     constructor() {
-        this.snapshotA = createEmptySnapshot();
-        this.snapshotB = createEmptySnapshot();
+        this.snapshotA = createInputSnapshot();
+        this.snapshotB = createInputSnapshot();
     }
 
     /**
@@ -188,7 +188,7 @@ export class InputManager {
 /**
  * Creates a reusable, fully-initialized snapshot object.
  */
-function createEmptySnapshot(): InputSnapshot {
+export function createInputSnapshot(): InputSnapshot {
     return {
         mouse: {
             position: { x: 0, y: 0 },
@@ -275,4 +275,61 @@ function applyButton(dst: ButtonState, now: boolean, prev: boolean) {
     dst.down = now;
     dst.hit = now && !prev;
     dst.released = !now && prev;
+}
+
+/**
+ * ORs several managers into one snapshot, so e.g. a keyboard/mouse manager and a
+ * gamepad can drive the same control scheme. Buttons merge (a press on any source
+ * counts); the pointer comes from the source with the most activity this pass,
+ * falling back to the first. `target` is reset and reused — no per-call allocation.
+ *
+ * `peek` samples each manager's live view (no hit/release) instead of a frozen
+ * snapshot, matching `InputManager.peek()`.
+ */
+export function mergeInputSnapshots(
+    target: InputSnapshot,
+    managers: readonly InputManager[],
+    peek = false,
+): InputSnapshot {
+    for (const k in target.keys) {
+        const b = target.keys[k];
+        b.down = false;
+        b.hit = false;
+        b.released = false;
+    }
+
+    let bestActivity = -1;
+    for (let i = 0; i < managers.length; i++) {
+        const src = peek ? managers[i]!.peek() : managers[i]!.snapshot();
+
+        const srcKeys = src.keys;
+        for (const k in srcKeys) {
+            const s = srcKeys[k];
+            const dst = (target.keys[k] ??= { down: false, hit: false, released: false });
+            dst.down = dst.down || s.down;
+            dst.hit = dst.hit || s.hit;
+            dst.released = dst.released || s.released;
+        }
+
+        const m = src.mouse;
+        const activity =
+            Math.abs(m.delta.position.x) + Math.abs(m.delta.position.y) +
+            Math.abs(m.delta.scroll.x) + Math.abs(m.delta.scroll.y) +
+            (m.left.down || m.right.down || m.middle.down ? 1 : 0);
+        if (activity > bestActivity) {
+            bestActivity = activity;
+            const t = target.mouse;
+            t.position.x = m.position.x;
+            t.position.y = m.position.y;
+            t.delta.position.x = m.delta.position.x;
+            t.delta.position.y = m.delta.position.y;
+            t.delta.scroll.x = m.delta.scroll.x;
+            t.delta.scroll.y = m.delta.scroll.y;
+            t.left.down = m.left.down; t.left.hit = m.left.hit; t.left.released = m.left.released;
+            t.right.down = m.right.down; t.right.hit = m.right.hit; t.right.released = m.right.released;
+            t.middle.down = m.middle.down; t.middle.hit = m.middle.hit; t.middle.released = m.middle.released;
+        }
+    }
+
+    return target;
 }

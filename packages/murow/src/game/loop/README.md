@@ -34,6 +34,47 @@ loop.pause();
 loop.resume();
 ```
 
+## Input managers
+
+By default a `client` loop creates an [InputManager](../../core/input) and attaches
+it to a `BrowserInputSource` on `start()`. You can hand it your own manager(s)
+instead — for a custom source, a recording/replay rig, or a keyboard + gamepad
+scheme merged into one tick snapshot. The loop then attaches **no** browser
+source; calling `listen(source)` is yours.
+
+```typescript
+import { InputManager, BrowserInputSource } from "murow/core/input";
+
+const keyboard = new InputManager();
+keyboard.listen(new BrowserInputSource(document, document.body));
+
+// A second manager on a custom source (bring your own InputEventSource — e.g.
+// one that reads the Gamepad API).
+const gamepad = new InputManager();
+gamepad.listen(myGamepadSource);
+
+// Several managers are OR-merged into one snapshot each tick (buttons OR;
+// the pointer comes from the most active source this pass).
+const loop = new GameLoop({
+    type: 'client',
+    tickRate: 20,
+    inputManagers: [keyboard, gamepad],
+});
+
+// ...or a single one.
+const loop2 = new GameLoop({ type: 'client', tickRate: 20, inputManager: keyboard });
+```
+
+Swap at runtime (keeps ownership semantics: the loop only ever attaches a browser
+source to its own manager):
+
+```typescript
+loop.setInputManagers([keyboard]);   // switch to one
+loop.setInputManager(null);          // restore the loop's own browser manager
+loop.inputManager;                   // the active (first) manager
+loop.inputManagers;                  // all active managers
+```
+
 ## Schedules
 
 Run a callback on a fixed interval with `every` (a `setInterval` replacement), or

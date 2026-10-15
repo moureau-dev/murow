@@ -158,3 +158,21 @@ class GameCamera {
     }
 }
 ```
+
+## Merging managers
+
+`mergeInputSnapshots(target, managers, peek?)` ORs several managers into one
+snapshot — buttons merge (a press on any source counts) and the pointer comes
+from the most active source this pass. `createInputSnapshot()` makes a reusable
+target. `GameLoop` uses both for its `inputManagers` option, but they are exported
+for manual setups too.
+
+```ts
+import { InputManager, createInputSnapshot, mergeInputSnapshots } from 'murow/core/input';
+
+const merged = createInputSnapshot();                 // once, reused
+loop.events.on('tick', () => {
+    mergeInputSnapshots(merged, [keyboard, gamepad]); // no per-tick allocation
+    if (merged.keys['Space']?.hit) jump();
+});
+```

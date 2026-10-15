@@ -5,7 +5,7 @@ import {
     FixedTicker,
     LoopDriver,
 } from "../../core";
-import { InputManager, BrowserInputSource, type InputSnapshot } from "../../core/input";
+import { InputManager, BrowserInputSource, createInputSnapshot, mergeInputSnapshots, type InputSnapshot } from "../../core/input";
 import { TickerSchedule } from "./ticker-schedule";
 
 /**
@@ -14,9 +14,17 @@ import { TickerSchedule } from "./ticker-schedule";
  */
 export class GameLoop<T extends GameLoopType = DriverType> {
     private _driver?: LoopDriver;
-    private _input: InputManager;
     private readonly _isClient: boolean;
     private readonly _isManual: boolean;
+
+    /** The loop's own manager, used when the caller supplies none. */
+    private readonly _defaultInput: InputManager;
+    /** Active managers: one, or several merged into the tick snapshot. */
+    private _inputs: InputManager[];
+    /** True when `_inputs` is the loop's own manager, so the loop owns listening. */
+    private _ownInput: boolean;
+    private _mergeSnapshot: InputSnapshot | null = null;
+    private _mergePeek: InputSnapshot | null = null;
 
     /**
      * FixedTicker instance that handles tick timing and updates.
@@ -78,14 +86,21 @@ export class GameLoop<T extends GameLoopType = DriverType> {
         });
 
         // yes, instanciated on server but it is innofensive
-        this._input = new InputManager();
+        this._defaultInput = new InputManager();
+        const external = this.options.inputManagers?.length
+            ? this.options.inputManagers.slice()
+            : this.options.inputManager
+                ? [this.options.inputManager]
+                : null;
+        this._ownInput = external === null;
+        this._inputs = external ?? [this._defaultInput];
 
         const baseEvents = this.events as EventSystem<BaseEvents>;
 
         this.ticker = new FixedTicker({
             rate: this.options.tickRate,
             onTick: (deltaTime, tick = 0) => {
-                const input = this._input.snapshot();
+                const input = this.sampleInput(false);
 
                 // Reuse the same object for all three tick events because I'm a freak
                 this._tickData.deltaTime = deltaTime;
@@ -160,7 +175,7 @@ export class GameLoop<T extends GameLoopType = DriverType> {
         this.ticker.tick(deltaTime);
 
         if (this._isClient) {
-            const peek = this._input.peek();
+            const peek = this.sampleInput(true);
             const alpha = this.ticker.alpha;
 
             this.options.onRender?.(deltaTime, alpha, peek);
@@ -217,9 +232,8 @@ export class GameLoop<T extends GameLoopType = DriverType> {
         this.status = "running";
         (this.events as EventSystem<BaseEvents>).emit("start", { startedAt: Date.now() });
 
-        if (this._isClient) {
-            const source = new BrowserInputSource(document, document.body);
-            this._input.listen(source);
+        if (this._isClient && this._ownInput && typeof document !== "undefined") {
+            this._defaultInput.listen(new BrowserInputSource(document, document.body));
         }
     }
 
@@ -235,9 +249,61 @@ export class GameLoop<T extends GameLoopType = DriverType> {
         this.status = "stopped";
         (this.events as EventSystem<BaseEvents>).emit("stop", { stoppedAt: Date.now() });
 
-        if (this._isClient) {
-            this._input.unlisten();
+        if (this._isClient && this._ownInput) {
+            this._defaultInput.unlisten();
         }
+    }
+
+    /** The active input manager (the first one when several are merged). */
+    get inputManager(): InputManager {
+        return this._inputs[0]!;
+    }
+
+    /** All active input managers (`length === 1` unless several are merged). */
+    get inputManagers(): readonly InputManager[] {
+        return this._inputs;
+    }
+
+    /**
+     * Swap the active input manager. Pass `null` to restore the loop's own
+     * manager, which the loop attaches to a browser source on `start()`.
+     *
+     * An external manager is the caller's to `listen()` — the loop never attaches
+     * a source to it.
+     */
+    setInputManager(manager: InputManager | null): void {
+        this.setInputManagers(manager ? [manager] : []);
+    }
+
+    /**
+     * Swap to a set of managers merged into the single tick snapshot (e.g.
+     * keyboard + gamepad). Pass `[]` to restore the loop's own manager.
+     */
+    setInputManagers(managers: readonly InputManager[]): void {
+        if (this._ownInput && this._isClient) {
+            this._defaultInput.unlisten();
+        }
+
+        if (managers.length === 0) {
+            this._ownInput = true;
+            this._inputs = [this._defaultInput];
+            if (this._isClient && this.status === "running" && typeof document !== "undefined") {
+                this._defaultInput.listen(new BrowserInputSource(document, document.body));
+            }
+        } else {
+            this._ownInput = false;
+            this._inputs = managers.slice();
+        }
+    }
+
+    private sampleInput(peek: boolean): InputSnapshot {
+        if (this._inputs.length === 1) {
+            return peek ? this._inputs[0]!.peek() : this._inputs[0]!.snapshot();
+        }
+        if (peek) {
+            return mergeInputSnapshots(this._mergePeek ??= createInputSnapshot(), this._inputs, true);
+        }
+        return mergeInputSnapshots(this._mergeSnapshot ??= createInputSnapshot(), this._inputs, false);
     }
 
     /**
@@ -305,6 +371,18 @@ interface ScheduleBuilder {
 interface GameLoopOptions<T extends GameLoopType> {
     tickRate: number;
     type: T;
+    /**
+     * Use this manager instead of the loop's own browser-backed one. The loop
+     * will not attach a `BrowserInputSource` — call `manager.listen(source)`
+     * yourself. Swap at runtime with `setInputManager`.
+     */
+    inputManager?: InputManager;
+    /**
+     * Merge several managers into the single tick snapshot (e.g. keyboard +
+     * gamepad). Takes precedence over `inputManager`. The loop will not attach a
+     * `BrowserInputSource` to any of them. Swap at runtime with `setInputManagers`.
+     */
+    inputManagers?: InputManager[];
     /**
      * Maximum number of simultaneously live schedules registered via `every` or
      * `in`. Defaults to 32.
