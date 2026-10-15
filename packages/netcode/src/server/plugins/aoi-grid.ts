@@ -32,6 +32,7 @@ export class AoiGrid implements ServerPlugin {
     private positionComponent: Component<{ x: number; y: number }>;
 
     private index: SpatialHash | null = null;
+    private buckets = 0;
     private readonly bounds = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
     private readonly box = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
     private readonly candidates: number[] = [];
@@ -47,15 +48,18 @@ export class AoiGrid implements ServerPlugin {
 
     onTick(world: World): void {
         const max = world.getMaxEntities();
-        if (this.index === null || this.index.capacity < max) {
-            this.index = new SpatialHash({ cellSize: this.cellSize, capacity: max, buckets: max * 2 });
+        const list = world.query(this.positionComponent);
+        const need = bucketSize(list.length);
+
+        if (this.index === null || this.index.capacity < max || need > this.buckets) {
+            this.buckets = Math.max(need, this.index !== null && this.index.capacity >= max ? this.buckets : 0);
+            this.index = new SpatialHash({ cellSize: this.cellSize, capacity: max, buckets: this.buckets });
         }
         const index = this.index;
 
         const fields = world.fields(this.positionComponent);
         const xs = fields.x;
         const ys = fields.y;
-        const list = world.query(this.positionComponent);
         const box = this.box;
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
@@ -159,4 +163,11 @@ export class AoiGrid implements ServerPlugin {
             if (dx * dx + dy * dy <= maxR2) out.push(eid);
         }
     }
+}
+
+function bucketSize(n: number): number {
+    let buckets = 1024;
+    const want = Math.max(1024, n * 2);
+    while (buckets < want && buckets < (1 << 20)) buckets <<= 1;
+    return buckets;
 }

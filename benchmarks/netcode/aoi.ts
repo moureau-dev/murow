@@ -29,6 +29,7 @@ const TICKS = Number(process.env.TICKS ?? 400);
 const RADIUS = Number(process.env.RADIUS ?? 50);
 const WORLD_SIZE = Number(process.env.WORLD_SIZE ?? 1000);
 const INTERVAL = Number(process.env.INTERVAL ?? 1);
+const CAPACITY = Number(process.env.CAPACITY ?? 0);
 const LABEL = process.env.LABEL ?? 'run';
 const TICK_RATE = 20;
 
@@ -75,7 +76,7 @@ console.log(
     `\n[${LABEL}] entities=${ENTITIES} peers=${PEERS} radius=${RADIUS} world=${WORLD_SIZE} interval=${INTERVAL} ticks=${TICKS}\n`,
 );
 
-const world = new World({ maxEntities: ENTITIES + PEERS + 8, components: [Position] });
+const world = new World({ maxEntities: CAPACITY > 0 ? CAPACITY : ENTITIES + PEERS + 8, components: [Position] });
 const rng = new SimpleRNG(0xc0ffee);
 const units: Entity[] = [];
 const xs = new Float32Array(ENTITIES);

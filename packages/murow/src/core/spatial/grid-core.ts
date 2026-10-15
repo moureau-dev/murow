@@ -20,6 +20,9 @@ export abstract class GridCore implements SpatialIndex {
     private readonly maxY: Float32Array;
     private readonly freeStack: Int32Array;
     private freeTop: number;
+    private readonly liveSlots: Int32Array;
+    private readonly slotPos: Int32Array;
+    private liveCount = 0;
     private cellStart: Int32Array;
     private cursor: Int32Array;
     private items: Int32Array;
@@ -44,6 +47,8 @@ export abstract class GridCore implements SpatialIndex {
         this.freeStack = new Int32Array(capacity);
         for (let i = 0; i < capacity; i++) this.freeStack[i] = i;
         this.freeTop = capacity;
+        this.liveSlots = new Int32Array(capacity);
+        this.slotPos = new Int32Array(capacity);
         this.cellStart = new Int32Array(slots + 1);
         this.cursor = new Int32Array(slots);
         this.items = new Int32Array(capacity);
@@ -54,6 +59,7 @@ export abstract class GridCore implements SpatialIndex {
         return this._size;
     }
 
+    /** Map an integer cell coordinate to a bucket slot. */
     protected abstract slotOfCell(cx: number, cy: number): number;
 
     insert(id: number, bounds: AABB): void {
@@ -65,6 +71,8 @@ export abstract class GridCore implements SpatialIndex {
             this.idSlot[id] = slot;
             this.slotId[slot] = id;
             this.live[slot] = 1;
+            this.slotPos[slot] = this.liveCount;
+            this.liveSlots[this.liveCount++] = slot;
             this._size++;
         }
         this.minX[slot] = bounds.minX;
@@ -82,6 +90,10 @@ export abstract class GridCore implements SpatialIndex {
         if (id < 0 || id >= this.capacity) return;
         const slot = this.idSlot[id]!;
         if (slot === -1) return;
+        const pos = this.slotPos[slot]!;
+        const last = this.liveSlots[--this.liveCount]!;
+        this.liveSlots[pos] = last;
+        this.slotPos[last] = pos;
         this.freeStack[this.freeTop++] = slot;
         this.idSlot[id] = -1;
         this.live[slot] = 0;
@@ -117,6 +129,7 @@ export abstract class GridCore implements SpatialIndex {
         this.live.fill(0);
         for (let i = 0; i < this.capacity; i++) this.freeStack[i] = i;
         this.freeTop = this.capacity;
+        this.liveCount = 0;
         this._size = 0;
         this.dirty = true;
     }
@@ -131,11 +144,12 @@ export abstract class GridCore implements SpatialIndex {
 
     private rebuild(): void {
         const start = this.cellStart;
-        const capacity = this.capacity;
+        const liveSlots = this.liveSlots;
+        const liveCount = this.liveCount;
         start.fill(0, 0, this.slots + 1);
 
-        for (let s = 0; s < capacity; s++) {
-            if (this.live[s] === 0) continue;
+        for (let i = 0; i < liveCount; i++) {
+            const s = liveSlots[i]!;
             const cx0 = this.cellX(this.minX[s]!);
             const cx1 = this.cellX(this.maxX[s]!);
             const cy0 = this.cellY(this.minY[s]!);
@@ -152,8 +166,8 @@ export abstract class GridCore implements SpatialIndex {
         const cursor = this.cursor;
         for (let i = 0; i < this.slots; i++) cursor[i] = start[i]!;
         const items = this.items;
-        for (let s = 0; s < capacity; s++) {
-            if (this.live[s] === 0) continue;
+        for (let i = 0; i < liveCount; i++) {
+            const s = liveSlots[i]!;
             const id = this.slotId[s]!;
             const cx0 = this.cellX(this.minX[s]!);
             const cx1 = this.cellX(this.maxX[s]!);
