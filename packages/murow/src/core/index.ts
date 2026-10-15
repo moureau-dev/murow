@@ -11,6 +11,7 @@ export * from './prediction';
 export * from './clock';
 export * from './timeline';
 export * from './input';
+export * from './spatial';
 export * from './audio';
 export * from './logger';
 export * from './free-list';

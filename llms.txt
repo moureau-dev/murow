@@ -957,6 +957,18 @@ const result = nav2.findPath({ from, to });
 const path2 = result instanceof Promise ? await result : result;
 ```
 
+### `SpatialGrid` / `SpatialHash` / `Quadtree` / `Octree` — spatial partitioning
+
+Neighbor/overlap queries for crowd separation, broadphase picking, vision, batching — pure CPU, headless. All share [`SpatialIndex`](./packages/murow/src/core/spatial/spatial-index.ts): `insert(id, bounds)`, `remove(id)`, `update(id, bounds)`, `query(bounds, results)` (results is a reused array, cleared per call — zero-GC), `clear()`, `size`. Bounds are `{ minX, minY, maxX, maxY }` (a point is `min === max`); the octree uses the 3D twin. Results may include ids whose exact box does not overlap (cell/bucket granularity) — re-test at the call site. `SpatialGrid` (bounded, exact) and `SpatialHash` (unbounded, hashed) hold ids in `[0, capacity)` and use typed arrays (no `Map`/`Set`); `Quadtree`/`Octree` are dynamic trees for clustered data.
+
+```ts
+import { SpatialHash } from 'murow/core/spatial';
+const grid = new SpatialHash({ cellSize: 8, capacity: 4096 });
+grid.insert(id, { minX: x, minY: y, maxX: x, maxY: y });
+const nearby: number[] = [];
+grid.query({ minX: px - r, minY: py - r, maxX: px + r, maxY: py + r }, nearby);
+```
+
 ### `Logger` — shared structured logging
 
 ```ts
