@@ -17,8 +17,7 @@ const HASH_Y = 19349663;
 /**
  * Unbounded hashed grid. Cells are hashed into a fixed bucket table, so no
  * region is needed and coordinates may be negative or large. Hash collisions
- * merge buckets: `query` may return extra ids but never misses — re-test at the
- * call site. Cheaper than a quadtree for uniformly sized agents over an open world.
+ * merge buckets, so `query` may return extra ids; re-test at the call site.
  */
 export class SpatialHash extends GridCore {
     private readonly mask: number;

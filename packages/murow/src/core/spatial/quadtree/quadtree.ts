@@ -18,8 +18,7 @@ export interface QuadtreeOptions {
 /**
  * Dynamic quadtree. A node subdivides into 4 quadrants past `maxItems` (down to
  * `maxDepth`); an entry that fits entirely in one quadrant descends, otherwise it
- * stays at the node. Nodes and entries live in typed-array pools (no per-node
- * objects). Each id lives in exactly one node, so `query` never duplicates.
+ * stays at the node.
  */
 export class Quadtree extends TreeCore implements SpatialIndex {
     private readonly sxMin = new Float32Array(2);

@@ -1,10 +1,8 @@
 import { FreeList } from '../free-list';
 
 /**
- * Internal base for the dynamic trees (`Quadtree`/`Octree`). Nodes and entries
- * live in typed arrays with `FreeList` slot allocation — no per-node objects, no
- * `Map`/`Set`. Ids must be in `[0, capacity)`. Nodes are never removed (the tree
- * does not merge on removal), so slot indices are stable until `clear`.
+ * Internal base for the dynamic trees (`Quadtree`/`Octree`). Ids must be in
+ * `[0, capacity)`.
  */
 export abstract class TreeCore {
     readonly capacity: number;

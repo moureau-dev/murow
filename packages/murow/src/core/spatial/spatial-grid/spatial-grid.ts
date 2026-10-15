@@ -11,9 +11,9 @@ export interface SpatialGridOptions {
 }
 
 /**
- * Bounded uniform grid. Cells are fixed from `bounds` and `cellSize`; exact, no
- * hashing. A box is filed into every cell it overlaps, so `query` may return ids
- * whose exact box does not overlap the query box — re-test at the call site.
+ * Bounded uniform grid. Cells are fixed from `bounds` and `cellSize`. A box is
+ * filed into every cell it overlaps, so `query` may return ids whose exact box
+ * does not overlap the query box; re-test at the call site.
  */
 export class SpatialGrid extends GridCore {
     private readonly cols: number;

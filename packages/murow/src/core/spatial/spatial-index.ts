@@ -15,7 +15,7 @@ export interface SpatialIndex {
     clear(): void;
 }
 
-/** The 3D twin of {@link SpatialIndex}, over {@link AABB3}. */
+/** A spatial index over 3D axis-aligned boxes keyed by integer id. */
 export interface SpatialIndex3D {
     readonly size: number;
     insert(id: number, bounds: AABB3): void;

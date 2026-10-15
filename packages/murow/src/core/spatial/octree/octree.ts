@@ -16,11 +16,9 @@ export interface OctreeOptions {
 }
 
 /**
- * Dynamic octree — the 3D twin of {@link Quadtree}. A node subdivides into 8
- * octants past `maxItems` (down to `maxDepth`); an entry that fits entirely in
- * one octant descends, otherwise it stays at the node. Nodes and entries live in
- * typed-array pools (no per-node objects). Each id lives in exactly one node, so
- * `query` never duplicates.
+ * Dynamic octree. A node subdivides into 8 octants past `maxItems` (down to
+ * `maxDepth`); an entry that fits entirely in one octant descends, otherwise it
+ * stays at the node.
  */
 export class Octree extends TreeCore implements SpatialIndex3D {
     private readonly sxMin = new Float32Array(3);

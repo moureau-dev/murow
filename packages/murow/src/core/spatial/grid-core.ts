@@ -3,10 +3,7 @@ import type { AABB } from './types';
 import type { SpatialIndex } from './spatial-index';
 
 /**
- * Internal base for the uniform-grid indices. Records live in typed arrays; the
- * CSR bucket array is rebuilt lazily when the set changes (the same approach as
- * the renderer's batch grids). No `Map`/`Set`, no per-insert allocation. Ids must
- * be in `[0, capacity)`.
+ * Internal base for the uniform-grid indices. Ids must be in `[0, capacity)`.
  */
 export abstract class GridCore implements SpatialIndex {
     readonly capacity: number;
