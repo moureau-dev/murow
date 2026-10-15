@@ -28,9 +28,9 @@ export interface ServerPlugin {
     ): void;
     /**
      * Optional spatial fast path. Push the entities near `peer` onto `out` in
-     * O(nearby). When present, the engine iterates this per peer instead of the
-     * whole dirty set. Implement `covers` too so non-spatial entities are not
-     * dropped (the engine unions the dirty entities `covers` returns false for).
+     * O(nearby). Used only together with `covers`: the engine then iterates
+     * `nearby ∪ (dirty entities `covers` returns false for)` per peer instead of
+     * the whole dirty set. Only the first plugin providing both is used.
      */
     nearby?(peer: Peer, world: World, out: Entity[]): void;
     /** Whether this plugin spatially manages `eid` (false = pass-through). */

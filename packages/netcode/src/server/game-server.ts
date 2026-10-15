@@ -135,7 +135,7 @@ export class GameServer<
     private interestSets: SlotSet[] = [];
     private interestIndex: Record<string, number> = Object.create(null);
     private readonly interestOut: Entity[] = [];
-    /** First plugin providing a spatial `nearby` fast path, if any. */
+    /** First plugin providing both `nearby` and `covers` (the spatial fast path). */
     private nearbyPlugin: ServerPlugin | null = null;
     private readonly nearbyOut: Entity[] = [];
     /** Dirty entities the spatial plugin does not cover (pass-through). */
@@ -444,10 +444,10 @@ export class GameServer<
         // Entities the spatial plugin does not cover (no position) ride along
         // unfiltered; collect them once, not per peer.
         this.passThrough.length = 0;
-        if (this.nearbyPlugin !== null && typeof this.nearbyPlugin.covers === 'function') {
+        if (this.nearbyPlugin !== null) {
             for (let i = 0; i < this.scratch.length; i++) {
                 const eid = this.scratch[i]!;
-                if (!this.nearbyPlugin.covers(this.world, eid)) this.passThrough.push(eid);
+                if (!this.nearbyPlugin.covers!(this.world, eid)) this.passThrough.push(eid);
             }
         }
 
@@ -801,7 +801,9 @@ export class GameServer<
         const plugin = bundle as ServerPlugin;
         this.plugins.push(plugin);
         plugin.onMount?.(this);
-        if (typeof plugin.nearby === 'function') this.nearbyPlugin = plugin;
+        if (typeof plugin.nearby === 'function' && typeof plugin.covers === 'function') {
+            this.nearbyPlugin = plugin;
+        }
         if (plugin.name === 'lag-compensation' || (plugin as any).rewind !== undefined) {
             this.lagComp = plugin as unknown as LagCompensation;
         }

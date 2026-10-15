@@ -36,6 +36,7 @@ export class AoiGrid implements ServerPlugin {
     private cellStart = new Int32Array(0);   // length cells + 1
     private cellCursor = new Int32Array(0);  // length cells
     private cellItems = new Int32Array(0);   // entity ids, length maxInCell
+    private cellOf = new Int32Array(0);      // per-entity cell index, length maxInWorld
     private indexed = 0;
 
     constructor(opts: AoiGridOptions) {
@@ -78,15 +79,19 @@ export class AoiGrid implements ServerPlugin {
         if (this.cellStart.length < cells + 1) this.cellStart = new Int32Array(cells + 1);
         if (this.cellCursor.length < cells) this.cellCursor = new Int32Array(cells);
         if (this.cellItems.length < n) this.cellItems = new Int32Array(n);
+        if (this.cellOf.length < n) this.cellOf = new Int32Array(n);
 
         const start = this.cellStart;
+        const cellOf = this.cellOf;
         start.fill(0, 0, cells + 1);
 
         for (let i = 0; i < n; i++) {
             const e = list[i]!;
             let cx = Math.floor((xs[e]! - minX) / cs); if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
             let cy = Math.floor((ys[e]! - minY) / cs); if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
-            start[cy * cols + cx + 1]!++;
+            const cell = cy * cols + cx;
+            cellOf[i] = cell;
+            start[cell + 1]!++;
         }
         for (let i = 0; i < cells; i++) start[i + 1]! += start[i]!;
 
@@ -94,10 +99,8 @@ export class AoiGrid implements ServerPlugin {
         cursor.set(start.subarray(0, cells));
         const items = this.cellItems;
         for (let i = 0; i < n; i++) {
-            const e = list[i]!;
-            let cx = Math.floor((xs[e]! - minX) / cs); if (cx < 0) cx = 0; else if (cx >= cols) cx = cols - 1;
-            let cy = Math.floor((ys[e]! - minY) / cs); if (cy < 0) cy = 0; else if (cy >= rows) cy = rows - 1;
-            items[cursor[cy * cols + cx]!++] = e;
+            const cell = cellOf[i]!;
+            items[cursor[cell]!++] = list[i]!;
         }
         this.indexed = n;
     }
