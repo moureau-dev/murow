@@ -607,6 +607,7 @@ client disconnect → server.on('disconnection', { peer, reason })
 ```ts
 interface ServerPlugin {
   readonly name: string;
+  readonly interval?: number;                                 // run onTick every N ticks. Default 1
   onMount?(server: GameServer<any, any>): void;
   onUnmount?(server: GameServer<any, any>): void;
   onTick?(world: World, deltaTime: number): void;
@@ -634,6 +635,7 @@ interface AoiGridOptions {
   cellSize: number;                                           // uniform-grid cell size (world units)
   radius: number;                                             // AOI radius (world units)
   hysteresisRadius?: number;                                  // extra despawn slack. Default 0
+  interval?: number;                                          // re-index every N ticks. Default 1
   positionComponent: Component<{ x: number; y: number }>;     // any 2D position component
 }
 ```

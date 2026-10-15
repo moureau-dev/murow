@@ -370,7 +370,13 @@ export class GameServer<
             this.tickCounter++;
             this.lastDt = deltaTime;
 
-            for (const plugin of this.plugins) plugin.onTick?.(this.world, deltaTime);
+            for (const plugin of this.plugins) {
+                if (plugin.onTick === undefined) continue;
+                const interval = plugin.interval ?? 1;
+                if (interval <= 1 || this.tickCounter % interval === 0) {
+                    plugin.onTick(this.world, deltaTime);
+                }
+            }
 
             if (this.tickCounter % this.snapshotEvery !== 0) return;
             this.sendSnapshots();

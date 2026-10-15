@@ -12,6 +12,8 @@ export interface AoiGridOptions {
     radius: number;
     /** Extra slack on the despawn boundary. Default 0. */
     hysteresisRadius?: number;
+    /** Re-index every this many ticks. Default 1 (every tick). */
+    interval?: number;
     /** Component holding `{ x, y }` positions used to compute distance. */
     positionComponent: Component<{ x: number; y: number }>;
 }
@@ -26,6 +28,7 @@ export class AoiGrid implements ServerPlugin {
     readonly cellSize: number;
     readonly radius: number;
     readonly hysteresisRadius: number;
+    readonly interval: number;
     private positionComponent: Component<{ x: number; y: number }>;
 
     private index: SpatialHash | null = null;
@@ -38,13 +41,14 @@ export class AoiGrid implements ServerPlugin {
         this.cellSize = opts.cellSize;
         this.radius = opts.radius;
         this.hysteresisRadius = opts.hysteresisRadius ?? 0;
+        this.interval = opts.interval ?? 1;
         this.positionComponent = opts.positionComponent;
     }
 
     onTick(world: World): void {
         const max = world.getMaxEntities();
         if (this.index === null || this.index.capacity < max) {
-            this.index = new SpatialHash({ cellSize: this.cellSize, capacity: max });
+            this.index = new SpatialHash({ cellSize: this.cellSize, capacity: max, buckets: max * 2 });
         }
         const index = this.index;
 

@@ -28,6 +28,7 @@ const PEERS = Number(process.env.PEERS ?? 24);
 const TICKS = Number(process.env.TICKS ?? 400);
 const RADIUS = Number(process.env.RADIUS ?? 50);
 const WORLD_SIZE = Number(process.env.WORLD_SIZE ?? 1000);
+const INTERVAL = Number(process.env.INTERVAL ?? 1);
 const LABEL = process.env.LABEL ?? 'run';
 const TICK_RATE = 20;
 
@@ -71,7 +72,7 @@ function run(label: string, iters: number, fn: (i: number) => void): number {
 }
 
 console.log(
-    `\n[${LABEL}] entities=${ENTITIES} peers=${PEERS} radius=${RADIUS} world=${WORLD_SIZE} ticks=${TICKS}\n`,
+    `\n[${LABEL}] entities=${ENTITIES} peers=${PEERS} radius=${RADIUS} world=${WORLD_SIZE} interval=${INTERVAL} ticks=${TICKS}\n`,
 );
 
 const world = new World({ maxEntities: ENTITIES + PEERS + 8, components: [Position] });
@@ -111,15 +112,15 @@ function advance(tick: number): void {
     }
 }
 
-const aoi = new AoiGrid({ cellSize: 32, radius: RADIUS, hysteresisRadius: 4, positionComponent: Position });
+const aoi = new AoiGrid({ cellSize: 32, radius: RADIUS, hysteresisRadius: 4, interval: INTERVAL, positionComponent: Position });
 const out: Entity[] = [];
 const fakePeer = (entity: Entity) => ({ entity } as never);
 
 advance(1);
 
 // --- plugin only: rebuild the grid + query each peer's neighborhood ---------
-const pluginMs = run('grid', TICKS, () => {
-    aoi.onTick(world);
+const pluginMs = run('grid', TICKS, (i) => {
+    if (i % INTERVAL === 0) aoi.onTick(world);
     for (let p = 0; p < PEERS; p++) {
         out.length = 0;
         aoi.nearby(fakePeer(players[p]!), world, out);

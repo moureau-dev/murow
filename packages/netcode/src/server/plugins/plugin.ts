@@ -3,6 +3,8 @@ import type { Peer, ServerHandlerContext } from '../../ctx';
 
 export interface ServerPlugin {
     readonly name: string;
+    /** Run `onTick` every this many ticks. Default 1 (every tick). */
+    readonly interval?: number;
     onMount?(server: any): void;
     onUnmount?(server: any): void;
     onTick?(world: World, deltaTime: number): void;
