@@ -1,5 +1,3 @@
-import { FreeList } from '../free-list';
-
 /**
  * Internal base for the dynamic trees (`Quadtree`/`Octree`). Ids must be in
  * `[0, capacity)`.
@@ -18,7 +16,8 @@ export abstract class TreeCore {
     private readonly nodeHead: Int32Array;
     private readonly nodeCount: Int32Array;
     private readonly nodeChild: Int32Array;
-    private nodeFree: FreeList;
+    private readonly nodeFree: Int32Array;
+    private nodeFreeTop: number;
 
     private readonly entId: Int32Array;
     private readonly entNode: Int32Array;
@@ -27,7 +26,8 @@ export abstract class TreeCore {
     private readonly entMin: Float32Array;
     private readonly entMax: Float32Array;
     private readonly idEntry: Int32Array;
-    private entFree: FreeList;
+    private readonly entFree: Int32Array;
+    private entFreeTop: number;
 
     private readonly rootMin: number[];
     private readonly rootMax: number[];
@@ -59,7 +59,9 @@ export abstract class TreeCore {
         this.nodeHead = new Int32Array(maxNodes).fill(-1);
         this.nodeCount = new Int32Array(maxNodes);
         this.nodeChild = new Int32Array(maxNodes * this.branching).fill(-1);
-        this.nodeFree = new FreeList(maxNodes);
+        this.nodeFree = new Int32Array(Math.max(1, maxNodes - 1));
+        for (let i = 0; i < maxNodes - 1; i++) this.nodeFree[i] = i + 1;
+        this.nodeFreeTop = maxNodes - 1;
 
         this.entId = new Int32Array(opts.capacity);
         this.entNode = new Int32Array(opts.capacity).fill(-1);
@@ -67,7 +69,9 @@ export abstract class TreeCore {
         this.entNext = new Int32Array(opts.capacity).fill(-1);
         this.entMin = new Float32Array(opts.capacity * this.dim);
         this.entMax = new Float32Array(opts.capacity * this.dim);
-        this.entFree = new FreeList(opts.capacity);
+        this.entFree = new Int32Array(opts.capacity);
+        for (let i = 0; i < opts.capacity; i++) this.entFree[i] = i;
+        this.entFreeTop = opts.capacity;
         this.idEntry = new Int32Array(opts.capacity).fill(-1);
 
         this.initRoot();
@@ -83,8 +87,8 @@ export abstract class TreeCore {
         if (e !== -1) {
             this.unlinkEntry(e);
         } else {
-            e = this.entFree.allocate();
-            if (e === -1) return;
+            if (this.entFreeTop === 0) return;
+            e = this.entFree[--this.entFreeTop]!;
             this.idEntry[id] = e;
             this.entPrev[e] = -1;
             this.entNext[e] = -1;
@@ -110,7 +114,7 @@ export abstract class TreeCore {
         const e = this.idEntry[id]!;
         if (e === -1) return false;
         this.unlinkEntry(e);
-        this.entFree.free(e);
+        this.entFree[this.entFreeTop++] = e;
         this.idEntry[id] = -1;
         this._size--;
         return true;
@@ -126,19 +130,23 @@ export abstract class TreeCore {
         this.entPrev.fill(-1);
         this.entNext.fill(-1);
         this.idEntry.fill(-1);
-        this.nodeFree = new FreeList(this.maxNodes);
-        this.entFree = new FreeList(this.capacity);
+        for (let i = 0; i < this.maxNodes - 1; i++) this.nodeFree[i] = i + 1;
+        this.nodeFreeTop = this.maxNodes - 1;
+        for (let i = 0; i < this.capacity; i++) this.entFree[i] = i;
+        this.entFreeTop = this.capacity;
         this.initRoot();
     }
 
     private initRoot(): void {
-        this.nodeFree.allocate();
         const d = this.dim;
         for (let k = 0; k < d; k++) {
             this.nodeMin[k] = this.rootMin[k]!;
             this.nodeMax[k] = this.rootMax[k]!;
         }
         this.nodeDepth[0] = 0;
+        this.nodeHead[0] = -1;
+        this.nodeCount[0] = 0;
+        for (let i = 0; i < this.branching; i++) this.nodeChild[i] = -1;
     }
 
     private insertEntry(node: number, e: number): void {
@@ -156,17 +164,19 @@ export abstract class TreeCore {
     }
 
     private subdivide(node: number): void {
-        if (this.nodeFree.getAvailableCount() < this.branching) return;
+        if (this.nodeFreeTop < this.branching) return;
         const d = this.dim;
         const base = node * this.branching;
         const depth = this.nodeDepth[node]! + 1;
+        const nb = node * d;
 
         for (let i = 0; i < this.branching; i++) {
-            const c = this.nodeFree.allocate();
+            const c = this.nodeFree[--this.nodeFreeTop]!;
             this.nodeDepth[c] = depth;
             this.nodeHead[c] = -1;
             this.nodeCount[c] = 0;
-            const nb = node * d;
+            const cb = c * this.branching;
+            for (let j = 0; j < this.branching; j++) this.nodeChild[cb + j] = -1;
             for (let k = 0; k < d; k++) {
                 const mid = (this.nodeMin[nb + k]! + this.nodeMax[nb + k]!) / 2;
                 if (i & (1 << k)) {
@@ -180,7 +190,6 @@ export abstract class TreeCore {
             this.nodeChild[base + i] = c;
         }
 
-        // Redistribute this node's entries; straddlers stay.
         let e = this.nodeHead[node]!;
         this.nodeHead[node] = -1;
         this.nodeCount[node] = 0;
@@ -234,9 +243,8 @@ export abstract class TreeCore {
 
     private queryNode(node: number, min: Float32Array, max: Float32Array, out: number[]): void {
         const d = this.dim;
-        const eb = d;
         for (let e = this.nodeHead[node]!; e !== -1; e = this.entNext[e]!) {
-            const b = e * eb;
+            const b = e * d;
             let hit = true;
             for (let k = 0; k < d; k++) {
                 if (this.entMax[b + k]! < min[k]! || this.entMin[b + k]! > max[k]!) { hit = false; break; }

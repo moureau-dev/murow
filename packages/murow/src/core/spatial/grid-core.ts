@@ -1,4 +1,3 @@
-import { FreeList } from '../free-list';
 import type { AABB } from './types';
 import type { SpatialIndex } from './spatial-index';
 
@@ -19,7 +18,8 @@ export abstract class GridCore implements SpatialIndex {
     private readonly minY: Float32Array;
     private readonly maxX: Float32Array;
     private readonly maxY: Float32Array;
-    private free: FreeList;
+    private readonly freeStack: Int32Array;
+    private freeTop: number;
     private cellStart: Int32Array;
     private cursor: Int32Array;
     private items: Int32Array;
@@ -41,7 +41,9 @@ export abstract class GridCore implements SpatialIndex {
         this.minY = new Float32Array(capacity);
         this.maxX = new Float32Array(capacity);
         this.maxY = new Float32Array(capacity);
-        this.free = new FreeList(capacity);
+        this.freeStack = new Int32Array(capacity);
+        for (let i = 0; i < capacity; i++) this.freeStack[i] = i;
+        this.freeTop = capacity;
         this.cellStart = new Int32Array(slots + 1);
         this.cursor = new Int32Array(slots);
         this.items = new Int32Array(capacity);
@@ -52,19 +54,17 @@ export abstract class GridCore implements SpatialIndex {
         return this._size;
     }
 
-    /** Map an integer cell coordinate to a bucket slot. */
     protected abstract slotOfCell(cx: number, cy: number): number;
 
     insert(id: number, bounds: AABB): void {
         if (id < 0 || id >= this.capacity) return;
         let slot = this.idSlot[id]!;
         if (slot === -1) {
-            const s = this.free.allocate();
-            if (s === -1) return;
-            slot = s;
-            this.idSlot[id] = s;
-            this.slotId[s] = id;
-            this.live[s] = 1;
+            if (this.freeTop === 0) return;
+            slot = this.freeStack[--this.freeTop]!;
+            this.idSlot[id] = slot;
+            this.slotId[slot] = id;
+            this.live[slot] = 1;
             this._size++;
         }
         this.minX[slot] = bounds.minX;
@@ -82,7 +82,7 @@ export abstract class GridCore implements SpatialIndex {
         if (id < 0 || id >= this.capacity) return;
         const slot = this.idSlot[id]!;
         if (slot === -1) return;
-        this.free.free(slot);
+        this.freeStack[this.freeTop++] = slot;
         this.idSlot[id] = -1;
         this.live[slot] = 0;
         this._size--;
@@ -115,7 +115,8 @@ export abstract class GridCore implements SpatialIndex {
     clear(): void {
         this.idSlot.fill(-1);
         this.live.fill(0);
-        this.free = new FreeList(this.capacity);
+        for (let i = 0; i < this.capacity; i++) this.freeStack[i] = i;
+        this.freeTop = this.capacity;
         this._size = 0;
         this.dirty = true;
     }
@@ -130,11 +131,18 @@ export abstract class GridCore implements SpatialIndex {
 
     private rebuild(): void {
         const start = this.cellStart;
+        const capacity = this.capacity;
         start.fill(0, 0, this.slots + 1);
 
-        for (let s = 0; s < this.capacity; s++) {
+        for (let s = 0; s < capacity; s++) {
             if (this.live[s] === 0) continue;
-            this.forEachCell(s, (slot) => { start[slot + 1]!++; });
+            const cx0 = this.cellX(this.minX[s]!);
+            const cx1 = this.cellX(this.maxX[s]!);
+            const cy0 = this.cellY(this.minY[s]!);
+            const cy1 = this.cellY(this.maxY[s]!);
+            for (let cy = cy0; cy <= cy1; cy++) {
+                for (let cx = cx0; cx <= cx1; cx++) start[this.slotOfCell(cx, cy) + 1]!++;
+            }
         }
         for (let i = 0; i < this.slots; i++) start[i + 1]! += start[i]!;
 
@@ -142,24 +150,22 @@ export abstract class GridCore implements SpatialIndex {
         if (this.items.length < total) this.items = new Int32Array(total);
 
         const cursor = this.cursor;
-        cursor.set(start.subarray(0, this.slots));
+        for (let i = 0; i < this.slots; i++) cursor[i] = start[i]!;
         const items = this.items;
-        for (let s = 0; s < this.capacity; s++) {
+        for (let s = 0; s < capacity; s++) {
             if (this.live[s] === 0) continue;
             const id = this.slotId[s]!;
-            this.forEachCell(s, (slot) => { items[cursor[slot]!++] = id; });
+            const cx0 = this.cellX(this.minX[s]!);
+            const cx1 = this.cellX(this.maxX[s]!);
+            const cy0 = this.cellY(this.minY[s]!);
+            const cy1 = this.cellY(this.maxY[s]!);
+            for (let cy = cy0; cy <= cy1; cy++) {
+                for (let cx = cx0; cx <= cx1; cx++) {
+                    const slot = this.slotOfCell(cx, cy);
+                    items[cursor[slot]!++] = id;
+                }
+            }
         }
         this.dirty = false;
-    }
-
-    /** Visit every bucket slot the record in `s` overlaps. */
-    private forEachCell(s: number, visit: (slot: number) => void): void {
-        const cx0 = this.cellX(this.minX[s]!);
-        const cx1 = this.cellX(this.maxX[s]!);
-        const cy0 = this.cellY(this.minY[s]!);
-        const cy1 = this.cellY(this.maxY[s]!);
-        for (let cy = cy0; cy <= cy1; cy++) {
-            for (let cx = cx0; cx <= cx1; cx++) visit(this.slotOfCell(cx, cy));
-        }
     }
 }
