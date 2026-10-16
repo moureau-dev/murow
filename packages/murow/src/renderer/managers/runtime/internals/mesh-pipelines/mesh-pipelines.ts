@@ -287,6 +287,10 @@ export class MeshPipelines {
             size: msi * 4,
             usage: RawBufferUsage.STORAGE | RawBufferUsage.COPY_DST | RawBufferUsage.COPY_SRC,
         });
+        // 1 = drawn, 0 = culled. The occlusion cull resets this buffer each frame
+        // it runs, but when occlusion is off it is never written, so a zero
+        // default would make the skinned vertex shader clip every character.
+        this.device.queue.writeBuffer(this.rawSkinnedOcclusionBuffer, 0, new Uint32Array(msi).fill(1));
         this.rawBoneMatrixBuffer = this.runtime.createRawBuffer(d.arrayOf(d.mat4x4f, maxTotalBones), 'storage');
 
         this.rebuildSkinnedBindGroup();
