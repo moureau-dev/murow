@@ -121,6 +121,10 @@ export class Home extends Newstack {
   render() {
     return (
       <>
+        <head>
+          <script async src="https://public.codepenassets.com/embed/index.js" />
+        </head>
+
         <div class="home" ref={this.home}>
           <div class="home__content">
             <h1 class="home__title">
@@ -205,6 +209,48 @@ export class Home extends Newstack {
             </div>
           </div>
         </div>
+
+        <section class="demo">
+          <div class="demo__inner">
+            <h2 class="demo__heading">See it running</h2>
+            <p class="demo__lead">
+              A live CodePen scene: instanced cubes and skeletal-animated characters,
+              rendered with <code class="home__inline-code">murow/webgpu</code> straight
+              from the CDN. No build step.
+            </p>
+
+            <div class="demo__embed demo__embed--mobile">
+              <iframe
+                height="300"
+                style="width: 100%;"
+                scrolling="no"
+                title="murow cubes"
+                src="https://codepen.io/editor/moureau/embed/preview/01a0eb16-113a-729e-b060-0504b67af9e4?default-tab=result"
+                frameborder="no"
+                loading="lazy"
+                allowtransparency="true"
+              />
+            </div>
+
+            <div class="demo__embed demo__embed--desktop">
+              <p
+                class="codepen"
+                data-height="460"
+                data-pen-title="murow cubes"
+                data-preview="true"
+                data-version="2"
+                data-default-tab="js,result"
+                data-slug-hash="bNqrNYa"
+                data-user="moureau"
+                style="height: 460px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 2px solid; margin: 1em 0; padding: 1em;"
+              >
+                <span>
+                  See the Pen <a href="https://codepen.io/editor/moureau/pen/01a0eb16-113a-729e-b060-0504b67af9e4">murow cubes</a> by mococa (<a href="https://codepen.io/moureau">@moureau</a>) on <a href="https://codepen.io">CodePen</a>.
+                </span>
+              </p>
+            </div>
+          </div>
+        </section>
 
         <section class="features">
           <div class="features__inner">
