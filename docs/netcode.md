@@ -16,6 +16,7 @@ Referenced from [llms.txt](../llms.txt).
 8. **Peers are not entities.** Spawn an entity on connect and bind it with `server.assignEntity(peer, e)`; the client learns it via `'assigned'` / `client.assignedEntity`.
 9. **Scope what peers receive with `networked().interest`** — `'global'` is never filtered (and forces its entity in); a plugin name (e.g. `AoiGrid`'s `name`) ships the component only for peers the plugin deems visible. When a previously-visible entity leaves interest (out of AOI, or despawned) the server ships a despawn, so the client removes it rather than holding a frozen copy.
 10. **Sim tick rate is not render rate.** Run a fixed `tickRate`; render interpolates between fixed states.
+11. **Anything that is not scalar per-entity state is a `defineSnapshots` message** (tile grids, region lists, arrays of records). It is the only channel that supports arrays (`arrayOf`).
 
 ## The decision model
 
@@ -29,6 +30,7 @@ Ask three questions in order: *does the client need to feel it now*, *is it per-
 | "match starts in 3", "you got an achievement", chat | **RPC** (`defineRpcs`) | one-off, not input, not part of the state stream |
 | "this entity has hp 40 and position (x,z)" | **networked component** | continuous per-entity state, snapshot-synced |
 | "I want to buy item 42" | **RPC** to server | a request, not input; server decides the outcome |
+| "here is the current tile grid / a list of records" | **message** (`defineSnapshots`) | custom non-entity payloads (including arrays); ships as typed messages, not entity snapshots |
 
 Intents and RPCs are both typed by a schema map on each side. Intents carry a per-client monotonic sequence; the server applies them in order and acks them, which is what makes rollback safe. RPCs are fire-and-forget and have no ordering guarantees you should rely on.
 
@@ -353,7 +355,7 @@ Every field is honored at runtime:
 | `interp` | `'slerp'` | yes | treats the component as a quaternion and slerps along the shortest arc (other shapes fall back to `'lerp'`) |
 | `snapThreshold` | number | yes | the client snaps instead of smoothing once the desync exceeds it |
 
-### Message schemas — `defineIntents`, `defineRpcs`
+### Message schemas — `defineIntents`, `defineRpcs`, `defineSnapshots`
 
 ```ts
 export const intents = defineIntents({
@@ -369,6 +371,27 @@ export const rpcs = defineRpcs({
 Intents are client-to-server. Kinds are auto-assigned in insertion order starting at 1 (0 is reserved for engine control frames). TypeScript inference flows into `client.sendIntent` and the predictions/handlers maps.
 
 RPCs are bidirectional: one `defineRpcs` map serves both directions (`server.sendRpc` / `server.broadcastRpc` and `client.sendRpc`, received via `server.on('rpc')` / `client.on('rpc')`). The `'rpc'` payload is a discriminated union over the schema — narrow on `name` and `payload` is typed for that RPC. The method names `__murow_ping` and `__murow_pong` are reserved; the engine auto-registers them to drive `client.ping()` / the `'pong'` event. Do not define RPCs with those names.
+
+Intents and RPCs use `BinaryCodec` (fixed-size fields), so neither supports arrays. For a non-entity payload that is bigger or variable-length, declare a **message** with `defineSnapshots` and pass it as `protocol.snapshots` to both sides:
+
+```ts
+import { defineSnapshots, arrayOf } from 'murow/netcode';
+
+export const snapshots = defineSnapshots({
+  tiles:     { cells: arrayOf({ index: u32, owner: u16 }) },
+  neighbors: { ids:   arrayOf({ id: u32 }) },
+  match:     { phase: u8, score: u32 },
+});
+
+server.sendMessageToPeer(peer, 'tiles', { cells });   // one peer
+server.broadcastMessage('tiles', { cells });          // every peer
+client.sendMessage('tiles', { cells });               // client to server
+
+server.on('message', ({ peer, name, payload }) => {}); // discriminated union over the schema
+client.on('message', ({ name, payload }) => {});
+```
+
+Each entry is a plain field schema; the pooled codec is built internally, and `arrayOf(...)` builds a variable-length array field. Intents, RPCs, and messages split by role: intents are inputs (replayed on rollback), RPCs are one-off fixed-shape events, and messages are the array-capable, typed channel. See `packages/netcode/src/messages/README.md`.
 
 ### Predictions and handlers — the `ctx` surface
 
@@ -770,6 +793,7 @@ Murow's WebSocket transports (`BunWebSocketServerTransport`, browser `BrowserWeb
 |---|---|
 | player input the client must feel now | `defineIntents` → `definePredictions` |
 | one-off not-input, not-state event | `defineRpcs` (`sendRpc` / `broadcastRpc`) |
+| custom non-entity payload (arrays, tile grids) | `defineSnapshots` (`sendMessage` / `sendMessageToPeer` / `broadcastMessage`) |
 | continuous per-entity state | networked component (`sync: networked(...)`) |
 | authoritative-only logic (damage, spawns, I/O) | `defineHandlers` |
 | local-only state (camera, UI, handles) | plain component with **no** `sync` |

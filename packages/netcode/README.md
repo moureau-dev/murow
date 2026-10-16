@@ -13,6 +13,7 @@ import { GameServer, GameClient } from 'murow/netcode';
 
 - **Game server / client** - `GameServer`, `GameClient`
 - **Messages** - [`defineIntents`](#intents), [`defineRpcs`](#rpcs)
+- **Custom (non-entity) messages** - [`defineSnapshots`](#custom-messages)
 - **Game logic** - [`definePredictions`](#predictions), [`defineHandlers`](#handlers)
 - **Component sync** - [`networked()`](#networked-components)
 - **Server plugins** - [`AoiGrid`](#aoigrid), [`LagCompensation`](#lagcompensation)
@@ -246,6 +247,27 @@ server.on('rpc', ({ peer, name, payload }) => {
   if (name === 'buyItem') payload.itemId;           // typed: number
 });
 ```
+
+### Custom messages
+
+Entity snapshots carry scalar components only. For anything else (tile grids, region lists, arrays of records), declare named messages with `defineSnapshots` and pass them as `protocol.snapshots`. The pooled codec is built from the schema, and `arrayOf` allows variable-length arrays.
+
+```ts
+import { defineSnapshots, arrayOf } from 'murow/netcode';
+
+export const snapshots = defineSnapshots({
+  tiles: { cells: arrayOf({ index: u32, owner: u16 }) },
+});
+
+server.sendMessageToPeer(peer, 'tiles', { cells });
+server.broadcastMessage('tiles', { cells });
+client.sendMessage('tiles', { cells });
+
+server.on('message', ({ peer, name, payload }) => { /* ... */ });
+client.on('message', ({ name, payload }) => { /* ... */ });
+```
+
+`name` and `payload` are typed against the schema map (a discriminated union, like `'rpc'`). Only messages support `arrayOf`; intents and RPCs use `BinaryCodec` (fixed-size fields). See `src/messages/README.md`.
 
 ### Predictions
 

@@ -1316,6 +1316,8 @@ function onServerSnapshot(snapshot: { tick: number; state: PositionSnapshot }) {
 
 The full design + API reference — networked components and `networked()` options, `defineIntents`/`defineRpcs`/`definePredictions`/`defineHandlers` and the `ctx` surface, server/client constructor options and events, plugins (`AoiGrid`, `LagCompensation`), transports, wire formats, and the "not wired up yet" caveats — is in the [netcode guide](./docs/netcode.md).
 
+**Custom (non-entity) messages — `defineSnapshots`.** Entity snapshots carry scalar components only. Declare `defineSnapshots({ tiles: { cells: arrayOf({ index: u32, owner: u16 }) } })` and pass it as `protocol.snapshots` for typed named messages (arrays included); send via `server.sendMessageToPeer`/`broadcastMessage`/`client.sendMessage`, receive via `on('message')` (a discriminated union over the schema map). `arrayOf` is not available in intents or RPCs. Details: [netcode guide](./docs/netcode.md).
+
 ## Renderer Abstractions (in `murow`)
 
 `murow` ships abstract renderer contracts and the asset pipeline. Everything here is **pure CPU** — no GPU, no canvas, no device. The `webgpu` (or any) backend is responsible for the upload step.
