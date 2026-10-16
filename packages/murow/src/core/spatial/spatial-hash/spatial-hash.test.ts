@@ -33,4 +33,23 @@ describe('SpatialHash', () => {
         h.query(box(0, 0, 5, 5), out);
         expect(out).toEqual([]);
     });
+
+    test('queryRay walks the cells a ray crosses', () => {
+        const h = hash();
+        h.insert(1, box(5, 5, 5, 5));    // cell (0,0)
+        h.insert(2, box(25, 5, 25, 5));  // cell (2,0)
+        h.insert(3, box(25, 95, 25, 95)); // far off the ray
+        const out: number[] = [];
+
+        // Ray along +x from (0,0) for 40 units crosses cells (0,0) and (1,0), (2,0).
+        h.queryRay(0, 0, 1, 0, 40, out);
+        expect(out).toContain(1);
+        expect(out).toContain(2);
+        expect(out).not.toContain(3);
+
+        // Short ray that stops before cell (2,0).
+        h.queryRay(0, 0, 1, 0, 15, out);
+        expect(out).toContain(1);
+        expect(out).not.toContain(2);
+    });
 });

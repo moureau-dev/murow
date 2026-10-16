@@ -124,6 +124,50 @@ export abstract class GridCore implements SpatialIndex {
         }
     }
 
+    /**
+     * Fill `out` with the ids in the cells a ray crosses, up to `maxDist`.
+     * `(dx, dy)` must be normalized; `maxDist` is in world units. Uses DDA grid
+     * traversal, so cost is O(dist / cellSize + candidates). Ids may repeat when
+     * buckets collide; `out` is deduplicated.
+     */
+    queryRay(x0: number, y0: number, dx: number, dy: number, maxDist: number, out: number[]): void {
+        if (this.dirty) this.rebuild();
+        out.length = 0;
+        const stamp = ++this.queryStamp;
+        const start = this.cellStart;
+        const items = this.items;
+        const stamps = this.stamp;
+        const cs = this.cellSize;
+        const ox = this.originX;
+        const oy = this.originY;
+
+        let cx = Math.floor((x0 - ox) / cs);
+        let cy = Math.floor((y0 - oy) / cs);
+
+        const stepX = dx >= 0 ? 1 : -1;
+        const stepY = dy >= 0 ? 1 : -1;
+        const tDeltaX = Math.abs(dx) < 1e-10 ? Infinity : cs / Math.abs(dx);
+        const tDeltaY = Math.abs(dy) < 1e-10 ? Infinity : cs / Math.abs(dy);
+
+        let tMaxX = Math.abs(dx) < 1e-10 ? Infinity
+            : dx > 0 ? ((cx + 1) * cs + ox - x0) / dx : (x0 - (cx * cs + ox)) / -dx;
+        let tMaxY = Math.abs(dy) < 1e-10 ? Infinity
+            : dy > 0 ? ((cy + 1) * cs + oy - y0) / dy : (y0 - (cy * cs + oy)) / -dy;
+
+        while (true) {
+            const slot = this.slotOfCell(cx, cy);
+            const end = start[slot + 1]!;
+            for (let k = start[slot]!; k < end; k++) {
+                const id = items[k]!;
+                if (stamps[id] !== stamp) { stamps[id] = stamp; out.push(id); }
+            }
+            const nextT = tMaxX < tMaxY ? tMaxX : tMaxY;
+            if (nextT > maxDist) break;
+            if (tMaxX <= tMaxY) { tMaxX += tDeltaX; cx += stepX; }
+            else { tMaxY += tDeltaY; cy += stepY; }
+        }
+    }
+
     clear(): void {
         this.idSlot.fill(-1);
         this.live.fill(0);

@@ -20,6 +20,17 @@ interface SpatialIndex {
 node granularity, so it may return ids whose exact box does not overlap the query
 box; re-test with the shape you need.
 
+The grid-based indices (`SpatialGrid`, `SpatialHash`) also expose a ray query:
+
+```ts
+// (dx, dy) must be normalized; maxDist is in world units.
+grid.queryRay(x, y, dx, dy, maxDist, results);   // results cleared and filled
+```
+
+It walks the cells the ray crosses with DDA traversal, so cost is
+`O(maxDist / cellSize + candidates)`. Ids may repeat across collided hash
+buckets; `results` is deduplicated.
+
 | Class | Dim | Index |
 |---|---|---|
 | [`SpatialGrid`](./spatial-grid/spatial-grid.ts) | 2D | fixed uniform grid over a bounded region |

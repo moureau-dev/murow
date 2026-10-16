@@ -1,4 +1,5 @@
 import { Ray2D } from '../ray/ray-2d';
+import { SpatialHash, type AABB } from '../spatial';
 
 type ObstacleId = number;
 
@@ -230,177 +231,6 @@ class BinaryHeap<T> {
 }
 
 /* ---------------------------------- */
-/* Spatial Hash                       */
-/* ---------------------------------- */
-
-/**
- * Spatial hash for fast obstacle queries.
- * Divides space into fixed-size cells and indexes obstacles by cell.
- * Provides O(1) average case lookup instead of O(n) linear scan.
- * 
- * Cell size = 1 matches grid pathfinding unit cells.
- */
-class SpatialHash {
-  private cellSize: number;
-  private grid = new Map<number, Set<ObstacleId>>();
-  private obstacleCells = new Map<ObstacleId, number[]>();
-
-  constructor(cellSize = 1) {
-    this.cellSize = cellSize;
-  }
-
-  /**
-   * Returns hash key for a world position.
-   */
-  private hash(x: number, y: number): number {
-    const cx = Math.floor(x / this.cellSize);
-    const cy = Math.floor(y / this.cellSize);
-    return encodeCell(cx, cy);
-  }
-
-  /**
-   * Adds an obstacle to the spatial hash.
-   */
-  add(id: ObstacleId, obstacle: Obstacle) {
-    const cells = this.getCellsForObstacle(obstacle);
-
-    for (const cell of cells) {
-      if (!this.grid.has(cell)) {
-        this.grid.set(cell, new Set());
-      }
-      this.grid.get(cell)!.add(id);
-    }
-
-    this.obstacleCells.set(id, cells);
-  }
-
-  /**
-   * Removes an obstacle from the spatial hash.
-   */
-  remove(id: ObstacleId) {
-    const cells = this.obstacleCells.get(id);
-    if (!cells) return;
-
-    for (const cell of cells) {
-      const bucket = this.grid.get(cell);
-      if (bucket) {
-        bucket.delete(id);
-        if (bucket.size === 0) {
-          this.grid.delete(cell);
-        }
-      }
-    }
-
-    this.obstacleCells.delete(id);
-  }
-
-  /**
-   * Returns obstacle IDs that might contain the given point.
-   */
-  query(pos: Vec2): Set<ObstacleId> {
-    const cell = this.hash(pos.x, pos.y);
-    return this.grid.get(cell) || new Set();
-  }
-
-  /**
-   * Returns unique obstacle IDs in cells the ray traverses, up to maxDist.
-   * Uses DDA grid traversal — O(dist/cellSize + candidates) instead of O(n).
-   * Direction must be normalized.
-   */
-  queryRay(ox: number, oy: number, dx: number, dy: number, maxDist: number): Set<ObstacleId> {
-    const seen = new Set<ObstacleId>();
-    const cs = this.cellSize;
-
-    let cx = Math.floor(ox / cs);
-    let cy = Math.floor(oy / cs);
-
-    const stepX = dx >= 0 ? 1 : -1;
-    const stepY = dy >= 0 ? 1 : -1;
-
-    const tDeltaX = Math.abs(dx) < 1e-10 ? Infinity : cs / Math.abs(dx);
-    const tDeltaY = Math.abs(dy) < 1e-10 ? Infinity : cs / Math.abs(dy);
-
-    let tMaxX = Math.abs(dx) < 1e-10 ? Infinity
-      : dx > 0 ? ((cx + 1) * cs - ox) / dx : (ox - cx * cs) / -dx;
-    let tMaxY = Math.abs(dy) < 1e-10 ? Infinity
-      : dy > 0 ? ((cy + 1) * cs - oy) / dy : (oy - cy * cs) / -dy;
-
-    while (true) {
-      const bucket = this.grid.get(encodeCell(cx, cy));
-      if (bucket) for (const id of bucket) seen.add(id);
-
-      const nextT = tMaxX < tMaxY ? tMaxX : tMaxY;
-      if (nextT > maxDist) break;
-
-      if (tMaxX <= tMaxY) { tMaxX += tDeltaX; cx += stepX; }
-      else                { tMaxY += tDeltaY; cy += stepY; }
-    }
-
-    return seen;
-  }
-
-  /**
-   * Clears the entire spatial hash.
-   */
-  clear() {
-    this.grid.clear();
-    this.obstacleCells.clear();
-  }
-
-  /**
-   * Determines which cells an obstacle overlaps.
-   */
-  private getCellsForObstacle(o: Obstacle): number[] {
-    const cells: number[] = [];
-
-    if (o.type === 'circle') {
-      const r = o.radius;
-      const minX = Math.floor((o.pos.x - r) / this.cellSize);
-      const maxX = Math.floor((o.pos.x + r) / this.cellSize);
-      const minY = Math.floor((o.pos.y - r) / this.cellSize);
-      const maxY = Math.floor((o.pos.y + r) / this.cellSize);
-
-      for (let x = minX; x <= maxX; x++) {
-        for (let y = minY; y <= maxY; y++) {
-          cells.push(encodeCell(x, y));
-        }
-      }
-    } else if (o.type === 'rect') {
-      const cx = o.pos.x + o.size.x / 2;
-      const cy = o.pos.y + o.size.y / 2;
-      const hw = o.size.x / 2;
-      const hh = o.size.y / 2;
-      const diagonal = Math.sqrt(hw * hw + hh * hh);
-
-      const minX = Math.floor((cx - diagonal) / this.cellSize);
-      const maxX = Math.floor((cx + diagonal) / this.cellSize);
-      const minY = Math.floor((cy - diagonal) / this.cellSize);
-      const maxY = Math.floor((cy + diagonal) / this.cellSize);
-
-      for (let x = minX; x <= maxX; x++) {
-        for (let y = minY; y <= maxY; y++) {
-          cells.push(encodeCell(x, y));
-        }
-      }
-    } else if (o.type === 'polygon') {
-      const bounds = getPolygonBounds(o);
-      const minX = Math.floor(bounds.minX / this.cellSize);
-      const maxX = Math.floor(bounds.maxX / this.cellSize);
-      const minY = Math.floor(bounds.minY / this.cellSize);
-      const maxY = Math.floor(bounds.maxY / this.cellSize);
-
-      for (let x = minX; x <= maxX; x++) {
-        for (let y = minY; y <= maxY; y++) {
-          cells.push(encodeCell(x, y));
-        }
-      }
-    }
-
-    return cells;
-  }
-}
-
-/* ---------------------------------- */
 /* Geometry helpers                   */
 /* ---------------------------------- */
 
@@ -533,9 +363,13 @@ function getPolygonBounds(poly: PolygonObstacle): {
  */
 class Obstacles {
   private items = new Map<ObstacleId, Obstacle>();
-  private spatial = new SpatialHash(1); // Match grid cell size
+  private spatial = new SpatialHash({ cellSize: 1, capacity: 256 }); // Match grid cell size
   private _cachedItems: Obstacle[] = [];
   private nextId = 1;
+  private readonly pointBox: AABB = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  private readonly bounds: AABB = { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  private readonly atOut: number[] = [];
+  private readonly rayOut: number[] = [];
   dirty = true;
   version = 0;
 
@@ -543,7 +377,8 @@ class Obstacles {
     const id = this.nextId++;
     const newObstacle = { ...obstacle, id } as Obstacle;
     this.items.set(id, newObstacle);
-    this.spatial.add(id, newObstacle);
+    this.ensureCapacity(id);
+    this.spatial.insert(id, this.boundsOf(newObstacle));
     this.dirty = true;
     this.version++;
     return id;
@@ -553,17 +388,10 @@ class Obstacles {
     const o = this.items.get(id);
     if (!o) return;
 
-    // Remove from old position in spatial hash
-    this.spatial.remove(id);
-
-    // Create updated obstacle
-    const updated = {
-      ...o,
-      pos: { ...pos },
-    };
-
-    this.items.set(id, updated as Obstacle);
-    this.spatial.add(id, updated as Obstacle);
+    const updated = { ...o, pos: { ...pos } } as Obstacle;
+    this.items.set(id, updated);
+    // `insert` on an existing id updates its bounds in place.
+    this.spatial.insert(id, this.boundsOf(updated));
     this.dirty = true;
     this.version++;
   }
@@ -576,14 +404,17 @@ class Obstacles {
   }
 
   /**
-   * Fast spatial query using hash grid.
+   * Fast spatial query using the hash grid.
    * O(1) average case instead of O(n) linear scan.
    */
   at(pos: Vec2): Obstacle | undefined {
-    const candidates = this.spatial.query(pos);
+    const b = this.pointBox;
+    b.minX = b.maxX = pos.x;
+    b.minY = b.maxY = pos.y;
+    this.spatial.query(b, this.atOut);
 
-    for (const id of candidates) {
-      const o = this.items.get(id);
+    for (let i = 0; i < this.atOut.length; i++) {
+      const o = this.items.get(this.atOut[i]!);
       if (!o || o.solid === false) continue;
 
       if (o.type === 'circle' && pointInCircle(pos, o)) return o;
@@ -597,15 +428,18 @@ class Obstacles {
   }
 
   /**
-   * Returns obstacle IDs along a ray using DDA spatial hash traversal.
-   * O(dist + candidates) — direction must be normalized.
+   * Returns obstacle IDs along a ray using DDA spatial traversal.
+   * O(dist + candidates) — direction must be normalized. The returned array is
+   * reused on the next call.
    */
-  queryRay(ray: Ray2D, maxDist: number): Set<ObstacleId> {
-    return this.spatial.queryRay(
+  queryRay(ray: Ray2D, maxDist: number): number[] {
+    this.spatial.queryRay(
       ray.origin[0], ray.origin[1],
       ray.direction[0], ray.direction[1],
       maxDist,
+      this.rayOut,
     );
+    return this.rayOut;
   }
 
   get values(): Obstacle[] {
@@ -613,6 +447,31 @@ class Obstacles {
     this._cachedItems = [...this.items.values()];
     this.dirty = false;
     return this._cachedItems;
+  }
+
+  /** Grow the index when a new id exceeds its capacity, then re-index every obstacle. */
+  private ensureCapacity(id: ObstacleId): void {
+    if (id < this.spatial.capacity) return;
+    const capacity = Math.max(this.spatial.capacity * 2, id + 1);
+    this.spatial = new SpatialHash({ cellSize: 1, capacity });
+    for (const o of this.items.values()) this.spatial.insert(o.id, this.boundsOf(o));
+  }
+
+  /** The AABB covering an obstacle (`bounds` is scratch; callers must not retain it). */
+  private boundsOf(o: Obstacle): AABB {
+    const b = this.bounds;
+    if (o.type === 'circle') {
+      b.minX = o.pos.x - o.radius; b.maxX = o.pos.x + o.radius;
+      b.minY = o.pos.y - o.radius; b.maxY = o.pos.y + o.radius;
+    } else if (o.type === 'rect') {
+      b.minX = o.pos.x; b.maxX = o.pos.x + o.size.x;
+      b.minY = o.pos.y; b.maxY = o.pos.y + o.size.y;
+    } else {
+      const p = getPolygonBounds(o);
+      b.minX = p.minX; b.maxX = p.maxX;
+      b.minY = p.minY; b.maxY = p.maxY;
+    }
+    return b;
   }
 }
 
