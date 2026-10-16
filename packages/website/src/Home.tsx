@@ -27,7 +27,7 @@ const FEATURES = [
   },
   {
     title: "Compute & typed shaders",
-    body: "Write WGSL in TypeScript with full type safety via TypeGPU. Compute kernels and custom instanced geometry are first-class, not bolted on.",
+    body: "Write WGSL in TypeScript with full type safety through a typed shader DSL. Compute kernels and custom instanced geometry are first-class, not bolted on.",
   },
   {
     title: "Renderer-agnostic core",
