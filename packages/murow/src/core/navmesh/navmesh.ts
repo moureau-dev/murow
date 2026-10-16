@@ -920,7 +920,7 @@ class GraphNav {
 /* NavMesh                            */
 /* ---------------------------------- */
 
-type NavType = 'grid' | 'graph';
+export type NavType = 'grid' | 'graph';
 
 /**
  * Navigation mesh with spatial hashing and smart rebuild.
@@ -959,7 +959,9 @@ type NavType = 'grid' | 'graph';
  * const path = await navmesh.findPath({ from: {x:0, y:0}, to: {x:10, y:10} });
  * ```
  */
-export class NavMesh<TWorkers extends boolean | 'auto' = false> {
+export class NavMesh<TType extends NavType = NavType, TWorkers extends boolean | 'auto' = false> {
+  /** Grid resolution (world units per cell) for `'grid'` navmeshes. */
+  readonly cellSize = 1;
   private grid?: GridNav;
   private graph?: GraphNav;
   private lastVersion = -1;
@@ -972,7 +974,7 @@ export class NavMesh<TWorkers extends boolean | 'auto' = false> {
   private readonly AUTO_WORKER_THRESHOLD = 20; // Use workers when >= 20 pending paths
 
   constructor(
-    private type: NavType,
+    readonly type: TType,
     options?: NavMeshOptions<TWorkers>
   ) {
     this.obstacles = new Obstacles();
@@ -1033,8 +1035,12 @@ export class NavMesh<TWorkers extends boolean | 'auto' = false> {
    * Adds an obstacle and returns its unique ID.
    * For polygons: ensure points are defined relative to (0,0).
    */
-  addObstacle(obstacle: ObstacleInput): ObstacleId {
-    return this.obstacles.add(obstacle);
+  /** Bumps whenever obstacles change. */
+  get version(): number {
+    return this.obstacles.version;
+  }
+
+  addObstacle(obstacle: ObstacleInput): ObstacleId {    return this.obstacles.add(obstacle);
   }
 
   /**

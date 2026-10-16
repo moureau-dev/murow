@@ -957,6 +957,10 @@ const result = nav2.findPath({ from, to });
 const path2 = result instanceof Promise ? await result : result;
 ```
 
+### `Crowd` — agents over a navmesh
+
+`new Crowd({ navmesh, capacity?, radius?, speed?, separation?, waypointRadius?, maxWaypoints? })` manages 2D agents on a `NavMesh`. `crowd.add({ x, y })` returns an `AgentHandle` (`setGoal`, `clearGoal`, `stop`/`resume`, `teleport`, `x`/`y`/`arrived`/`hasGoal`, `cellX`/`cellY`/`cellChanged`, `speed`, `radius`, `destroy`) or `null` at capacity. `crowd.update(dt)` re-paths agents whose goal changed or whose navmesh `version` bumped, follows waypoints, separates neighbors, and integrates. `findPath` is called synchronously (a worker navmesh returns a `Promise` and is skipped). `crowd.each(cb)`, `crowd.remove(handle)`, `crowd.clear()`, `crowd.count`.
+
 ### `SpatialGrid` / `SpatialHash` / `Quadtree` / `Octree` — spatial partitioning
 
 Neighbor/overlap queries for crowd separation, broadphase picking, vision, batching — pure CPU, headless. All share [`SpatialIndex`](./packages/murow/src/core/spatial/spatial-index.ts): `insert(id, bounds)`, `remove(id)`, `update(id, bounds)`, `query(bounds, results)` (results is a reused array, cleared per call — zero-GC), `clear()`, `size`. Bounds are `{ minX, minY, maxX, maxY }` (a point is `min === max`); the octree uses the 3D twin. Results may include ids whose exact box does not overlap (cell/bucket granularity) — re-test at the call site. `SpatialGrid` (bounded, exact) and `SpatialHash` (unbounded, hashed) hold ids in `[0, capacity)` and use typed arrays (no `Map`/`Set`); `Quadtree`/`Octree` are dynamic trees for clustered data.
