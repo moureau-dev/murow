@@ -288,7 +288,16 @@ The server also enforces liveness: `kick.ackTimeout` (default 2000 ms) force-clo
 
 ## Initial synchronization
 
-A peer that joins (or resumes after a reconnect) needs the *current* full state of every replicated channel, not just the dirty deltas. Entity components are handled automatically; for custom messages, the server fires `'baseline'` on the tick the peer's baseline snapshot goes out:
+A peer that joins (or resumes after a reconnect) needs the *current* full state of every replicated channel, not just the dirty deltas. Entity components are handled automatically. For custom messages, mark a channel as a baseline channel with `baseline(...)` when you declare it:
+
+```ts
+const snapshots = defineSnapshots({
+  tiles: baseline({ cells: arrayOf({ index: u32, owner: u16 }) }),
+  vfx:   { spawns: arrayOf({ kind: u16, x: f32, y: f32 }) },   // transient
+});
+```
+
+The server fires `'baseline'` on the tick the peer's baseline snapshot goes out:
 
 ```ts
 server.on('baseline', ({ peer, resumed, send }) => {

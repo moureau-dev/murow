@@ -6,7 +6,7 @@ import { MemoryServerTransport } from 'murow/net';
 import { defineIntents } from '../intents/define-intents';
 import { defineRpcs } from '../rpcs/define-rpcs';
 import { networked } from '../components/sync-spec';
-import { defineSnapshots, arrayOf } from '../messages/define-snapshots';
+import { defineSnapshots, baseline, arrayOf } from '../messages/define-snapshots';
 import { GameServer } from '../server/game-server';
 import { GameClient } from '../client/game-client';
 
@@ -20,8 +20,10 @@ describe('initial synchronization', () => {
         const intents = defineIntents({ noop: { x: u32 } });
         const rpcs = defineRpcs({});
         const snapshots = defineSnapshots({
-            tiles: { cells: arrayOf({ index: u32, owner: u16 }) },
+            tiles: baseline({ cells: arrayOf({ index: u32, owner: u16 }) }),
         });
+
+        expect(snapshots.baselineKeys).toEqual(['tiles']);
 
         const transport = new MemoryServerTransport();
         const server = new GameServer({

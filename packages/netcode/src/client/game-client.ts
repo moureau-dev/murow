@@ -136,6 +136,9 @@ export class GameClient<
     interpBuffer: PeerRenderStrategy;
     private _rttMs: number | null = null;
     private _initialized = false;
+    /** Baseline channels not yet received (order-independent completion). */
+    private readonly pendingBaseline = new Set<string>();
+    private entityBaselineSeen = false;
     private now: () => number;
     private readonly log: Logger;
     /** Fingerprint of the synced schema (or the `schemaFingerprint` option). */
@@ -194,6 +197,7 @@ export class GameClient<
         this.intents = opts.protocol.intents;
         this.rpcs = opts.protocol.rpcs;
         this.snapshots = opts.protocol.snapshots;
+        this.resetBaseline();
         const reg = this.rpcs.registry as any;
         if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
         if (!reg.has(PONG_RPC.method)) reg.register(PONG_RPC);
@@ -341,7 +345,10 @@ export class GameClient<
         const resumed = data.length >= 2 && data[1] === 1;
         this._sessionToken = new TextDecoder().decode(data.subarray(2));
         this.emit('session', { token: this._sessionToken, resumed });
-        if (resumed) this.emit('reconnected', {});
+        if (resumed) {
+            this.resetBaseline();
+            this.emit('reconnected', {});
+        }
     }
 
     private handleIncoming(data: Uint8Array): void {
@@ -385,10 +392,8 @@ export class GameClient<
             return;
         }
         if (type === MSG_SYNC_COMPLETE) {
-            this._initialized = true;
-            this.emit('initialized', {});
-            const ack = new Uint8Array([CMSG_SYNC_ACK]);
-            this.transport.send(ack);
+            this.entityBaselineSeen = true;
+            this.checkInitialized();
             return;
         }
         if (type === MSG_SCHEMA) {
@@ -609,12 +614,29 @@ export class GameClient<
         this.transport.send(frame);
     }
 
+    private resetBaseline(): void {
+        this.pendingBaseline.clear();
+        const keys = this.snapshots?.baselineKeys ?? [];
+        for (let i = 0; i < keys.length; i++) this.pendingBaseline.add(keys[i]!);
+        this.entityBaselineSeen = false;
+        this._initialized = false;
+    }
+
+    private checkInitialized(): void {
+        if (this._initialized || !this.entityBaselineSeen || this.pendingBaseline.size > 0) return;
+        this._initialized = true;
+        this.emit('initialized', {});
+        const ack = new Uint8Array([CMSG_SYNC_ACK]);
+        this.transport.send(ack);
+    }
+
     private handleMessage(bytes: Uint8Array): void {
         const snapshots = this.snapshots;
         if (snapshots === undefined) return;
         try {
             const { type, snapshot } = snapshots.registry.decode(bytes);
             this.emit('message', { name: type, payload: snapshot.updates } as never);
+            if (this.pendingBaseline.delete(type)) this.checkInitialized();
         } catch (err) {
             this.emit('error', { error: err as Error, context: 'handleMessage' });
         }

@@ -10,13 +10,13 @@ Entity snapshots carry scalar components only. Use messages for anything else: t
 import { defineSnapshots, arrayOf } from 'murow/netcode';
 
 const snapshots = defineSnapshots({
-  tiles:     { cells: arrayOf({ index: u32, owner: u16 }) },
-  neighbors: { ids:   arrayOf({ id: u32 }) },
-  match:     { phase: u8, score: u32 },
+  tiles:     baseline({ cells: arrayOf({ index: u32, owner: u16 }) }),  // state -> replayed on join
+  neighbors: baseline({ ids:   arrayOf({ id: u32 }) }),
+  vfx:       { spawns: arrayOf({ kind: u16, x: f32, y: f32 }) },        // transient -> no baseline
 });
 ```
 
-Each entry is a plain field schema; the pooled codec is built internally. `arrayOf(...)` builds a variable-length array field. Pass the result as `protocol.snapshots` to both `GameServer` and `GameClient`.
+Each entry is a plain field schema (the pooled codec is built internally); `arrayOf(...)` builds a variable-length array field. Wrap a schema in `baseline(...)` to mark it a **baseline channel**: a joining or resuming peer receives its current full state before it is considered initialized (`snapshots.baselineKeys` lists them). Pass the result as `protocol.snapshots` to both `GameServer` and `GameClient`.
 
 ## Send and receive
 
