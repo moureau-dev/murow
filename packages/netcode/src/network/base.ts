@@ -85,6 +85,8 @@ export interface ClientEventPayloads<
     message: MessageEvent<S>;
     /** Every channel's initial state has been applied. */
     initialized: {};
+    /** An intent's server-side outcome (accepted or rejected, with a reason code). */
+    outcome: { sequence: number; accepted: boolean; reason: number };
     /** A new networked entity appeared in the client's view. */
     spawn: { entity: number; components: Record<string, unknown> };
     /** A networked entity left the client's view (despawn or out-of-AOI). */

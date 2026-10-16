@@ -460,12 +460,29 @@ interface ServerHandlerContext extends PredictionContext {
   lagCompensated<T>(fn: () => T): T;        // rewind world to clientTick, run fn, restore
 }
 
-type HandlerFn<P> = (payload: P, ctx: ServerHandlerContext) => void;
+type HandlerFn<P> = (payload: P, ctx: ServerHandlerContext) => void | IntentOutcome;
+
+interface IntentOutcome {
+  accepted: boolean;
+  reason?: number;   // game-defined code, 0 when omitted
+}
 
 function defineHandlers<I extends IntentSchemaMap>(
   intents: DefinedIntents<I>,
   map: { [K in keyof I]?: HandlerFn<IntentPayload<I, K>> },
 ): DefinedHandlers<I>;
+```
+
+A handler may return an `IntentOutcome` to tell the client whether the action was accepted. The outcome ships to the owning peer and fires `client.on('outcome', ({ sequence, accepted, reason }))`. Silent handlers (returning `void`) send nothing. A rejected action is still corrected by the normal snapshot reconcile; the outcome is the explicit, immediate signal for UI (error toasts, optimistic rollback).
+
+```ts
+const handlers = defineHandlers(intents, {
+  buy: ({ itemId }, ctx) => {
+    if (!hasGold(ctx, itemId)) return { accepted: false, reason: REASON_NO_GOLD };
+    spend(ctx, itemId);
+    return { accepted: true };
+  },
+});
 ```
 
 The recommended prediction body uses `ctx.fields` (zero allocation, auto dirty-tracking, RAW-speed reads/writes). The `world.update({...})` path still works but is ~6x slower in tight loops because it allocates the partial-update object and re-resolves the component every call; use it for clarity in non-hot code.

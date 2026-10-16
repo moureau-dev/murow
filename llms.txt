@@ -113,7 +113,7 @@ Do NOT:
 The engine has **two layers of networking** stacked on each other. Pick the one that matches your needs:
 
 1. **Low-level (`murow/net` + `murow/protocol`)** — `ServerNetwork` / `ClientNetwork` + `IntentRegistry` / `SnapshotRegistry` / `RpcRegistry`. You wire your own game loop, prediction, interpolation. Use when the netcode opinions don't fit.
-2. **High-level (`murow/netcode`)** — `GameServer` / `GameClient` + `defineIntents` / `definePredictions` / `defineHandlers` + `networked()` component sync + `AoiGrid` / `LagCompensation` plugins. The common case.
+2. **High-level (`murow/netcode`)** — `GameServer` / `GameClient` + `defineIntents` / `definePredictions` / `defineHandlers` + `networked()` component sync + `AoiGrid` / `LagCompensation` plugins. The common case. A handler may return `{ accepted, reason? }` (an `IntentOutcome`) to tell the client the action was accepted or rejected; the client gets it via `client.on('outcome', { sequence, accepted, reason })`.
 
 When in doubt, use `murow/netcode`. Drop to the lower layer only if you need a custom snapshot pipeline.
 

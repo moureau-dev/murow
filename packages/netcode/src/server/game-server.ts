@@ -34,6 +34,7 @@ const MSG_SCHEMA = 0x85;
 const MSG_SESSION = 0x86;
 const MSG_CUSTOM = 0x87;
 const MSG_SYNC_COMPLETE = 0x88;
+const MSG_OUTCOME = 0x89;
 
 // Client -> server frames.
 const CMSG_INTENT = 0x01;
@@ -101,6 +102,8 @@ interface InternalPeer extends Peer {
     lastAckedClientTick: number;
     /** True once the client has acked its baseline. */
     synced: boolean;
+    /** Intent outcomes to ship with the next snapshot. */
+    outcomes: { sequence: number; accepted: boolean; reason: number }[];
     pendingBySequence: Map<number, Uint8Array>;
     /**
      * True until the peer has received its first snapshot. The first
@@ -271,6 +274,7 @@ export class GameServer<
                 kicking: null,
                 lastAckedClientTick: 0,
                 synced: false,
+                outcomes: [],
                 pendingBySequence: new Map<number, Uint8Array>(),
                 needsBaseline: true,
                 intentSeqs: [],
@@ -396,8 +400,8 @@ export class GameServer<
                 }
             }
 
-            if (this.tickCounter % this.snapshotEvery !== 0) return;
-            this.sendSnapshots();
+            if (this.tickCounter % this.snapshotEvery === 0) this.sendSnapshots();
+            for (const peer of this.peers.values()) this.sendOutcomes(peer);
         });
     }
 
@@ -723,6 +727,25 @@ export class GameServer<
         peer.transport.send(frame);
     }
 
+    /** Ship pending intent outcomes to one peer. */
+    private sendOutcomes(peer: InternalPeer): void {
+        const outcomes = peer.outcomes;
+        if (outcomes.length === 0) return;
+        const frame = new Uint8Array(3 + outcomes.length * 7);
+        frame[0] = MSG_OUTCOME;
+        const dv = new DataView(frame.buffer);
+        dv.setUint16(1, outcomes.length, true);
+        let off = 3;
+        for (let i = 0; i < outcomes.length; i++) {
+            const o = outcomes[i]!;
+            dv.setUint32(off, o.sequence >>> 0, true); off += 4;
+            dv.setUint8(off, o.accepted ? 1 : 0); off += 1;
+            dv.setUint16(off, o.reason >>> 0, true); off += 2;
+        }
+        peer.transport.send(frame);
+        outcomes.length = 0;
+    }
+
     private handleMessage(peer: InternalPeer, bytes: Uint8Array): void {
         const snapshots = this.snapshots;
         if (snapshots === undefined) return;
@@ -831,7 +854,10 @@ export class GameServer<
         const predFn = this.predictionMap?.[name as keyof typeof this.predictionMap];
         if (predFn) (predFn as any)(intent, ctx);
         const handlerFn = this.handlerMap?.[name as keyof typeof this.handlerMap];
-        if (handlerFn) (handlerFn as any)(intent, ctx);
+        const result = handlerFn ? (handlerFn as any)(intent, ctx) : undefined;
+        if (result !== null && typeof result === 'object' && typeof result.accepted === 'boolean') {
+            peer.outcomes.push({ sequence, accepted: result.accepted, reason: (result.reason ?? 0) >>> 0 });
+        }
 
         peer.lastAckedClientTick = sequence;
 

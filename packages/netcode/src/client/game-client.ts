@@ -29,6 +29,7 @@ const MSG_SCHEMA = 0x85;
 const MSG_SESSION = 0x86;
 const MSG_CUSTOM = 0x87;
 const MSG_SYNC_COMPLETE = 0x88;
+const MSG_OUTCOME = 0x89;
 const CMSG_INTENT = 0x01;
 const CMSG_RPC = 0x02;
 const CMSG_KICK_ACK = 0x03;
@@ -177,6 +178,7 @@ export class GameClient<
             'rpc',
             'message',
             'initialized',
+            'outcome',
             'spawn',
             'despawn',
             'reconciled',
@@ -394,6 +396,10 @@ export class GameClient<
         if (type === MSG_SYNC_COMPLETE) {
             this.entityBaselineSeen = true;
             this.checkInitialized();
+            return;
+        }
+        if (type === MSG_OUTCOME) {
+            this.handleOutcome(data.subarray(1));
             return;
         }
         if (type === MSG_SCHEMA) {
@@ -628,6 +634,18 @@ export class GameClient<
         this.emit('initialized', {});
         const ack = new Uint8Array([CMSG_SYNC_ACK]);
         this.transport.send(ack);
+    }
+
+    private handleOutcome(bytes: Uint8Array): void {
+        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const count = dv.getUint16(0, true);
+        let off = 2;
+        for (let i = 0; i < count; i++) {
+            const sequence = dv.getUint32(off, true); off += 4;
+            const accepted = dv.getUint8(off) === 1; off += 1;
+            const reason = dv.getUint16(off, true); off += 2;
+            this.emit('outcome', { sequence, accepted, reason });
+        }
     }
 
     private handleMessage(bytes: Uint8Array): void {

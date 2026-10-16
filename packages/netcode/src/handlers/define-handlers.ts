@@ -10,7 +10,14 @@ import type { ServerHandlerContext } from '../ctx';
  * hit detection with lag compensation, item purchases, anti-cheat
  * checks, chat broadcasts.
  */
-export type HandlerFn<P> = (payload: P, ctx: ServerHandlerContext) => void;
+/** Optional outcome a handler can return so the client learns accepted/rejected. */
+export interface IntentOutcome {
+    accepted: boolean;
+    /** Game-defined reason code (0 when omitted). */
+    reason?: number;
+}
+
+export type HandlerFn<P> = (payload: P, ctx: ServerHandlerContext) => void | IntentOutcome;
 
 /**
  * Bundle of server-only handlers keyed by intent name. Partial: most
