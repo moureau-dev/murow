@@ -8,3 +8,4 @@ export * from './client';
 export * from './codec';
 export * from './components';
 export * from './ctx';
+export * from './messages';

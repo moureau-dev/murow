@@ -19,6 +19,7 @@ import { SlotSet } from 'murow/core/slot-map';
 import { ServerEntityMap } from './server-entity-map';
 import { SnapshotPool } from '../codec/snapshot-pool';
 import { makeFieldsAccessor, makeMarkDirty, type PredictionContext } from '../ctx';
+import type { DefinedSnapshots, SnapshotSchemaMap, MessagePayload } from '../messages';
 
 const MSG_SNAPSHOT = 0x80;
 const MSG_RPC = 0x81;
@@ -26,10 +27,12 @@ const MSG_KICK = 0x82;
 const MSG_ASSIGN_ENTITY = 0x84;
 const MSG_SCHEMA = 0x85;
 const MSG_SESSION = 0x86;
+const MSG_CUSTOM = 0x87;
 const CMSG_INTENT = 0x01;
 const CMSG_RPC = 0x02;
 const CMSG_KICK_ACK = 0x03;
 const CMSG_RESUME = 0x04;
+const CMSG_MESSAGE = 0x05;
 
 const PING_RPC = defineRPC({ method: '__murow_ping', schema: { ts: u16 } });
 const PONG_RPC = defineRPC({ method: '__murow_pong', schema: { ts: u16 } });
@@ -53,6 +56,7 @@ interface PredictedIntent {
 export interface GameClientOptions<
     I extends IntentSchemaMap,
     R extends RpcSchemaMap,
+    S extends SnapshotSchemaMap = SnapshotSchemaMap,
 > {
     world: World;
     loop: GameLoop<any>;
@@ -60,6 +64,8 @@ export interface GameClientOptions<
     protocol: {
         intents: DefinedIntents<I>;
         rpcs: DefinedRpcs<R>;
+        /** Optional custom (non-entity) message types. */
+        snapshots?: DefinedSnapshots<S>;
     };
     /**
      * Peer-rendering strategy: a `{ kind, ...opts }` config (see
@@ -92,12 +98,14 @@ export interface GameClientOptions<
 export class GameClient<
     I extends IntentSchemaMap = IntentSchemaMap,
     R extends RpcSchemaMap = RpcSchemaMap,
-> extends Network<'client', R> {
+    S extends SnapshotSchemaMap = SnapshotSchemaMap,
+> extends Network<'client', R, S> {
     readonly world: World;
     readonly loop: GameLoop<any>;
     readonly transport: TransportAdapter;
     readonly intents: DefinedIntents<I>;
     readonly rpcs: DefinedRpcs<R>;
+    private readonly snapshots: DefinedSnapshots<S> | undefined;
 
     private predictionMap: DefinedPredictions<I>['map'] | null = null;
     private predictionBufferSize: number;
@@ -147,7 +155,7 @@ export class GameClient<
         return this._rttMs;
     }
 
-    constructor(opts: GameClientOptions<I, R>) {
+    constructor(opts: GameClientOptions<I, R, S>) {
         super([
             'connected',
             'disconnected',
@@ -156,6 +164,7 @@ export class GameClient<
             'kicked',
             'snapshot',
             'rpc',
+            'message',
             'spawn',
             'despawn',
             'reconciled',
@@ -175,6 +184,7 @@ export class GameClient<
         }
         this.intents = opts.protocol.intents;
         this.rpcs = opts.protocol.rpcs;
+        this.snapshots = opts.protocol.snapshots;
         const reg = this.rpcs.registry as any;
         if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
         if (!reg.has(PONG_RPC.method)) reg.register(PONG_RPC);
@@ -359,6 +369,10 @@ export class GameClient<
         }
         if (type === MSG_SESSION) {
             this.handleSession(data);
+            return;
+        }
+        if (type === MSG_CUSTOM) {
+            this.handleMessage(data.subarray(1));
             return;
         }
         if (type === MSG_SCHEMA) {
@@ -566,6 +580,28 @@ export class GameClient<
         }
 
         return true;
+    }
+
+    /** Send a custom message to the server. */
+    sendMessage<K extends keyof S & string>(name: K, payload: MessagePayload<S, K>): void {
+        const snapshots = this.snapshots;
+        if (snapshots === undefined) return;
+        const encoded = snapshots.registry.encode(name as string, { tick: 0, updates: payload as any });
+        const frame = new Uint8Array(encoded.length + 1);
+        frame[0] = CMSG_MESSAGE;
+        frame.set(encoded, 1);
+        this.transport.send(frame);
+    }
+
+    private handleMessage(bytes: Uint8Array): void {
+        const snapshots = this.snapshots;
+        if (snapshots === undefined) return;
+        try {
+            const { type, snapshot } = snapshots.registry.decode(bytes);
+            this.emit('message', { name: type, payload: snapshot.updates } as never);
+        } catch (err) {
+            this.emit('error', { error: err as Error, context: 'handleMessage' });
+        }
     }
 
     sendRpc<K extends keyof R & string>(name: K, payload: RpcPayload<R, K>): void {

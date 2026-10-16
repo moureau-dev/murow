@@ -10,6 +10,7 @@ import { Network } from '../network/base';
 import { SnapshotEncoder, buildDeltaSchema } from '../codec/delta-codec';
 import { computeSchemaFingerprint } from '../codec/fingerprint';
 import { rateIncludes, type SyncSpec } from '../components/sync-spec';
+import type { DefinedSnapshots, SnapshotSchemaMap, MessagePayload } from '../messages';
 import type { DefinedIntents, IntentSchemaMap } from '../intents/define-intents';
 import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs';
 import type { DefinedPredictions } from '../predictions/define-predictions';
@@ -30,16 +31,19 @@ const MSG_KICK_ACK = 0x83;
 const MSG_ASSIGN_ENTITY = 0x84;
 const MSG_SCHEMA = 0x85;
 const MSG_SESSION = 0x86;
+const MSG_CUSTOM = 0x87;
 
 // Client -> server frames.
 const CMSG_INTENT = 0x01;
 const CMSG_RPC = 0x02;
 const CMSG_KICK_ACK = 0x03;
 const CMSG_RESUME = 0x04;
+const CMSG_MESSAGE = 0x05;
 
 export interface GameServerOptions<
     I extends IntentSchemaMap,
     R extends RpcSchemaMap,
+    S extends SnapshotSchemaMap = SnapshotSchemaMap,
 > {
     world: World;
     loop: GameLoop<any>;
@@ -47,6 +51,8 @@ export interface GameServerOptions<
     protocol: {
         intents: DefinedIntents<I>;
         rpcs: DefinedRpcs<R>;
+        /** Optional custom (non-entity) message types. */
+        snapshots?: DefinedSnapshots<S>;
     };
     snapshot?: {
         /** Snapshots per second. Clamped to tickRate. Default 20. */
@@ -116,12 +122,14 @@ interface InternalPeer extends Peer {
 export class GameServer<
     I extends IntentSchemaMap = IntentSchemaMap,
     R extends RpcSchemaMap = RpcSchemaMap,
-> extends Network<'server', R> {
+    S extends SnapshotSchemaMap = SnapshotSchemaMap,
+> extends Network<'server', R, S> {
     readonly world: World;
     readonly loop: GameLoop<any>;
     readonly transport: ServerTransportAdapter<TransportAdapter>;
     readonly intents: DefinedIntents<I>;
     readonly rpcs: DefinedRpcs<R>;
+    private readonly snapshots: DefinedSnapshots<S> | undefined;
 
     private peers = new Map<string, InternalPeer>();
     private predictionMap: DefinedPredictions<I>['map'] | null = null;
@@ -182,7 +190,7 @@ export class GameServer<
         { entity: Entity | -1; lastAckedClientTick: number; timer: ReturnType<typeof setTimeout> }
     >();
 
-    constructor(opts: GameServerOptions<I, R>) {
+    constructor(opts: GameServerOptions<I, R, S>) {
         super([
             'connection',
             'disconnection',
@@ -191,6 +199,7 @@ export class GameServer<
             'intent',
             'intent-failed',
             'rpc',
+            'message',
             'snapshot',
             'error',
         ]);
@@ -199,6 +208,7 @@ export class GameServer<
         this.transport = opts.transport;
         this.intents = opts.protocol.intents;
         this.rpcs = opts.protocol.rpcs;
+        this.snapshots = opts.protocol.snapshots;
         this.rng = new SimpleRNG(1);
         this.log = Logger.resolve(opts.debug, 'net-server');
         this.dirtySeen = new SlotSet(this.world.getMaxEntities());
@@ -674,6 +684,35 @@ export class GameServer<
         return any;
     }
 
+    /** Send a custom message to one peer. */
+    sendMessageToPeer<K extends keyof S & string>(peer: Peer, name: K, payload: MessagePayload<S, K>): void {
+        const snapshots = this.snapshots;
+        if (snapshots === undefined) return;
+        const internal = this.peers.get(peer.peerId);
+        if (internal === undefined) return;
+        const encoded = snapshots.registry.encode(name as string, { tick: 0, updates: payload as any });
+        const frame = new Uint8Array(encoded.length + 1);
+        frame[0] = MSG_CUSTOM;
+        frame.set(encoded, 1);
+        internal.transport.send(frame);
+    }
+
+    /** Send a custom message to every peer. */
+    broadcastMessage<K extends keyof S & string>(name: K, payload: MessagePayload<S, K>): void {
+        this.peers.forEach((peer) => this.sendMessageToPeer(peer, name, payload));
+    }
+
+    private handleMessage(peer: InternalPeer, bytes: Uint8Array): void {
+        const snapshots = this.snapshots;
+        if (snapshots === undefined) return;
+        try {
+            const { type, snapshot } = snapshots.registry.decode(bytes);
+            this.emit('message', { peer, name: type, payload: snapshot.updates } as never);
+        } catch (err) {
+            this.emit('error', { error: err as Error, context: 'handleMessage' });
+        }
+    }
+
     private handleIncoming(peer: InternalPeer, data: Uint8Array): void {
         if (data.length === 0) return;
         const type = data[0];
@@ -705,6 +744,10 @@ export class GameServer<
         }
         if (type === CMSG_RPC) {
             this.handleRpc(peer, data.subarray(1));
+            return;
+        }
+        if (type === CMSG_MESSAGE) {
+            this.handleMessage(peer, data.subarray(1));
             return;
         }
         this.log.warn('unknown client message type', { type });
