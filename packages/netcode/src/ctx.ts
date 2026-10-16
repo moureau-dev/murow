@@ -80,6 +80,8 @@ export interface PredictionContext {
 
 export interface Peer {
     peerId: string;
+    /** True once the peer has acked its baseline (see the `'synced'` event). */
+    readonly synced?: boolean;
     /** -1 until `server.assignEntity` is called. */
     entity: Entity | -1;
 }

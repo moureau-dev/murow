@@ -286,6 +286,21 @@ server.on('disconnection',({ peer }) => { if (peer.entity !== -1) world.despawn(
 
 The server also enforces liveness: `kick.ackTimeout` (default 2000 ms) force-closes a transport that stops acking, and `server.kick(peer, reason)` soft-kicks gracefully.
 
+## Initial synchronization
+
+A peer that joins (or resumes after a reconnect) needs the *current* full state of every replicated channel, not just the dirty deltas. Entity components are handled automatically; for custom messages, the server fires `'baseline'` on the tick the peer's baseline snapshot goes out:
+
+```ts
+server.on('baseline', ({ peer, resumed, send }) => {
+  send('tiles',     { cells: currentTerritory() });     // global
+  send('neighbors', { ids: currentNeighbors(peer) });   // per-peer
+});
+```
+
+`send(name, payload)` is `sendMessageToPeer` bound to that peer and typed against the message schema. After the handler returns, the server appends a sync-complete marker; the client applies everything, fires `'initialized'` (and `client.initialized` becomes `true`), and acks automatically. The server marks the peer and fires `'synced'` (`peer.synced`). On reconnect the same flow re-runs with `resumed: true`, so it is idempotent.
+
+The handler must send synchronously; sends that land after it returns arrive *after* the marker and the client would have initialized too early. Gating gameplay on `'initialized'` (a loading screen, "start match") is the intended use. Input is not blocked by any of this — `sendIntent` still only waits on assignment.
+
 ## Tick rates and why sim tick ≠ render rate
 
 Both `GameServer` and `GameClient` read their rate from `loop.ticker.rate`. Snapshot scheduling, `ctx.deltaTime`, and lag-compensation history sizing all derive from it. When predictions are in use, **server and client must use the same tick rate** — predictions assume both sides advance by the same `deltaTime`.
@@ -524,6 +539,8 @@ server.on('disconnection',  ({ peer, reason })                  => {});
 server.on('intent',         ({ peer, kind, name, payload, tick }) => {});  // observe-only telemetry
 server.on('intent-failed',  ({ peer, kind, reason })            => {});
 server.on('rpc',            ({ peer, name, payload })           => {});  // discriminated union; narrow on `name`
+server.on('baseline',       ({ peer, resumed, send })          => {});  // send replicated channels here
+server.on('synced',         ({ peer, resumed })                 => {});  // peer acked its baseline
 server.on('snapshot',       ({ peer, tick, byteSize })          => {});
 server.on('error',          ({ error, context })                => {});
 ```
@@ -598,6 +615,7 @@ client.on('spawn',        ({ entity, components })              => {});
 client.on('despawn',      ({ entity })                          => {});
 client.on('reconciled',   ({ rewindTick, replayed })            => {});  // fires after rollback + replay
 client.on('assigned',     ({ entity })                          => {});  // server assigned us this entity
+client.on('initialized',  ()                                    => {});  // all initial state applied (re-fires on resume)
 client.on('pong',         ({ rtt })                             => {});  // round-trip time in ms
 client.on('error',        ({ error, context })                  => {});
 ```

@@ -11,6 +11,7 @@ import { SnapshotEncoder, buildDeltaSchema } from '../codec/delta-codec';
 import { computeSchemaFingerprint } from '../codec/fingerprint';
 import { rateIncludes, type SyncSpec } from '../components/sync-spec';
 import type { DefinedSnapshots, SnapshotSchemaMap, MessagePayload } from '../messages';
+import type { SendFn } from '../network/base';
 import type { DefinedIntents, IntentSchemaMap } from '../intents/define-intents';
 import type { DefinedRpcs, RpcPayload, RpcSchemaMap } from '../rpcs/define-rpcs';
 import type { DefinedPredictions } from '../predictions/define-predictions';
@@ -32,6 +33,7 @@ const MSG_ASSIGN_ENTITY = 0x84;
 const MSG_SCHEMA = 0x85;
 const MSG_SESSION = 0x86;
 const MSG_CUSTOM = 0x87;
+const MSG_SYNC_COMPLETE = 0x88;
 
 // Client -> server frames.
 const CMSG_INTENT = 0x01;
@@ -39,6 +41,7 @@ const CMSG_RPC = 0x02;
 const CMSG_KICK_ACK = 0x03;
 const CMSG_RESUME = 0x04;
 const CMSG_MESSAGE = 0x05;
+const CMSG_SYNC_ACK = 0x06;
 
 export interface GameServerOptions<
     I extends IntentSchemaMap,
@@ -96,6 +99,8 @@ interface InternalPeer extends Peer {
     transport: TransportAdapter;
     kicking: KickingState | null;
     lastAckedClientTick: number;
+    /** True once the client has acked its baseline. */
+    synced: boolean;
     pendingBySequence: Map<number, Uint8Array>;
     /**
      * True until the peer has received its first snapshot. The first
@@ -200,6 +205,8 @@ export class GameServer<
             'intent-failed',
             'rpc',
             'message',
+            'baseline',
+            'synced',
             'snapshot',
             'error',
         ]);
@@ -263,6 +270,7 @@ export class GameServer<
                 transport: peerTransport,
                 kicking: null,
                 lastAckedClientTick: 0,
+                synced: false,
                 pendingBySequence: new Map<number, Uint8Array>(),
                 needsBaseline: true,
                 intentSeqs: [],
@@ -590,6 +598,7 @@ export class GameServer<
             // header + clientAckTick. Established peers skip empty deltas.
             if (peerOut.length === 0 && this.peerDespawned.length === 0 && !peer.needsBaseline) return;
 
+            const wasBaseline = peer.needsBaseline;
             const frame = this.encoder.encode(
                 this.world,
                 this.tickCounter,
@@ -603,6 +612,7 @@ export class GameServer<
 
             peer.needsBaseline = false;
             this.emit('snapshot', { peer, tick: this.tickCounter, byteSize: frame.length });
+            if (wasBaseline) this.runBaseline(peer);
         });
 
         // Clear dirty for the next tick. Per-peer ack-driven resend on
@@ -702,6 +712,17 @@ export class GameServer<
         this.peers.forEach((peer) => this.sendMessageToPeer(peer, name, payload));
     }
 
+    /** Fire `'baseline'` for a peer, then send the sync-complete marker. */
+    private runBaseline(peer: InternalPeer): void {
+        peer.synced = false;
+        const send: SendFn<S> = (name, payload) => this.sendMessageToPeer(peer, name, payload);
+        this.emit('baseline', { peer, resumed: peer.resumed, send } as never);
+
+        const frame = new Uint8Array(1);
+        frame[0] = MSG_SYNC_COMPLETE;
+        peer.transport.send(frame);
+    }
+
     private handleMessage(peer: InternalPeer, bytes: Uint8Array): void {
         const snapshots = this.snapshots;
         if (snapshots === undefined) return;
@@ -748,6 +769,13 @@ export class GameServer<
         }
         if (type === CMSG_MESSAGE) {
             this.handleMessage(peer, data.subarray(1));
+            return;
+        }
+        if (type === CMSG_SYNC_ACK) {
+            if (!peer.synced) {
+                peer.synced = true;
+                this.emit('synced', { peer, resumed: peer.resumed });
+            }
             return;
         }
         this.log.warn('unknown client message type', { type });

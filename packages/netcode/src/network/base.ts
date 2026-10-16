@@ -26,6 +26,10 @@ export type ServerMessageEvent<S extends SnapshotSchemaMap> = {
     [K in keyof S & string]: { peer: Peer; name: K; payload: MessagePayload<S, K> };
 }[keyof S & string];
 
+/** Peer-bound typed message sender handed to the `'baseline'` handler. */
+export type SendFn<S extends SnapshotSchemaMap> =
+    <K extends keyof S & string>(name: K, payload: MessagePayload<S, K>) => void;
+
 export interface ServerEventPayloads<
     R extends RpcSchemaMap = RpcSchemaMap,
     S extends SnapshotSchemaMap = SnapshotSchemaMap,
@@ -49,6 +53,10 @@ export interface ServerEventPayloads<
     rpc: ServerRpcEvent<R>;
     /** A custom message arrived from a peer. */
     message: ServerMessageEvent<S>;
+    /** A peer needs its initial state. Send replicated channels with `send`. */
+    baseline: { peer: Peer; resumed: boolean; send: SendFn<S> };
+    /** A peer's baseline ack arrived; it is fully initialized. */
+    synced: { peer: Peer; resumed: boolean };
     /** A snapshot was packed and sent to a peer. */
     snapshot: { peer: Peer; tick: number; byteSize: number };
     /** Unhandled error. */
@@ -75,6 +83,8 @@ export interface ClientEventPayloads<
     rpc: RpcEvent<R>;
     /** A custom message arrived from the server. */
     message: MessageEvent<S>;
+    /** Every channel's initial state has been applied. */
+    initialized: {};
     /** A new networked entity appeared in the client's view. */
     spawn: { entity: number; components: Record<string, unknown> };
     /** A networked entity left the client's view (despawn or out-of-AOI). */

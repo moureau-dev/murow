@@ -28,11 +28,13 @@ const MSG_ASSIGN_ENTITY = 0x84;
 const MSG_SCHEMA = 0x85;
 const MSG_SESSION = 0x86;
 const MSG_CUSTOM = 0x87;
+const MSG_SYNC_COMPLETE = 0x88;
 const CMSG_INTENT = 0x01;
 const CMSG_RPC = 0x02;
 const CMSG_KICK_ACK = 0x03;
 const CMSG_RESUME = 0x04;
 const CMSG_MESSAGE = 0x05;
+const CMSG_SYNC_ACK = 0x06;
 
 const PING_RPC = defineRPC({ method: '__murow_ping', schema: { ts: u16 } });
 const PONG_RPC = defineRPC({ method: '__murow_pong', schema: { ts: u16 } });
@@ -133,6 +135,7 @@ export class GameClient<
     private _assignedEntity: Entity | null = null;
     interpBuffer: PeerRenderStrategy;
     private _rttMs: number | null = null;
+    private _initialized = false;
     private now: () => number;
     private readonly log: Logger;
     /** Fingerprint of the synced schema (or the `schemaFingerprint` option). */
@@ -155,6 +158,11 @@ export class GameClient<
         return this._rttMs;
     }
 
+    /** True once every channel's initial state has been applied. */
+    get initialized(): boolean {
+        return this._initialized;
+    }
+
     constructor(opts: GameClientOptions<I, R, S>) {
         super([
             'connected',
@@ -165,6 +173,7 @@ export class GameClient<
             'snapshot',
             'rpc',
             'message',
+            'initialized',
             'spawn',
             'despawn',
             'reconciled',
@@ -373,6 +382,13 @@ export class GameClient<
         }
         if (type === MSG_CUSTOM) {
             this.handleMessage(data.subarray(1));
+            return;
+        }
+        if (type === MSG_SYNC_COMPLETE) {
+            this._initialized = true;
+            this.emit('initialized', {});
+            const ack = new Uint8Array([CMSG_SYNC_ACK]);
+            this.transport.send(ack);
             return;
         }
         if (type === MSG_SCHEMA) {
