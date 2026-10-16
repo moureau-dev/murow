@@ -151,7 +151,7 @@ server.use(new LagCompensation({ tickRate: 20, historyMs: 500, components: [Posi
 
 Full snapshots of a thousand entities do not scale. `AoiGrid` filters each peer's snapshot to entities within `radius + hysteresisRadius` of that peer's assigned entity. Pass `boundsComponent` to respect each entity's footprint instead of its center point: entities are indexed by AABB, and one ships when its box overlaps the peer's box (position ± the peer's own half-extents) expanded by the radius. It maintains a uniform grid over the position component (rebuilt each tick) and exposes a `nearby` fast path, so the server iterates only the entities around each peer instead of the whole dirty set — the cost is O(peers × nearby + dirty), not O(peers × dirty). The server tracks each peer's visible set and sends a despawn when an entity leaves it (including a peer-driven leave), so clients never keep a stale entity on screen.
 
-Interest plugins are **independent, not composed**: each plugin is consulted against the candidate set on its own, and a component's `sync.interest` picks the one plugin that governs it. So one entity can ship different components to different peers (e.g. `Position` under an `AoiGrid`, a team-only component under a visibility plugin). A `'global'` component is never filtered and forces its entity into the snapshot — mark spatially-filtered components with the AOI plugin's name, not `'global'`, or they leak.
+Interest plugins are consulted against the candidate set on their own, and a component's `sync.interest` selects which govern it. A rule is a single source (`'global'` or a plugin name, as before) or a **combination**: `{ all: ['aoi', 'team'] }` ships the component only when every named source admits the entity, `{ any: ['aoi', 'team'] }` when at least one does; `'global'` inside a list always admits. So one entity can ship different components to different peers (e.g. `Position` under an `AoiGrid`, a team-only component under a visibility plugin), and a single component can require several sources at once. A `'global'` component is never filtered and forces its entity into the snapshot — mark spatially-filtered components with the AOI plugin's name, not `'global'`, or they leak.
 
 On connect the server sends a **schema fingerprint** (derived from the synced components, or the `schemaFingerprint` option); a client whose schema differs fires an `'error'` with context `'schema-fingerprint'` — a cheap guard against client/server layout drift.
 
@@ -376,7 +376,7 @@ Every field is honored at runtime:
 | `rate` | `'every-tick'` | yes | sent every snapshot tick if dirty |
 | `rate` | `'on-change'` | yes | sent only when the entity is dirty for this component since the last snapshot |
 | `rate` | `{ every: N }` | yes | sent on change, or on `tick % N === 0` |
-| `interest` | `'global'` / plugin name | yes | `'global'` never filters and forces the entity in; a plugin name ships the component only for peers that plugin deems visible |
+| `interest` | `'global'` / plugin name / `{ all: [...] }` / `{ any: [...] }` | yes | `'global'` never filters and forces the entity in; a plugin name ships the component only for peers that plugin deems visible; `all` requires every named source to admit, `any` requires one, and `'global'` inside a list always admits |
 | `interp` | `'lerp'`, `'step'`, `'none'` | yes | per-component dispatch on the client interpolation buffer |
 | `interp` | `'slerp'` | yes | treats the component as a quaternion and slerps along the shortest arc (other shapes fall back to `'lerp'`) |
 | `snapThreshold` | number | yes | the client snaps instead of smoothing once the desync exceeds it |
@@ -820,7 +820,7 @@ Murow's WebSocket transports (`BunWebSocketServerTransport`, browser `BrowserWeb
 
 ## Gotchas
 
-- **`interest` is wired up.** `networked({ interest: 'aoi' })` ships the component only for peers the plugin named `'aoi'` (an `AoiGrid`) deems visible; `'global'` is never filtered and forces the entity into the snapshot.
+- **`interest` is wired up.** `networked({ interest: 'aoi' })` ships the component only for peers the plugin named `'aoi'` (an `AoiGrid`) deems visible; `'global'` is never filtered and forces the entity into the snapshot. `{ all: [...] }` / `{ any: [...] }` combine several named sources (see "Area of interest").
 - **`interp: 'slerp'` treats the component as a quaternion.** It slerps along the shortest arc; a component that is not quaternion-shaped falls back to `'lerp'`. Interp dispatch is per-component, not per-field, so put discrete fields (ids, flags) on a `'step'` component rather than mixing them into a `'lerp'` one.
 - **`snapThreshold` causes a per-component snap.** Once the client's desync for that component exceeds it, the value snaps instead of smoothing; the client-level `maxDesync` and `maxBridgeGap` knobs govern the play-out clock.
 - **Predictions must write networked components only.** Rollback restores networked state; a prediction that touched local UI leaves it corrupted. Drive UI from networked state.

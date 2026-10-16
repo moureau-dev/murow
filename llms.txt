@@ -18,6 +18,7 @@ Before writing anything, internalize these — they are the patterns agents wron
 - **No scene graph / `Object3D` / `mesh.material.color`.** You spawn instance *handles* from a renderer and set flat transforms/tint; there is no node hierarchy. 3D surfaces use `renderer.materials.create(spec)` + a `MaterialHandle` (see "Materials (3D)"), not a material assigned to a mesh.
 - **No React-style hooks, no per-frame object allocation in hot loops.** State lives in components (multiplayer) or in your own arrays (single-player) — not in closures or framework state.
 - **Determinism in predictions:** no `Math.random()` (use `ctx.rng`), no `Date.now()`/`performance.now()` (use `ctx.tick`/`ctx.deltaTime`), no I/O, no module-level mutable state. Predictions only write **networked** components.
+- **Interest.** `networked().interest` is `'global'`, a plugin name, or a combination: `{ all: [names] }` / `{ any: [names] }`; `'global'` in a list always admits.
 - **Server is authority.** Handlers are server-only. Gameplay decisions (hits, awards) live in `defineHandlers`, never on the client.
 - The full, specific list is the "Common Mistakes" table near the end — consult it before finalizing code.
 

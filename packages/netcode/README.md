@@ -482,7 +482,8 @@ via `client.setInterpolationDelay(ms)`, `client.setMaxDesync(ms)`,
 ```ts
 networked({
   rate: 'every-tick' | 'on-change' | { every: N },
-  interest: 'global' | <plugin-name-string>,
+  interest: 'global' | <plugin-name-string>
+          | { all: <name[]> } | { any: <name[]> },
   interp: 'lerp' | 'slerp' | 'step' | 'none',
   snapThreshold: number,
 });
@@ -491,8 +492,10 @@ networked({
 - `rate`: snapshot eligibility cadence.
 - `interest`: visibility filter; declares a plugin's `name`, or
   `'global'` for "every peer sees this". The named plugin's
-  `filterSnapshot` decides which peers receive the component. See
-  "`networked()` fields" below.
+  `filterSnapshot` decides which peers receive the component. Combine
+  several sources with `{ all: [names] }` (every one must admit) or
+  `{ any: [names] }` (at least one); `'global'` inside a list always
+  admits. See "`networked()` fields" below.
 - `interp`: interpolation mode, dispatched per-component (not per-field).
 - `snapThreshold`: per-component override of the reconciliation
   snap-vs-smooth threshold.

@@ -13,8 +13,32 @@ export type InterpolationMode = 'lerp' | 'slerp' | 'step' | 'none';
  */
 export type SyncRate = 'every-tick' | 'on-change' | { every: number };
 
+/** `T | (string & {})`: accept any string at runtime, autocomplete the known literals. */
+export type StringOr<T extends string> = T | (string & {});
+
 /** `'global'` or a plugin name (e.g. an `AoiGrid` instance's `name`). */
-export type InterestRule = 'global' | (string & {});
+export type InterestName = StringOr<'global'>;
+
+/**
+ * Visibility filter for a component:
+ * - `'global'` never filters (and forces its entity into the snapshot).
+ * - a plugin name ships the component only when that plugin deems the entity
+ *   visible.
+ * - `{ all: [...] }` ships only when every named source admits the entity.
+ * - `{ any: [...] }` ships when at least one named source admits it.
+ * `'global'` inside a list always admits; an unknown name admits (unfiltered).
+ */
+export type InterestRule =
+    | InterestName
+    | { all: readonly InterestName[] }
+    | { any: readonly InterestName[] };
+
+/** Canonical string for an interest rule, for schema fingerprints. */
+export function interestKey(rule: InterestRule): string {
+    if (typeof rule === 'string') return rule;
+    if ('all' in rule) return `all:${[...rule.all].sort().join(',')}`;
+    return `any:${[...rule.any].sort().join(',')}`;
+}
 
 export interface SyncSpec {
     /** Snapshot eligibility cadence. */

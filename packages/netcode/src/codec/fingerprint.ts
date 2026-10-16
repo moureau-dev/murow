@@ -1,4 +1,5 @@
 import type { Component } from 'murow/ecs';
+import { interestKey, type InterestRule } from '../components/sync-spec';
 
 /**
  * A stable fingerprint of a set of synced components: names, field names and
@@ -31,7 +32,8 @@ export function computeSchemaFingerprint(components: readonly Component<any>[]):
                 .join(',');
         }
         const rate = typeof sync?.rate === 'object' ? JSON.stringify(sync?.rate) : String(sync?.rate);
-        parts.push(`${c.name}[${fields.join(',')}]r=${rate}i=${sync?.interest}p=${sync?.interp ?? ''}q=${q}`);
+        const interest = sync?.interest === undefined ? '' : interestKey(sync.interest as InterestRule);
+        parts.push(`${c.name}[${fields.join(',')}]r=${rate}i=${interest}p=${sync?.interp ?? ''}q=${q}`);
     }
     parts.sort();
     return fnv1a(parts.join('|'));

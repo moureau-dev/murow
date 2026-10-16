@@ -652,22 +652,42 @@ export class GameServer<
     private interestAllows(peer: InternalPeer, eid: Entity, c: Component<any>): boolean {
         const rule = (c.__sync as SyncSpec).interest;
         if (rule === 'global') return true;
-        if (!this.interestBuilt) {
-            this.ensureInterestSets();
-            const out = this.interestOut;
-            const candidates = this.currentCandidates!;
-            for (let i = 0; i < this.plugins.length; i++) {
-                const set = this.interestSets[i]!;
-                set.clear();
-                const plugin = this.plugins[i]!;
-                if (plugin.filterSnapshot === undefined) continue;
-                out.length = 0;
-                plugin.filterSnapshot(peer, this.world, candidates, out);
-                for (let k = 0; k < out.length; k++) set.add(out[k]!);
+        this.ensureInterest(peer);
+        if (typeof rule === 'string') return this.ruleAdmits(rule, eid);
+        if ('all' in rule) {
+            for (let i = 0; i < rule.all.length; i++) {
+                if (!this.ruleAdmits(rule.all[i]!, eid)) return false;
             }
-            this.interestBuilt = true;
+            return true;
         }
-        const idx = this.interestIndex[rule as string];
+        for (let i = 0; i < rule.any.length; i++) {
+            if (this.ruleAdmits(rule.any[i]!, eid)) return true;
+        }
+        return false;
+    }
+
+    /** Build this peer's per-plugin visible sets once per tick, lazily on first interest check. */
+    private ensureInterest(peer: InternalPeer): void {
+        if (this.interestBuilt) return;
+        this.ensureInterestSets();
+        const out = this.interestOut;
+        const candidates = this.currentCandidates!;
+        for (let i = 0; i < this.plugins.length; i++) {
+            const set = this.interestSets[i]!;
+            set.clear();
+            const plugin = this.plugins[i]!;
+            if (plugin.filterSnapshot === undefined) continue;
+            out.length = 0;
+            plugin.filterSnapshot(peer, this.world, candidates, out);
+            for (let k = 0; k < out.length; k++) set.add(out[k]!);
+        }
+        this.interestBuilt = true;
+    }
+
+    /** One named source: `'global'` admits everything, a plugin name is set membership, unknown admits. */
+    private ruleAdmits(name: string, eid: Entity): boolean {
+        if (name === 'global') return true;
+        const idx = this.interestIndex[name];
         return idx === undefined ? true : this.interestSets[idx]!.has(eid);
     }
 
