@@ -515,6 +515,7 @@ server.use(new AoiGrid({
   radius: 50,
   hysteresisRadius: 4,
   positionComponent: Position,
+  // boundsComponent: Collider, // optional { hx, hy }: AABB interest
 }));
 ```
 
@@ -523,6 +524,12 @@ peer's assigned entity as visible. A component whose `interest` names
 this plugin ships only for those peers; a `'global'`-interest component
 is never filtered. Entities without the `positionComponent` pass
 through unfiltered.
+
+Pass `boundsComponent` (a component holding `{ hx, hy }` half-extents) to
+use AABB overlap instead of center distance: an entity ships when its box
+overlaps the peer's box expanded by the radius, so large structures whose
+center is outside the radius still ship. Entities without the bounds
+component are treated as points.
 
 **Enter/leave.** The server tracks each peer's visible set (a reused
 per-peer `SlotSet` of entity ids). When an entity drops out (out of

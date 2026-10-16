@@ -149,7 +149,7 @@ server.use(new LagCompensation({ tickRate: 20, historyMs: 500, components: [Posi
 
 ### Area of interest — filtering what each peer receives
 
-Full snapshots of a thousand entities do not scale. `AoiGrid` filters each peer's snapshot to entities within `radius + hysteresisRadius` of that peer's assigned entity. It maintains a uniform grid over the position component (rebuilt each tick) and exposes a `nearby` fast path, so the server iterates only the entities around each peer instead of the whole dirty set — the cost is O(peers × nearby + dirty), not O(peers × dirty). The server tracks each peer's visible set and sends a despawn when an entity leaves it (including a peer-driven leave), so clients never keep a stale entity on screen.
+Full snapshots of a thousand entities do not scale. `AoiGrid` filters each peer's snapshot to entities within `radius + hysteresisRadius` of that peer's assigned entity. Pass `boundsComponent` to respect each entity's footprint instead of its center point: entities are indexed by AABB, and one ships when its box overlaps the peer's box (position ± the peer's own half-extents) expanded by the radius. It maintains a uniform grid over the position component (rebuilt each tick) and exposes a `nearby` fast path, so the server iterates only the entities around each peer instead of the whole dirty set — the cost is O(peers × nearby + dirty), not O(peers × dirty). The server tracks each peer's visible set and sends a despawn when an entity leaves it (including a peer-driven leave), so clients never keep a stale entity on screen.
 
 Interest plugins are **independent, not composed**: each plugin is consulted against the candidate set on its own, and a component's `sync.interest` picks the one plugin that governs it. So one entity can ship different components to different peers (e.g. `Position` under an `AoiGrid`, a team-only component under a visibility plugin). A `'global'` component is never filtered and forces its entity into the snapshot — mark spatially-filtered components with the AOI plugin's name, not `'global'`, or they leak.
 
@@ -166,12 +166,14 @@ server.use(new AoiGrid({
   radius: 50,
   hysteresisRadius: 4,      // boundary slack to stop despawn flicker
   positionComponent: Position,
+  // boundsComponent: Collider, // optional { hx, hy }: AABB interest instead of center distance
 }));
 ```
 
 Two things to know before you reach for it:
 
 - **`networked().interest` is honored.** Each plugin is consulted against the full dirty set, and every component is gated by its own `interest`: `'global'` forces its entity into the snapshot, while a plugin-name interest ships the component only when that plugin deems the entity visible. One entity can therefore ship different components to different peers.
+- **Entity bounds.** With `boundsComponent`, interest is AABB overlap rather than center distance, so a large box whose center is outside the radius but whose footprint crosses the boundary still ships. Entities without the bounds component are treated as points.
 - Entities without the `positionComponent` pass through unfiltered. That is the escape hatch for genuinely global state (scoreboards, match timers) — keep it on a component that is not the AOI position component.
 
 ### Tests — memory and virtual transports
