@@ -87,6 +87,8 @@ export interface ClientEventPayloads<
     initialized: {};
     /** An intent's server-side outcome (accepted or rejected, with a reason code). */
     outcome: { sequence: number; accepted: boolean; reason: number };
+    /** An unacked intent frame was resent (lost-intent recovery). */
+    'intent-retransmit': { sequence: number };
     /** A new networked entity appeared in the client's view. */
     spawn: { entity: number; components: Record<string, unknown> };
     /** A networked entity left the client's view (despawn or out-of-AOI). */

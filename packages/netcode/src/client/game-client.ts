@@ -88,6 +88,13 @@ export interface GameClientOptions<
      */
     reconnection?: boolean | { token?: string };
     now?: () => number;
+    /**
+     * Retransmit an intent when its oldest unacked frame has been in flight for
+     * at least this many milliseconds. `0` (default) disables retransmission.
+     * The server dedups by sequence, so a resend of an already-applied intent
+     * is a no-op.
+     */
+    retransmitMs?: number;
     /** Optional diagnostics: `true` → console logger, or pass a `Logger`. */
     debug?: boolean | Logger;
     /**
@@ -136,6 +143,8 @@ export class GameClient<
     private _assignedEntity: Entity | null = null;
     interpBuffer: PeerRenderStrategy;
     private _rttMs: number | null = null;
+    private retransmitMs = 0;
+    private readonly unackedFrames = new Map<number, { frame: Uint8Array; sentAt: number }>();
     private _initialized = false;
     /** Baseline channels not yet received (order-independent completion). */
     private readonly pendingBaseline = new Set<string>();
@@ -179,6 +188,7 @@ export class GameClient<
             'message',
             'initialized',
             'outcome',
+            'intent-retransmit',
             'spawn',
             'despawn',
             'reconciled',
@@ -208,6 +218,7 @@ export class GameClient<
         this.log = Logger.resolve(opts.debug, 'net-client');
         this.lastDt = opts.loop.ticker.intervalMs / 1000;
         this.now = opts.now ?? (() => performance.now());
+        this.retransmitMs = opts.retransmitMs ?? 0;
 
         // 16 slots covers ~800ms at 20Hz.
         const strategy = opts.strategy;
@@ -327,6 +338,7 @@ export class GameClient<
         events.on('tick', ({ deltaTime }: any) => {
             this.localTick++;
             this.lastDt = deltaTime;
+            this.retransmitOldest();
         });
     }
 
@@ -512,6 +524,7 @@ export class GameClient<
         this.reconcileCtx.decoded = decoded;
         this.reconcileCtx.resetEntities.clear();
         this.reconciler.reconcile(decoded.clientAckTick, this.reconcileCtx as { decoded: DecodedDelta; resetEntities: SlotSet });
+        if (this.retransmitMs > 0) this.clearAcked(decoded.clientAckTick);
     }
 
     private handleRpc(payload: Uint8Array): void {
@@ -581,6 +594,7 @@ export class GameClient<
         dv.setUint32(1, sequence >>> 0, true);
         framed.set(encoded, 5);
         this.transport.send(framed);
+        if (this.retransmitMs > 0) this.unackedFrames.set(sequence, { frame: framed, sentAt: this.now() });
 
         const predFn = this.predictionMap?.[name as keyof typeof this.predictionMap];
         if (predFn !== undefined) {
@@ -620,7 +634,32 @@ export class GameClient<
         this.transport.send(frame);
     }
 
+    /** Drop unacked frames the server has acked. Sequences are inserted in order, so stop at the first survivor. */
+    private clearAcked(ack: number): void {
+        for (const sequence of this.unackedFrames.keys()) {
+            if (sequence > ack) break;
+            this.unackedFrames.delete(sequence);
+        }
+    }
+
+    /** Resend the oldest unacked intent frame when it has been in flight past `retransmitMs`. */
+    private retransmitOldest(): void {
+        if (this.retransmitMs <= 0 || this.unackedFrames.size === 0) return;
+        let oldest = Infinity;
+        for (const sequence of this.unackedFrames.keys()) {
+            if (sequence < oldest) oldest = sequence;
+        }
+        const entry = this.unackedFrames.get(oldest);
+        if (entry === undefined) return;
+        const now = this.now();
+        if (now - entry.sentAt < this.retransmitMs) return;
+        entry.sentAt = now;
+        this.transport.send(entry.frame);
+        this.emit('intent-retransmit', { sequence: oldest });
+    }
+
     private resetBaseline(): void {
+        this.unackedFrames.clear();
         this.pendingBaseline.clear();
         const keys = this.snapshots?.baselineKeys ?? [];
         for (let i = 0; i < keys.length; i++) this.pendingBaseline.add(keys[i]!);

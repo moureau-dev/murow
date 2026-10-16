@@ -450,6 +450,7 @@ new GameClient({
   protocol: { intents, rpcs },
   strategy: { kind: 'snapshot-interpolation', delay: 100, staleWindow: 300, maxDesync: 500, maxBridgeGap: 250 },
   prediction: { bufferSize: 64 },
+  retransmitMs: 0,             // optional: resend the oldest unacked intent after this many ms (0 = off)
   debug: true,                 // optional: true | Logger (default: no logging)
 });
 ```
@@ -470,6 +471,10 @@ Defaults: `strategy = { kind: 'snapshot-interpolation' }` (`delay = 100`,
 - `maxDesync`: desync past which the play-out clock hard-snaps instead of warping, ms.
 - `maxBridgeGap`: largest data gap held instead of bridged, ms.
 - `bufferSize`: max buffered unacked predictions kept for rollback.
+- `retransmitMs`: with a value > 0, resend the oldest unacked intent frame
+  once it has been in flight this long (lost-intent recovery). The server
+  dedups by sequence, so a resend of an applied intent is a no-op; the client
+  emits `'intent-retransmit'`. Default `0` (off).
 
 `delay`, `staleWindow`, `maxDesync`, and `maxBridgeGap` are tunable at runtime
 via `client.setInterpolationDelay(ms)`, `client.setMaxDesync(ms)`,
@@ -716,7 +721,9 @@ class MyPeerTransport implements TransportAdapter {
 ```
 
 The multiplayer layer assumes ordered delivery. WebSocket over TCP
-satisfies that; UDP would need its own ordering/reliability layer.
+satisfies that; UDP would need its own ordering/reliability layer
+(`retransmitMs` recovers dropped intents but does not reorder or
+acknowledge snapshots).
 </details>
 
 ## File layout

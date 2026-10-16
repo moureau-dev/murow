@@ -594,6 +594,8 @@ interface GameClientOptions<I, R> {
   prediction?: {
     bufferSize?: number;   // max unacked predictions for rollback. Default 64
   };
+  retransmitMs?: number;   // resend the oldest unacked intent after this long. Default 0 (off)
+  now?: () => number;
 }
 ```
 
@@ -794,7 +796,7 @@ assignment       : [type=0x84][serverEid u32]
 
 `clientAckTick` is the highest **contiguous-applied intent sequence** the server has applied for the receiving peer (the field name is historical — it carries a per-send sequence, not a game tick). The reconciler uses it to drop confirmed predictions; server and client tick counters are independent.
 
-Each `sendIntent` increments a per-client monotonic sequence (never reused, never skipped). The server applies intents in sequence order and only advances `clientAckTick` once every prior sequence has been applied, so the client's prediction-history cut-off is safe under reorder, packet loss, or skipped game ticks.
+Each `sendIntent` increments a per-client monotonic sequence (never reused, never skipped). The server applies intents in sequence order and only advances `clientAckTick` once every prior sequence has been applied, so the client's prediction-history cut-off is safe under reorder, packet loss, or skipped game ticks. On an unreliable transport, set `retransmitMs` to recover a dropped intent without waiting for the client to time it out: once the oldest unacked frame has been in flight that long, it is resent verbatim. The server dedups by sequence, so a resend of an already-applied intent is a no-op. The client emits `'intent-retransmit'`.
 
 ### Transports
 
@@ -828,7 +830,7 @@ Murow's WebSocket transports (`BunWebSocketServerTransport`, browser `BrowserWeb
 - **`lagCompensated` is a no-op without the plugin**, and only rewinds components registered with `LagCompensation`. Without registration you are hitting the live world and calling it lag compensation.
 - **`on('intent')` is telemetry, not gameplay.** It is observe-only; gameplay handlers are registered with `defineHandlers`. Both fire, so do not apply effects in the event.
 - **`clientAckTick` is an intent sequence, not a game tick.** Server and client tick counters are independent; the reconciler uses the ack sequence as the prediction-history cut-off. The `'reconciled'` event's `rewindTick` carries the same sequence.
-- **Ordered delivery is assumed.** WebSocket over TCP is fine. If you write a UDP transport, implement your own ordering/reliability layer first.
+- **Ordered delivery is assumed.** WebSocket over TCP is fine. If you write a UDP transport, implement your own ordering/reliability layer first; `retransmitMs` recovers dropped intents (bounded by RTT) but does not reorder or guarantee snapshot delivery.
 - **A queuing custom transport must copy buffers in `send()`.** The engine may reuse the underlying memory.
 - **Do not construct `LagCompensation` per match or per peer.** It is one ring per server, sized from `maxEntities` and `historyMs`.
 - **`defineRpcs` reserves `__murow_ping` and `__murow_pong`.** The engine auto-registers them to drive `client.ping()` / the `'pong'` event; do not define RPCs with those names.
