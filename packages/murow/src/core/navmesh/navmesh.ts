@@ -476,19 +476,99 @@ class Obstacles {
 }
 
 /* ---------------------------------- */
+/* Sparse cell table                  */
+/* ---------------------------------- */
+
+/**
+ * Open-addressed int32 -> int32 table with generation-stamped clear, so a
+ * per-search reset is O(1) with no wiping. Keys are packed cell coordinates,
+ * which are sparse and signed, so neither `SlotSet` nor a dense array fits.
+ * Backs the A* open/closed/g/cameFrom state and the blocked-cell set. No
+ * deletion (callers never un-key an entry within a generation).
+ */
+class SparseIntTable {
+  private keys: Int32Array;
+  private vals: Int32Array;
+  private stamp: Int32Array;
+  private mask: number;
+  private growAt: number;
+  private gen = 0;
+  private count = 0;
+
+  constructor(capacity = 256) {
+    let cap = 1;
+    while (cap < capacity) cap <<= 1;
+    this.keys = new Int32Array(cap);
+    this.vals = new Int32Array(cap);
+    this.stamp = new Int32Array(cap);
+    this.mask = cap - 1;
+    this.growAt = cap - (cap >> 2);
+  }
+
+  /** Invalidate every entry in O(1). */
+  clear(): void {
+    this.gen++;
+    this.count = 0;
+  }
+
+  private slot(k: number): number {
+    let i = (Math.imul(k, 0x9e3779b1) >>> 0) & this.mask;
+    while (this.stamp[i] === this.gen && this.keys[i] !== k) i = (i + 1) & this.mask;
+    return i;
+  }
+
+  has(k: number): boolean {
+    return this.stamp[this.slot(k)] === this.gen;
+  }
+
+  /** Value for `k`, or 0 when absent (use `has` to tell them apart). */
+  get(k: number): number {
+    const i = this.slot(k);
+    return this.stamp[i] === this.gen ? this.vals[i]! : 0;
+  }
+
+  set(k: number, v: number): void {
+    if (this.count >= this.growAt) this.grow();
+    const i = this.slot(k);
+    if (this.stamp[i] !== this.gen) {
+      this.stamp[i] = this.gen;
+      this.keys[i] = k;
+      this.count++;
+    }
+    this.vals[i] = v;
+  }
+
+  private grow(): void {
+    const oKeys = this.keys;
+    const oVals = this.vals;
+    const oStamp = this.stamp;
+    const cap = oKeys.length << 1;
+    this.keys = new Int32Array(cap);
+    this.vals = new Int32Array(cap);
+    this.stamp = new Int32Array(cap);
+    this.mask = cap - 1;
+    this.growAt = cap - (cap >> 2);
+    this.count = 0;
+    for (let i = 0; i < oStamp.length; i++) {
+      if (oStamp[i] === this.gen) this.set(oKeys[i]!, oVals[i]!);
+    }
+  }
+}
+
+/* ---------------------------------- */
 /* A* Engine                          */
 /* ---------------------------------- */
 
 /**
  * Reusable A* engine — pre-allocated state cleared between runs.
- * Zero allocations per search (no new Map/Set/BinaryHeap per call).
+ * Zero allocations per search (no new container/BinaryHeap per call).
  * Mirrors World's pre-allocated query buffer pattern.
  */
 class AStarEngine {
-  private cameFrom = new Map<number, number>();
-  private g        = new Map<number, number>();
-  private closed   = new Set<number>();
-  private openSet  = new Set<number>();
+  private cameFrom = new SparseIntTable(256);
+  private g        = new SparseIntTable(256);
+  private closed   = new SparseIntTable(256);
+  private openSet  = new SparseIntTable(256);
   private open:     BinaryHeap<number>;
   goalX = 0;
   goalY = 0;
@@ -496,7 +576,7 @@ class AStarEngine {
   constructor() {
     this.open = new BinaryHeap<number>((nodeKey) => {
       const pos = decodeCell(nodeKey);
-      return (this.g.get(nodeKey) ?? 0) + Math.abs(pos.x - this.goalX) + Math.abs(pos.y - this.goalY);
+      return this.g.get(nodeKey) + Math.abs(pos.x - this.goalX) + Math.abs(pos.y - this.goalY);
     });
   }
 
@@ -513,18 +593,17 @@ class AStarEngine {
     const startKey = encodeCell(start.x, start.y);
     this.g.set(startKey, 0);
     this.open.push(startKey);
-    this.openSet.add(startKey);
+    this.openSet.set(startKey, 1);
 
     while (this.open.size > 0) {
       const currentKey = this.open.pop()!;
-      this.openSet.delete(currentKey);
       const current = decodeCell(currentKey);
 
       if (current.x === goal.x && current.y === goal.y) {
         return reconstruct(this.cameFrom, current);
       }
 
-      this.closed.add(currentKey);
+      this.closed.set(currentKey, 1);
 
       for (const d of dirs) {
         const nx = current.x + d.x;
@@ -534,13 +613,14 @@ class AStarEngine {
         const nk = encodeCell(nx, ny);
         if (this.closed.has(nk)) continue;
 
-        const ng = this.g.get(currentKey)! + 1;
-        if (ng < (this.g.get(nk) ?? Infinity)) {
+        const ng = this.g.get(currentKey) + 1;
+        const prev = this.g.has(nk) ? this.g.get(nk) : Infinity;
+        if (ng < prev) {
           this.g.set(nk, ng);
           this.cameFrom.set(nk, currentKey);
           if (!this.openSet.has(nk)) {
             this.open.push(nk);
-            this.openSet.add(nk);
+            this.openSet.set(nk, 1);
           }
         }
       }
@@ -562,7 +642,7 @@ class AStarEngine {
  * Typical rebuild time: < 1ms for 100 obstacles on 100x100 grid.
  */
 class GridNav {
-  private blocked = new Set<number>();
+  private blocked = new SparseIntTable(1024);
   private astar   = new AStarEngine();
 
   // Path cache — keyed by encoded from|to cells, invalidated by obstacle version.
@@ -593,7 +673,7 @@ class GridNav {
             const cellY = cy + dy;
             const cellCenter = { x: cellX + 0.5, y: cellY + 0.5 };
             if (pointInCircle(cellCenter, o)) {
-              this.blocked.add(encodeCell(cellX, cellY));
+              this.blocked.set(encodeCell(cellX, cellY), 1);
             }
           }
         }
@@ -613,7 +693,7 @@ class GridNav {
           for (let y = minY; y <= maxY; y++) {
             const cellCenter = { x: x + 0.5, y: y + 0.5 };
             if (pointInRect(cellCenter, o)) {
-              this.blocked.add(encodeCell(x, y));
+              this.blocked.set(encodeCell(x, y), 1);
             }
           }
         }
@@ -628,7 +708,7 @@ class GridNav {
           for (let y = minY; y <= maxY; y++) {
             const cellCenter = { x: x + 0.5, y: y + 0.5 };
             if (pointInPolygon(cellCenter, o)) {
-              this.blocked.add(encodeCell(x, y));
+              this.blocked.set(encodeCell(x, y), 1);
             }
           }
         }
@@ -1033,14 +1113,14 @@ export class NavMesh<TType extends NavType = NavType, TWorkers extends boolean |
  * Reconstructs path from A* came-from map.
  */
 function reconstruct(
-  cameFrom: Map<number, number>,
+  cameFrom: SparseIntTable,
   current: Vec2
 ): Vec2[] {
   const path = [current];
   let k = encodeCell(current.x, current.y);
 
   while (cameFrom.has(k)) {
-    k = cameFrom.get(k)!;
+    k = cameFrom.get(k);
     path.push(decodeCell(k));
   }
 
