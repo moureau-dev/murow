@@ -640,6 +640,14 @@ export class MaterialLibrary {
         const entry = this.entries[slot];
         if (!entry || !(name in entry.textureIds)) return;
         entry.textureIds[name] = textureId;
+        if (name === 'metallicRoughness' && 'hasMetallicRoughness' in entry.mirror) {
+            entry.mirror.hasMetallicRoughness = textureId ? 1 : 0;
+            entry.write();
+        }
+        if (name === 'normal' && 'hasNormalMap' in entry.mirror) {
+            entry.mirror.hasNormalMap = textureId ? 1 : 0;
+            entry.write();
+        }
         entry.compiled = {
             ...entry.compiled,
             bindGroup: this.createBindGroup(entry.layout, entry.buffer, entry.textureNames, entry.textureIds, entry.samplerOverrides, entry.usesIbl ? this.deps.ibl : undefined),
