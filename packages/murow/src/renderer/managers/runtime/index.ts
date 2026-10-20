@@ -1,5 +1,6 @@
 export * from './instances';
 export * from './materials';
+export * from './ibl';
 export * from './lights';
 export * from './shadows';
 export * from './decals';

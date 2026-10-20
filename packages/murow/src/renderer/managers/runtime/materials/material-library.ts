@@ -32,6 +32,7 @@ import type { PointShadowSystem } from '../shadows/point-shadow-system';
 import { PointShadowUniforms } from '../shadows/point-shadow-system';
 import { createUnlitMeshVertex, createTexturedMeshVertex, createSkinnedMeshVertex, createExtrudedMeshVertex, createExtrudedSkinnedMeshVertex, type MeshDataLayout, type SkinnedMeshDataLayout } from '../shader';
 import type { MaterialSpec, ResolvedRenderState } from './specs';
+import type { IblManager } from '../ibl';
 import { resolveRenderState, isTransparent } from './specs';
 import {
     EngineMaterialUniforms,
@@ -100,6 +101,8 @@ export interface MaterialLibraryDeps {
         spotShadow: SpotShadowSystem;
         /** Point-light shadow resources bound into every material. */
         pointShadow: PointShadowSystem;
+        /** Active image-based lighting environment. */
+        ibl: IblManager;
     maxMaterials: number;
 }
 
@@ -116,6 +119,8 @@ interface MaterialEntry {
     samplerOverrides: Record<string, RawSampler> | undefined;
     /** Whether this material's geometry is added to the shadow map. */
     shadowCast: boolean;
+    /** Whether this material binds the IBL resources. */
+    usesIbl?: boolean;
     write(): void;
 }
 
@@ -193,7 +198,7 @@ export class MaterialLibrary {
             if (!entry) continue;
             entry.compiled = {
                 ...entry.compiled,
-                bindGroup: this.createBindGroup(entry.layout, entry.buffer, entry.textureNames, entry.textureIds, entry.samplerOverrides),
+                bindGroup: this.createBindGroup(entry.layout, entry.buffer, entry.textureNames, entry.textureIds, entry.samplerOverrides, entry.usesIbl ? this.deps.ibl : undefined),
             };
         }
     }
@@ -349,9 +354,9 @@ export class MaterialLibrary {
             label: spec.id,
         });
         const skinnedPipeline = this.buildPbrSkinnedPipeline(layout, state, spec.id);
-        const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds, samplerOverrides);
+        const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds, samplerOverrides, this.deps.ibl);
         const shadowCast = (spec.shadow?.cast ?? (spec.alphaTest ?? 0) <= 0) && !isTransparent(state);
-        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides, shadowCast, write: () => this.deps.device.queue.writeBuffer(buffer, 0, pack(PbrMaterialUniforms, mirror) as RawBufferSource) };
+        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides, shadowCast, usesIbl: true, write: () => this.deps.device.queue.writeBuffer(buffer, 0, pack(PbrMaterialUniforms, mirror) as RawBufferSource) };
     }
 
     private createShaderMaterial(slot: number, spec: Extract<MaterialSpec, { type: 'shader' }>, state: ResolvedRenderState): MaterialEntry {
@@ -551,6 +556,7 @@ export class MaterialLibrary {
         textureNames: string[],
         textureIds: Record<string, string | null>,
         samplerOverrides?: Record<string, RawSampler>,
+        ibl?: IblManager,
     ): RawBindGroup {
         const entries: RawBindGroupEntry[] = [
             { binding: 0, resource: { buffer } },
@@ -570,6 +576,13 @@ export class MaterialLibrary {
         entries.push({ binding: binding++, resource: { buffer: this.deps.pointShadow.uniforms } });
         entries.push({ binding: binding++, resource: this.deps.pointShadow.mapTexture });
         entries.push({ binding: binding++, resource: this.deps.pointShadow.mapSampler });
+        if (ibl) {
+            entries.push({ binding: binding++, resource: { buffer: ibl.uniformBuffer } });
+            entries.push({ binding: binding++, resource: ibl.envView });
+            entries.push({ binding: binding++, resource: ibl.sampler });
+            entries.push({ binding: binding++, resource: ibl.irradianceView });
+            entries.push({ binding: binding++, resource: ibl.sampler });
+        }
         return this.deps.device.createBindGroup({
             layout: this.runtime.createBindGroupLayout(layout.toDescriptor()),
             entries,
@@ -625,7 +638,7 @@ export class MaterialLibrary {
         entry.textureIds[name] = textureId;
         entry.compiled = {
             ...entry.compiled,
-            bindGroup: this.createBindGroup(entry.layout, entry.buffer, entry.textureNames, entry.textureIds, entry.samplerOverrides),
+            bindGroup: this.createBindGroup(entry.layout, entry.buffer, entry.textureNames, entry.textureIds, entry.samplerOverrides, entry.usesIbl ? this.deps.ibl : undefined),
         };
     }
 

@@ -12,6 +12,7 @@ import {
     SkinnedInstanceStore,
     MaterialManager,
     MaterialLibrary,
+    IblManager,
     LightManager,
     LightSystem,
     ShadowManager,
@@ -52,6 +53,7 @@ export class RendererManagers {
     readonly camera!: CameraManager;
     readonly animation!: InstanceType<typeof SkeletalRuntime>;
     readonly materials!: MaterialManager;
+    readonly ibl!: IblManager;
     readonly lights!: LightManager;
     readonly particles!: ParticleManager;
     readonly models!: ModelsManager;
@@ -121,6 +123,7 @@ export class RendererManagers {
         });
 
         const maxMaterials = rendererOptions.maxMaterials ?? DEFAULT_CAPACITIES.materials;
+        const ibl = new IblManager(deps.core.device);
         const materialLibrary = new MaterialLibrary({
             runtime: deps.runtime,
             root: deps.core.root,
@@ -132,6 +135,7 @@ export class RendererManagers {
             shadow: shadowSystem,
             spotShadow: spotShadowSystem,
             pointShadow: pointShadowSystem,
+            ibl,
             maxMaterials,
         });
         // Changing `renderer.shadows.resolution` rebinds every material.
@@ -158,6 +162,7 @@ export class RendererManagers {
             releaseMaterial,
         });
 
+        this.ibl = ibl;
         this.materials = new MaterialManager({
             capacity: maxMaterials,
             logger: deps.logger,

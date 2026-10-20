@@ -20,6 +20,7 @@ import type { TexturePrefab, TextureSpec } from '../prefab/utility/specs';
 
 const textureParser = async (spec: TextureSpec): Promise<TexturePrefab> => {
     const img = new Image();
+    img.crossOrigin = 'anonymous';
     img.src = spec.src;
     await img.decode();
     return {

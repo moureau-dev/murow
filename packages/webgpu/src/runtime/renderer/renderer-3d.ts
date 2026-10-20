@@ -23,6 +23,7 @@ import {
 import {
     InstanceManager,
     MaterialManager,
+    IblManager,
     LightManager,
     ShadowManager,
     DecalManager,
@@ -140,6 +141,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     instances!: InstanceManager;
     /** Compiled material facade. */
     materials!: MaterialManager;
+    /** Image-based lighting environment. */
+    ibl!: IblManager;
     /** Dynamic light facade. */
     lights!: LightManager;
     /** Shadow passes facade. */
@@ -293,7 +296,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             canvas: this.canvas, assets: this._assets, prefabs: this._prefabs,
             elapsed: () => this.elapsed, nextDecalSeq: () => this.decalMaterialSeq++,
         });
-        this.animation = managers.animation; this.materials = managers.materials; this.lights = managers.lights;
+        this.animation = managers.animation; this.materials = managers.materials; this.ibl = managers.ibl; this.lights = managers.lights;
         this.particles = managers.particles; this.models = managers.models; this.instances = managers.instances;
         // GPU geomorph: blend adjacent LOD levels over ~8 ticks (set 0 to hard-switch).
         this.instances.lodFadeTicks = 8;

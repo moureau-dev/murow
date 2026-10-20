@@ -6,6 +6,7 @@ import { tonemap } from '../shaders/utils';
 import { call, f32 as f32Type, vec as vecType } from 'murow/gpu/ir';
 import { ShaderValue, toExpr, type ShaderInput } from 'murow/gpu/dsl';
 import { createTexturedMeshVertex, type MeshDataLayout } from '../shader';
+import { IblUniforms } from '../ibl';
 
 import { ShadowUniforms } from '../shadows';
 import { SpotShadowUniforms } from '../shadows/spot-shadow-system';
@@ -97,6 +98,11 @@ export function createPbrMaterialLayout() {
         pointShadow: { uniform: PointShadowUniforms },
         pointShadowMap: { texture: 'float', viewDimension: 'cube-array' },
         pointSampler: { sampler: 'filtering' },
+        iblParams: { uniform: IblUniforms },
+        envMap: { texture: 'float', viewDimension: 'cube' },
+        envSampler: { sampler: 'filtering' },
+        irradianceMap: { texture: 'float', viewDimension: 'cube' },
+        irradianceSampler: { sampler: 'filtering' },
     });
 }
 
@@ -454,6 +460,40 @@ export function createPbrMaterialFragment(meshLayout: MeshDataLayout, matLayout:
             );
             const contribution = std.mul(std.mul(brdfL, radiance), std.mul(NdotL, sh));
             acc = std.add(acc, contribution);
+        }
+
+        if (mat.iblParams.enabled > 0.5) {
+            const rot = mat.iblParams.rotation;
+            const cosR = std.cos(rot);
+            const sinR = std.sin(rot);
+            const refl = std.reflect(std.neg(viewDir), normal);
+            const specDir = d.vec3f(
+                std.sub(std.mul(refl.x, cosR), std.mul(refl.z, sinR)),
+                refl.y,
+                std.add(std.mul(refl.x, sinR), std.mul(refl.z, cosR)),
+            );
+            const mip = std.mul(roughness, mat.iblParams.maxMip);
+            const pre = std.textureSampleLevel(mat.envMap, mat.envSampler, specDir, mip);
+
+            // Karis mobile environment BRDF approximation.
+            const rx = std.add(std.mul(roughness, d.f32(-1.0)), d.f32(1.0));
+            const ry = std.add(std.mul(roughness, d.f32(-0.0275)), d.f32(0.0425));
+            const rz = std.add(std.mul(roughness, d.f32(-0.572)), d.f32(1.04));
+            const rw = std.add(std.mul(roughness, d.f32(0.022)), d.f32(-0.04));
+            const a004 = std.add(std.mul(std.min(std.mul(rx, rx), std.pow(d.f32(2.0), std.mul(d.f32(-9.28), NdotV))), rx), ry);
+            const abx = std.add(std.mul(d.f32(-1.04), a004), rz);
+            const aby = std.add(std.mul(d.f32(1.04), a004), rw);
+            const specIbl = std.mul(
+                std.add(std.mul(F0, abx), d.vec3f(aby, aby, aby)),
+                std.mul(d.vec3f(pre.x, pre.y, pre.z), mat.iblParams.intensity),
+            );
+
+            const irr = std.textureSample(mat.irradianceMap, mat.irradianceSampler, normal);
+            const diffIbl = std.mul(
+                std.mul(baseColor, d.vec3f(irr.x, irr.y, irr.z)),
+                std.mul(std.mul(ao, std.sub(one, metallic)), mat.iblParams.intensity),
+            );
+            acc = std.add(acc, std.add(diffIbl, specIbl));
         }
 
         const emissive = std.mul(d.vec3f(m.emissiveR, m.emissiveG, m.emissiveB), d.vec3f(emTex.x, emTex.y, emTex.z));
