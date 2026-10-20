@@ -35,13 +35,17 @@ import type { MaterialSpec, ResolvedRenderState } from './specs';
 import { resolveRenderState, isTransparent } from './specs';
 import {
     EngineMaterialUniforms,
+    PbrMaterialUniforms,
     createEngineMaterialLayout,
+    createPbrMaterialLayout,
     createStandardMaterialFragment,
+    createPbrMaterialFragment,
     createUnlitMaterialFragment,
     createEmissiveMaterialFragment,
     createNoiseFn,
     createSnoiseFn,
     type EngineMaterialLayout,
+    type PbrMaterialLayout,
 } from './built-in';
 
 type UniformSchema = Record<string, AnyField>;
@@ -201,7 +205,9 @@ export class MaterialLibrary {
         const state = resolveRenderState(spec);
         const entry = spec.type === 'shader'
             ? this.createShaderMaterial(slot, spec, state)
-            : this.createEngineMaterial(slot, spec, state);
+            : spec.type === 'pbr'
+                ? this.createPbrMaterial(slot, spec, state)
+                : this.createEngineMaterial(slot, spec, state);
 
         if (spec.name !== undefined) {
             if (this.names.has(spec.name)) throw new Error(`Material "${spec.name}" is already registered`);
@@ -292,6 +298,60 @@ export class MaterialLibrary {
         // ignores the alpha texture), so it does not cast unless asked.
         const shadowCast = (spec.shadow?.cast ?? (spec.alphaTest ?? 0) <= 0) && !isTransparent(state);
         return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides, shadowCast, write: () => this.deps.device.queue.writeBuffer(buffer, 0, pack(EngineMaterialUniforms, mirror) as RawBufferSource) };
+    }
+
+    private createPbrMaterial(slot: number, spec: Extract<MaterialSpec, { type: 'pbr' }>, state: ResolvedRenderState): MaterialEntry {
+        const layout = createPbrMaterialLayout();
+        const buffer = this.runtime.createRawBuffer(PbrMaterialUniforms, 'uniform');
+        const color = spec.baseColor ?? [1, 1, 1];
+        const emissive = spec.emissive ?? [0, 0, 0];
+        const scale = spec.sampling?.scale ?? [1, 1];
+        const offset = spec.sampling?.offset ?? [0, 0];
+        const mirror = {
+            colorR: color[0], colorG: color[1], colorB: color[2],
+            opacity: spec.opacity ?? 1,
+            alphaTest: spec.alphaTest ?? 0,
+            uvScaleU: scale[0], uvScaleV: scale[1],
+            uvOffsetU: offset[0], uvOffsetV: offset[1],
+            receiveShadow: (spec.shadow?.receive ?? true) ? 1 : 0,
+            metallic: spec.metallic ?? 0,
+            roughness: spec.roughness ?? 0.5,
+            occlusionStrength: spec.occlusionStrength ?? 1,
+            emissiveR: emissive[0], emissiveG: emissive[1], emissiveB: emissive[2],
+            hasMetallicRoughness: spec.textures?.metallicRoughness ? 1 : 0,
+        };
+        this.deps.device.queue.writeBuffer(buffer, 0, pack(PbrMaterialUniforms, mirror) as RawBufferSource);
+
+        const vertex = createTexturedMeshVertex(this.deps.meshLayout);
+        const fragment = createPbrMaterialFragment(this.deps.meshLayout, layout);
+
+        const textureNames = ['baseColor', 'metallicRoughness', 'occlusion', 'emissive'];
+        const textureIds: Record<string, string | null> = {
+            baseColor: spec.textures?.baseColor ?? null,
+            metallicRoughness: spec.textures?.metallicRoughness ?? null,
+            occlusion: spec.textures?.occlusion ?? null,
+            emissive: spec.textures?.emissive ?? null,
+        };
+        const sampler = this.getSampler(spec.sampling?.wrap, spec.sampling?.filter);
+        const samplerOverrides = {
+            baseColor: sampler,
+            metallicRoughness: sampler,
+            occlusion: sampler,
+            emissive: sampler,
+        };
+        const pipeline = this.deps.pipelines.buildMaterialPipeline({
+            vertex,
+            fragment,
+            materialLayout: layout,
+            blendState: state.blendState, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
+            colorWrite: state.colorWrite, depthBias: state.depthBias,
+            depthBiasSlopeScale: state.depthBiasSlopeScale, depthBiasClamp: state.depthBiasClamp,
+            label: spec.id,
+        });
+        const skinnedPipeline = this.buildPbrSkinnedPipeline(layout, state, spec.id);
+        const bindGroup = this.createBindGroup(layout, buffer, textureNames, textureIds, samplerOverrides);
+        const shadowCast = (spec.shadow?.cast ?? (spec.alphaTest ?? 0) <= 0) && !isTransparent(state);
+        return { compiled: { pipeline, skinnedPipeline, bindGroup, renderState: state, transparent: isTransparent(state) }, buffer, layout, mirror, textureNames, textureIds, samplerOverrides, shadowCast, write: () => this.deps.device.queue.writeBuffer(buffer, 0, pack(PbrMaterialUniforms, mirror) as RawBufferSource) };
     }
 
     private createShaderMaterial(slot: number, spec: Extract<MaterialSpec, { type: 'shader' }>, state: ResolvedRenderState): MaterialEntry {
@@ -447,6 +507,24 @@ export class MaterialLibrary {
             buffers: [this.deps.pipelines.skinnedVertexBufferLayout],
             meshBGL: this.deps.pipelines.rawSkinnedBGL,
             label: spec.id,
+        });
+    }
+
+    private buildPbrSkinnedPipeline(layout: PbrMaterialLayout, state: ResolvedRenderState, label?: string): RawRenderPipeline | null {
+        const skinnedLayout = this.deps.skinnedLayout;
+        if (!skinnedLayout) return null;
+        const vertex = createSkinnedMeshVertex(skinnedLayout);
+        const fragment = createPbrMaterialFragment(skinnedLayout as unknown as MeshDataLayout, layout);
+        return this.deps.pipelines.buildMaterialPipeline({
+            vertex,
+            fragment,
+            materialLayout: layout,
+            blendState: state.blendState, depthWrite: state.depthWrite, depthTest: state.depthTest, cull: state.cull,
+            colorWrite: state.colorWrite, depthBias: state.depthBias,
+            depthBiasSlopeScale: state.depthBiasSlopeScale, depthBiasClamp: state.depthBiasClamp,
+            buffers: [this.deps.pipelines.skinnedVertexBufferLayout],
+            meshBGL: this.deps.pipelines.rawSkinnedBGL,
+            label,
         });
     }
 

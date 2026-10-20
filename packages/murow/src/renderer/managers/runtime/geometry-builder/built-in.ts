@@ -270,7 +270,7 @@ export function createGrid(opts?: { size?: number; step?: number; lineWidth?: nu
         verts.push(i + lw, 0, -size, 0, 1, 0, 1, 0);
         verts.push(i + lw, 0,  size, 0, 1, 0, 1, 1);
         verts.push(i - lw, 0,  size, 0, 1, 0, 0, 1);
-        indices.push(idx, idx + 1, idx + 2, idx, idx + 2, idx + 3);
+        indices.push(idx, idx + 2, idx + 1, idx, idx + 3, idx + 2);
 
         const idx2 = verts.length / 8;
         // Line along X
@@ -278,7 +278,7 @@ export function createGrid(opts?: { size?: number; step?: number; lineWidth?: nu
         verts.push( size, 0, i - lw, 0, 1, 0, 1, 0);
         verts.push( size, 0, i + lw, 0, 1, 0, 1, 1);
         verts.push(-size, 0, i + lw, 0, 1, 0, 0, 1);
-        indices.push(idx2, idx2 + 1, idx2 + 2, idx2, idx2 + 2, idx2 + 3);
+        indices.push(idx2, idx2 + 2, idx2 + 1, idx2, idx2 + 3, idx2 + 2);
     }
 
     return {
@@ -316,13 +316,13 @@ export function createSphere(latSegments: number = 16, lonSegments: number = 32)
 
             // Triangle 1
             verts.push(...p00, ...p00, u0, v0);
-            verts.push(...p10, ...p10, u0, v1);
             verts.push(...p11, ...p11, u1, v1);
+            verts.push(...p10, ...p10, u0, v1);
 
             // Triangle 2
             verts.push(...p00, ...p00, u0, v0);
-            verts.push(...p11, ...p11, u1, v1);
             verts.push(...p01, ...p01, u1, v0);
+            verts.push(...p11, ...p11, u1, v1);
         }
     }
 
@@ -359,22 +359,22 @@ export function createCylinder(segments: number = 32): GeometryData {
 
         // Side faces
         verts.push(c0, -1, s0, c0, 0, s0, u0, 1);
-        verts.push(c1, -1, s1, c1, 0, s1, u1, 1);
         verts.push(c1,  1, s1, c1, 0, s1, u1, 0);
+        verts.push(c1, -1, s1, c1, 0, s1, u1, 1);
 
         verts.push(c0, -1, s0, c0, 0, s0, u0, 1);
-        verts.push(c1,  1, s1, c1, 0, s1, u1, 0);
         verts.push(c0,  1, s0, c0, 0, s0, u0, 0);
+        verts.push(c1,  1, s1, c1, 0, s1, u1, 0);
 
         // Top cap
         verts.push(0, 1, 0, 0, 1, 0, 0.5, 0.5);
-        verts.push(c0, 1, s0, 0, 1, 0, c0 * 0.5 + 0.5, s0 * 0.5 + 0.5);
         verts.push(c1, 1, s1, 0, 1, 0, c1 * 0.5 + 0.5, s1 * 0.5 + 0.5);
+        verts.push(c0, 1, s0, 0, 1, 0, c0 * 0.5 + 0.5, s0 * 0.5 + 0.5);
 
         // Bottom cap
         verts.push(0, -1, 0, 0, -1, 0, 0.5, 0.5);
-        verts.push(c1, -1, s1, 0, -1, 0, c1 * 0.5 + 0.5, s1 * 0.5 + 0.5);
         verts.push(c0, -1, s0, 0, -1, 0, c0 * 0.5 + 0.5, s0 * 0.5 + 0.5);
+        verts.push(c1, -1, s1, 0, -1, 0, c1 * 0.5 + 0.5, s1 * 0.5 + 0.5);
     }
 
     return {
@@ -406,13 +406,13 @@ export function createCone(segments: number = 32): GeometryData {
         const nLen = 1 / Math.sqrt(nx * nx + ny * ny + nz * nz);
 
         verts.push(0, 1, 0, nx * nLen, ny * nLen, nz * nLen, 0.5, 0);
-        verts.push(c0, -1, s0, nx * nLen, ny * nLen, nz * nLen, i / segments, 1);
         verts.push(c1, -1, s1, nx * nLen, ny * nLen, nz * nLen, (i + 1) / segments, 1);
+        verts.push(c0, -1, s0, nx * nLen, ny * nLen, nz * nLen, i / segments, 1);
 
         // Bottom cap
         verts.push(0, -1, 0, 0, -1, 0, 0.5, 0.5);
-        verts.push(c1, -1, s1, 0, -1, 0, c1 * 0.5 + 0.5, s1 * 0.5 + 0.5);
         verts.push(c0, -1, s0, 0, -1, 0, c0 * 0.5 + 0.5, s0 * 0.5 + 0.5);
+        verts.push(c1, -1, s1, 0, -1, 0, c1 * 0.5 + 0.5, s1 * 0.5 + 0.5);
     }
 
     return {

@@ -87,6 +87,53 @@ export interface EngineMaterialSpec extends MaterialSpecBase {
     readonly texture?: string;
 }
 
+/** UV and sampler settings shared by engine materials. */
+export interface MaterialSampling {
+    /** UV multiplier. Default `[1, 1]`. */
+    readonly scale?: readonly [number, number];
+    /** UV offset in tiles. Default `[0, 0]`. */
+    readonly offset?: readonly [number, number];
+    /** Texture address mode. Default `'clamp'`. */
+    readonly wrap?: 'repeat' | 'clamp';
+    /** Texture filter. Default `'linear'`. */
+    readonly filter?: 'linear' | 'nearest';
+}
+
+/** Texture ids for a PBR material. */
+export interface PbrTextures {
+    /** Base color map. */
+    readonly baseColor?: string;
+    /** Metallic-roughness map. G = roughness, B = metallic. */
+    readonly metallicRoughness?: string;
+    /** Ambient occlusion map, sampled from R. */
+    readonly occlusion?: string;
+    /** Emissive map. */
+    readonly emissive?: string;
+}
+
+/** Physically based metallic-roughness material. */
+export interface PbrMaterialSpec extends MaterialSpecBase {
+    readonly type: 'pbr';
+    /** Linear base color. Default `[1, 1, 1]`. */
+    readonly baseColor?: readonly [number, number, number];
+    /** Metallic factor. Default `0`. */
+    readonly metallic?: number;
+    /** Roughness factor. Default `0.5`. */
+    readonly roughness?: number;
+    /** Ambient occlusion multiplier. Default `1`. */
+    readonly occlusionStrength?: number;
+    /** Emissive color. Default `[0, 0, 0]`. */
+    readonly emissive?: readonly [number, number, number];
+    /** Opacity. Default `1`. */
+    readonly opacity?: number;
+    /** Discard fragments below this alpha. Default `0`. */
+    readonly alphaTest?: number;
+    /** Texture ids. */
+    readonly textures?: PbrTextures;
+    /** UV and sampler settings. */
+    readonly sampling?: MaterialSampling;
+}
+
 export interface ShaderMaterialSpec extends MaterialSpecBase {
     readonly type: 'shader';
     readonly uniforms?: Record<string, AnyField>;
@@ -105,7 +152,7 @@ export interface ShaderMaterialShaders {
     readonly fragment: { readonly fn: (input: any, bindings?: any) => unknown };
 }
 
-export type MaterialSpec = EngineMaterialSpec | ShaderMaterialSpec;
+export type MaterialSpec = EngineMaterialSpec | PbrMaterialSpec | ShaderMaterialSpec;
 
 export interface ResolvedRenderState {
     readonly blend: BlendMode;
@@ -175,7 +222,7 @@ export function resolveRenderState(spec: MaterialSpec): ResolvedRenderState {
         blendState: spec.blendState ?? blendComponents(blend),
         depthWrite: spec.depthWrite ?? !isEmissive,
         depthTest: spec.depthTest ?? true,
-        cull: spec.cull ?? 'none',
+        cull: spec.cull ?? (spec.type === 'pbr' ? 'back' : 'none'),
         colorWrite: resolveColorWrite(spec.colorWrite),
         depthBias: bias.constant ?? 0,
         depthBiasSlopeScale: bias.slopeScale ?? 0,

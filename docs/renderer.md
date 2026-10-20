@@ -13,7 +13,7 @@ Referenced from [llms.txt](../llms.txt).
 5. **Materials are refcounted.** `material.destroy()` throws while instances still use it; `material.destroy({ force: true })` reassigns those instances to the default material first. Materials are GPU resources created **after `init()`**.
 6. **3D instance `color` is set at spawn only** (`instances.add({ color: [r, g, b] })`) — there is no `setColor`/`setTint` on a 3D handle. 2D sprites differ: `SpriteHandle.setTint(r, g, b, a)` is live.
 7. **`camera.fov` is DEGREES** (default 60). Pass `60`, not `Math.PI / 3`.
-8. **It is not a PBR engine.** No skybox, no metalness/roughness/IBL. `standard` is Lambert + two-sided; lighting is per-vertex diffuse from the dynamic lights plus the global sun + ambient terms.
+8. **No IBL or skybox.** A metallic-roughness `pbr` material shades direct sun and point/spot lights, but there is no environment map, IBL, or normal mapping. `standard` remains Lambert + two-sided.
 9. **Draw-call budget:** 3D batches by `(materialId, modelId)`; 2D by `(layer, sheet)`. Every extra material on a model is another batch and another draw.
 10. **Custom shaders and effect fragments go through `d`/`std`.** See the [shader guide](./shaders.md). Keep `minifySyntax` off for anything containing shader bodies.
 11. **Shadow cost is per-system.** The directional (sun) map is cached and re-rendered only on change; the spot (≤4/frame) and point/cube (≤2/frame) maps re-render every frame. Disable what you don't use.
@@ -103,7 +103,7 @@ loop.events.on('pre-tick', () => renderer.storePreviousState());
 
 `LightHandle` exposes `slot`, `id`, `alive`, `setPosition`, `setDirection`, `teleport`, `setColor`, readonly `position`/`direction`/`color` (per-handle reused tuples — copy out to retain), `intensity`, `range`, `angle`, `smoothness`, `enabled`, an optional `shadow` override, and `destroy()`.
 
-The 3D renderer is **not a PBR engine** — no skybox, no metalness/roughness/IBL. Surface shading comes from the material system (`standard` / `unlit` / `emissive` / custom `shader`; see [Materials](#materials-3d)). Lighting is per-vertex diffuse with the dynamic lights plus the directional + ambient globals. A single **directional shadow map** (the sun) is supported; see [Shadows](#shadows-3d).
+The 3D renderer supports a metallic-roughness `pbr` material with direct sun and point/spot lighting. It does not include IBL, an environment map, a skybox, or normal mapping; use `standard` / `unlit` / `emissive` / custom `shader` for other looks. A single **directional shadow map** (the sun) is supported; see [Shadows](#shadows-3d).
 
 ### Materials (3D)
 
@@ -145,6 +145,28 @@ holo.setTexture('mask', 'smoke');    // re-bind any declared texture by name
 holo.destroy();                      // free the slot + uniform buffer
 ```
 
+PBR materials use the direct sun, point, and spot lights. They do not use an environment map or normal maps.
+
+```ts
+const steel = renderer.materials.create({
+  name: 'steel',
+  type: 'pbr',
+  baseColor: [0.72, 0.73, 0.75],
+  metallic: 1,
+  roughness: 0.35,
+  textures: {
+    baseColor: 'steel-albedo',
+    metallicRoughness: 'steel-mr',
+    occlusion: 'steel-ao',
+  },
+  sampling: { scale: [1, 1], offset: [0, 0], wrap: 'repeat', filter: 'linear' },
+  shadow: { cast: true, receive: true },
+});
+
+steel.uniforms.roughness = 0.5;
+steel.setTexture('baseColor', 'other-albedo');
+```
+
 `MaterialHandle<U>` (`U` = the `uniforms` schema; accessors typed from the schema's inferred host type):
 
 | Member | Description |
@@ -155,19 +177,22 @@ holo.destroy();                      // free the slot + uniform buffer
 | `slot: number` | Material identity. An instance's `materialId` is `slot + 1` (`0` = engine default). |
 | `uniforms` | Typed read/write over this material's uniform buffer. `holo.uniforms.scan = v` and `+=` both work. |
 | `setTexture(name, texture)` | Re-binds a declared texture by name. |
-| `setCastShadow(bool)` / `setReceiveShadow(bool)` | Runtime shadow toggles (receive is engine materials only). |
+| `setCastShadow(bool)` / `setReceiveShadow(bool)` | Runtime shadow toggles (receive applies to `standard` and `pbr`). |
 | `destroy(opts?)` | Frees the slot and uniform buffer. Throws while instances still use it; `destroy({ force: true })` reassigns them to the default material first. |
 
 Spec fields:
 
 | Field | Applies to | Notes |
 |---|---|---|
-| `type` | all | `'standard'` (lit), `'unlit'`, `'emissive'`, `'shader'` |
+| `type` | all | `'standard'` (lit), `'pbr'`, `'unlit'`, `'emissive'`, `'shader'` |
 | `color`, `opacity`, `emissive`, `texture` | engine types | `texture` is an AssetBucket texture id |
+| `baseColor`, `metallic`, `roughness`, `occlusionStrength`, `emissive`, `opacity` | `pbr` | metallic-roughness factors. Defaults `[1,1,1]`, `0`, `0.5`, `1`, `[0,0,0]`, `1` |
+| `textures` | `pbr` | `{ baseColor?, metallicRoughness?, occlusion?, emissive? }`. Metallic-roughness packs G = roughness, B = metallic |
+| `sampling` | `pbr` | `{ scale?, offset?, wrap?, filter? }`. Defaults `[1,1]`, `[0,0]`, `'clamp'`, `'linear'` |
 | `alphaTest` | engine types | discard below this alpha (cutout). Default 0 (off) |
 | `uvScale`, `uvOffset`, `wrap`, `filter` | engine types | sampling controls. Defaults `[1,1]`, `[0,0]`, `'clamp'`, `'linear'` |
 | `uniforms`, `defaultUniforms`, `textures`, `shaders`, `lit` | `shader` | `uniforms` is a TGSL schema; `textures: { map: 'id', mask: 'id' }` (named); `shaders.fragment` required, `shaders.vertex` optional; `lit:false` selects the unlit vertex |
-| `blend`, `blendState`, `depthWrite`, `depthTest`, `cull`, `colorWrite`, `depthBias` | all | render state. `blend` (see above) or `blendState` (raw `GPUBlendComponent`s); `colorWrite` boolean or `{r,g,b,a}`; `depthBias` `{constant, slopeScale, clamp}`. Defaults: `'opaque'`, depthWrite true, depthTest true, `cull:'none'`; `emissive` defaults to additive + no depth write |
+| `blend`, `blendState`, `depthWrite`, `depthTest`, `cull`, `colorWrite`, `depthBias` | all | render state. `blend` (see above) or `blendState` (raw `GPUBlendComponent`s); `colorWrite` boolean or `{r,g,b,a}`; `depthBias` `{constant, slopeScale, clamp}`. Defaults: `'opaque'`, depthWrite true, depthTest true, `cull:'none'` (`'back'` for `pbr`); `emissive` defaults to additive + no depth write |
 | `extrude` | engine types | object-space offset along the vertex normal; with `cull:'front'` this is an inverted-hull toon outline. Default 0 |
 | `id` | all | debug label on the GPU pipeline |
 | `name` | all | optional unique name (auto `mat_<id>` when omitted); a duplicate throws |
@@ -194,11 +219,11 @@ Caveats:
 
 - Skinned instances honor `material`/`materials` (and `setMaterial`); materials for skinned models are supported.
 - Textures get a mip chain on upload (good minification); atlas sprites must sample LOD 0 to avoid cross-cell bleed (the 3D particle path does).
-- `standard` is Lambert + two-sided; no PBR/specular/normal maps yet.
+- `standard` is Lambert + two-sided; `pbr` adds metallic-roughness specular for direct lights. Normal maps and IBL are not supported.
 
 ### Shadows (3D)
 
-Cast by the global sun (`renderer.lights.sun`). A single `rgba16float` linear-depth ortho map is fitted around the camera position (half-extent `renderer.shadows.directional.distance`), texel-snapped, and `standard` materials PCF-sample it.
+Cast by the global sun (`renderer.lights.sun`). A single `rgba16float` linear-depth ortho map is fitted around the camera position (half-extent `renderer.shadows.directional.distance`), texel-snapped, and `standard` / `pbr` materials PCF-sample it.
 
 ```ts
 renderer.shadows.directional.enabled = true;   // off = skips the shadow pass AND receiver sampling
@@ -711,7 +736,7 @@ handle.stop?.();
 - `GeometryData`, `BuiltInGeometry`, `resolveBuiltInGeometry` — for plugging custom vertex layouts into `createGeometry`.
 - `createCube`, `createPlane`, `createGrid`, `createSphere`, `createCylinder`, `createCone` — individual geometry factory functions (e.g. `createCube({ size: 2, uv: 'cross' })`).
 - `DynamicSprite`, `StaticSprite`, `SpriteUniforms`, `DynamicInstance3D`, `StaticInstance3D`, `DynamicMesh`, `StaticMesh`, `SkinnedStaticMesh`, `MeshUniforms` — exported `d.struct` shapes the renderer uses internally. Use these if you want to pack data into the same format the renderer reads.
-- Type exports: `MaterialSpec` / `EngineMaterialSpec` / `ShaderMaterialSpec` / `MaterialHandle` / `InstanceMaterials` / `MaterialRef` / `BlendMode` / `CullMode` / `LightSpec` / `LightHandle` / `MeshInstanceOptions` / `WebGPU3DRendererOptions` / `WebGPU2DRendererOptions` and the camera-effect types.
+- Type exports: `MaterialSpec` / `EngineMaterialSpec` / `PbrMaterialSpec` / `PbrTextures` / `MaterialSampling` / `ShaderMaterialSpec` / `MaterialHandle` / `InstanceMaterials` / `MaterialRef` / `BlendMode` / `CullMode` / `LightSpec` / `LightHandle` / `MeshInstanceOptions` / `WebGPU3DRendererOptions` / `WebGPU2DRendererOptions` and the camera-effect types.
 
 ### Shader util signatures (DSL helpers — call inside vertex/fragment closures)
 
@@ -796,7 +821,7 @@ loop.on('render', ({ alpha }) => renderer.render(alpha));
 - **A non-empty `camera.effects` chain forces the off-screen path.** Even one effect switches to the ping-pong path. Remove effects you no longer need to get the direct path back.
 - **Material count multiplies 3D draw calls.** `materials: [...]` draws the instance once per material (up to 4). Prefer one material per model on the hot path — see the [performance guide](./performance.md).
 - **Spot and point shadow maps re-render every frame.** Only the directional map is cached. Enable them sparingly and gate with `renderer.shadows.spot` / `.point`.
-- **Expecting a skybox or a PBR material model.** The 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and `standard` / `unlit` / `emissive` / custom `shader` materials — no skybox or PBR.
+- **Expecting IBL or a skybox.** The 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and `standard` / `pbr` / `unlit` / `emissive` / custom `shader` materials. `pbr` has direct metallic-roughness shading but no environment map, IBL, or normal mapping.
 - **Textures in a 3D sprite atlas must sample LOD 0** to avoid cross-cell bleed (the engine particle path does; a custom shader does not automatically).
 - **`renderer.geometry` is on the 2D renderer.** The 3D renderer has no geometry manager (use `GeometryBuilder` indirectly through the 2D renderer or custom materials on meshes).
 - **`renderer.particles.update(dt)` is not a method.** The particle facade exposes `simulate(dt)` (and `renderer.render(alpha)` calls it for you); you only call `emitter.update(dt)` to queue that emitter's spawns.

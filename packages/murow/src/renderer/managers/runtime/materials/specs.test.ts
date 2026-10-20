@@ -8,7 +8,7 @@ import {
 
 const noopFragment = { fn: () => 0 };
 
-function spec(type: 'standard' | 'unlit' | 'emissive' | 'shader'): MaterialSpec {
+function spec(type: 'standard' | 'unlit' | 'emissive' | 'pbr' | 'shader'): MaterialSpec {
     return type === 'shader'
         ? { type: 'shader', shaders: { fragment: noopFragment } }
         : { type };
@@ -35,6 +35,16 @@ describe('resolveRenderState defaults', () => {
             });
         });
     }
+
+    test('pbr is opaque with depth write and back-face culling', () => {
+        expect(resolveRenderState(spec('pbr'))).toMatchObject({
+            blend: 'opaque',
+            depthWrite: true,
+            depthTest: true,
+            cull: 'back',
+            blendState: null,
+        });
+    });
 });
 
 describe('resolveRenderState overrides', () => {
@@ -108,7 +118,7 @@ describe('isTransparent', () => {
     });
 
     test('matches resolveRenderState for every material type', () => {
-        for (const type of ['standard', 'unlit', 'emissive', 'shader'] as const) {
+        for (const type of ['standard', 'unlit', 'emissive', 'pbr', 'shader'] as const) {
             const resolved = resolveRenderState(spec(type));
             expect(isTransparent(resolved)).toBe(resolved.blendState !== null);
         }

@@ -9,6 +9,8 @@ import {
     createSphere,
     createCylinder,
     createCone,
+    createPlane,
+    createGrid,
     resolveBuiltInGeometry,
 } from './built-in';
 import type { GeometryData } from './built-in';
@@ -338,6 +340,37 @@ describe('resolveBuiltInGeometry', () => {
     test('3D geometries have floatsPerVertex=8', () => {
         for (const name of ['cube', 'sphere', 'cylinder', 'cone'] as const) {
             expect(resolveBuiltInGeometry(name).floatsPerVertex).toBe(8);
+        }
+    });
+});
+
+
+describe('3D winding', () => {
+    function expectOutward(g: GeometryData) {
+        const stride = g.floatsPerVertex;
+        const indices = g.indices ?? Array.from({ length: g.vertexCount }, (_, i) => i);
+        for (let t = 0; t < indices.length; t += 3) {
+            const i0 = indices[t]!, i1 = indices[t + 1]!, i2 = indices[t + 2]!;
+            const ax = g.vertices[i1 * stride]! - g.vertices[i0 * stride]!;
+            const ay = g.vertices[i1 * stride + 1]! - g.vertices[i0 * stride + 1]!;
+            const az = g.vertices[i1 * stride + 2]! - g.vertices[i0 * stride + 2]!;
+            const bx = g.vertices[i2 * stride]! - g.vertices[i0 * stride]!;
+            const by = g.vertices[i2 * stride + 1]! - g.vertices[i0 * stride + 1]!;
+            const bz = g.vertices[i2 * stride + 2]! - g.vertices[i0 * stride + 2]!;
+            const cx = ay * bz - az * by;
+            const cy = az * bx - ax * bz;
+            const cz = ax * by - ay * bx;
+            const nx = (g.vertices[i0 * stride + 3]! + g.vertices[i1 * stride + 3]! + g.vertices[i2 * stride + 3]!) / 3;
+            const ny = (g.vertices[i0 * stride + 4]! + g.vertices[i1 * stride + 4]! + g.vertices[i2 * stride + 4]!) / 3;
+            const nz = (g.vertices[i0 * stride + 5]! + g.vertices[i1 * stride + 5]! + g.vertices[i2 * stride + 5]!) / 3;
+            if (Math.abs(cx) + Math.abs(cy) + Math.abs(cz) < 1e-8) continue;
+            expect(cx * nx + cy * ny + cz * nz).toBeGreaterThan(0);
+        }
+    }
+
+    test('built-in 3D meshes face outward', () => {
+        for (const g of [createCube(), createPlane(), createGrid(), createSphere(), createCylinder(), createCone()]) {
+            expectOutward(g);
         }
     });
 });
