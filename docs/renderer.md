@@ -13,7 +13,7 @@ Referenced from [llms.txt](../llms.txt).
 5. **Materials are refcounted.** `material.destroy()` throws while instances still use it; `material.destroy({ force: true })` reassigns those instances to the default material first. Materials are GPU resources created **after `init()`**.
 6. **3D instance `color` is set at spawn only** (`instances.add({ color: [r, g, b] })`) — there is no `setColor`/`setTint` on a 3D handle. 2D sprites differ: `SpriteHandle.setTint(r, g, b, a)` is live.
 7. **`camera.fov` is DEGREES** (default 60). Pass `60`, not `Math.PI / 3`.
-8. **No skybox or normal mapping.** A metallic-roughness `pbr` material shades direct sun and point/spot lights, and `renderer.ibl` adds image-based lighting from an equirectangular environment. There is no visible skybox or normal mapping. `standard` remains Lambert + two-sided.
+8. **No skybox.** A metallic-roughness `pbr` material shades direct sun and point/spot lights, supports normal maps and IBL, and `renderer.ibl` adds image-based lighting from an equirectangular environment. There is no visible skybox. `standard` remains Lambert + two-sided.
 9. **Draw-call budget:** 3D batches by `(materialId, modelId)`; 2D by `(layer, sheet)`. Every extra material on a model is another batch and another draw.
 10. **Custom shaders and effect fragments go through `d`/`std`.** See the [shader guide](./shaders.md). Keep `minifySyntax` off for anything containing shader bodies.
 11. **Shadow cost is per-system.** The directional (sun) map is cached and re-rendered only on change; the spot (≤4/frame) and point/cube (≤2/frame) maps re-render every frame. Disable what you don't use.
@@ -103,7 +103,7 @@ loop.events.on('pre-tick', () => renderer.storePreviousState());
 
 `LightHandle` exposes `slot`, `id`, `alive`, `setPosition`, `setDirection`, `teleport`, `setColor`, readonly `position`/`direction`/`color` (per-handle reused tuples — copy out to retain), `intensity`, `range`, `angle`, `smoothness`, `enabled`, an optional `shadow` override, and `destroy()`.
 
-The 3D renderer supports a metallic-roughness `pbr` material with direct sun and point/spot lighting plus image-based lighting through `renderer.ibl`. It does not include a visible skybox or normal mapping; use `standard` / `unlit` / `emissive` / custom `shader` for other looks. A single **directional shadow map** (the sun) is supported; see [Shadows](#shadows-3d).
+The 3D renderer supports a metallic-roughness `pbr` material with direct sun and point/spot lighting, normal maps, and image-based lighting through `renderer.ibl`. It does not include a visible skybox; use `standard` / `unlit` / `emissive` / custom `shader` for other looks. A single **directional shadow map** (the sun) is supported; see [Shadows](#shadows-3d).
 
 ### Materials (3D)
 
@@ -145,7 +145,7 @@ holo.setTexture('mask', 'smoke');    // re-bind any declared texture by name
 holo.destroy();                      // free the slot + uniform buffer
 ```
 
-PBR materials use the direct sun, point, and spot lights. Call `renderer.ibl.load({ equirect })` to add image-based lighting. Normal maps are not supported.
+PBR materials use the direct sun, point, and spot lights. Call `renderer.ibl.load({ equirect })` to add image-based lighting. Normal maps use the OpenGL convention (`+Y` green) and are sampled with a derivative tangent basis, so no tangent attribute is required.
 
 ```ts
 const env = document.createElement('canvas');
@@ -169,7 +169,9 @@ const steel = renderer.materials.create({
     baseColor: 'steel-albedo',
     metallicRoughness: 'steel-mr',
     occlusion: 'steel-ao',
+    normal: 'steel-normal',
   },
+  normalScale: 1,
   sampling: { scale: [1, 1], offset: [0, 0], wrap: 'repeat', filter: 'linear' },
   shadow: { cast: true, receive: true },
 });
@@ -198,7 +200,8 @@ Spec fields:
 | `type` | all | `'standard'` (lit), `'pbr'`, `'unlit'`, `'emissive'`, `'shader'` |
 | `color`, `opacity`, `emissive`, `texture` | engine types | `texture` is an AssetBucket texture id |
 | `baseColor`, `metallic`, `roughness`, `occlusionStrength`, `emissive`, `opacity` | `pbr` | metallic-roughness factors. Defaults `[1,1,1]`, `0`, `0.5`, `1`, `[0,0,0]`, `1` |
-| `textures` | `pbr` | `{ baseColor?, metallicRoughness?, occlusion?, emissive? }`. Metallic-roughness packs G = roughness, B = metallic |
+| `textures` | `pbr` | `{ baseColor?, metallicRoughness?, occlusion?, normal?, emissive? }`. Metallic-roughness packs G = roughness, B = metallic; normal maps use the OpenGL convention |
+| `normalScale` | `pbr` | Normal map strength. Default `1` |
 | `sampling` | `pbr` | `{ scale?, offset?, wrap?, filter? }`. Defaults `[1,1]`, `[0,0]`, `'clamp'`, `'linear'` |
 | `alphaTest` | engine types | discard below this alpha (cutout). Default 0 (off) |
 | `uvScale`, `uvOffset`, `wrap`, `filter` | engine types | sampling controls. Defaults `[1,1]`, `[0,0]`, `'clamp'`, `'linear'` |
@@ -230,7 +233,7 @@ Caveats:
 
 - Skinned instances honor `material`/`materials` (and `setMaterial`); materials for skinned models are supported.
 - Textures get a mip chain on upload (good minification); atlas sprites must sample LOD 0 to avoid cross-cell bleed (the 3D particle path does).
-- `standard` is Lambert + two-sided; `pbr` adds metallic-roughness specular for direct lights and optional IBL. Normal maps are not supported.
+- `standard` is Lambert + two-sided; `pbr` adds metallic-roughness specular for direct lights, normal maps, and optional IBL.
 
 ### Shadows (3D)
 
@@ -832,7 +835,7 @@ loop.on('render', ({ alpha }) => renderer.render(alpha));
 - **A non-empty `camera.effects` chain forces the off-screen path.** Even one effect switches to the ping-pong path. Remove effects you no longer need to get the direct path back.
 - **Material count multiplies 3D draw calls.** `materials: [...]` draws the instance once per material (up to 4). Prefer one material per model on the hot path — see the [performance guide](./performance.md).
 - **Spot and point shadow maps re-render every frame.** Only the directional map is cached. Enable them sparingly and gate with `renderer.shadows.spot` / `.point`.
-- **Expecting a skybox or normal mapping.** The 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and `standard` / `pbr` / `unlit` / `emissive` / custom `shader` materials. `pbr` supports direct metallic-roughness shading and `renderer.ibl` environment lighting, but no visible skybox or normal mapping.
+- **Expecting a skybox.** The 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and `standard` / `pbr` / `unlit` / `emissive` / custom `shader` materials. `pbr` supports direct metallic-roughness shading, normal maps, and `renderer.ibl` environment lighting, but no visible skybox.
 - **Textures in a 3D sprite atlas must sample LOD 0** to avoid cross-cell bleed (the engine particle path does; a custom shader does not automatically).
 - **`renderer.geometry` is on the 2D renderer.** The 3D renderer has no geometry manager (use `GeometryBuilder` indirectly through the 2D renderer or custom materials on meshes).
 - **`renderer.particles.update(dt)` is not a method.** The particle facade exposes `simulate(dt)` (and `renderer.render(alpha)` calls it for you); you only call `emitter.update(dt)` to queue that emitter's spawns.
