@@ -211,6 +211,18 @@ const stdImpl = {
         return unaryCall('inverseSqrt', a);
     },
 
+    dpdx(a: ShaderInput): ShaderValue {
+        return unaryCall('dpdx', a);
+    },
+
+    dpdy(a: ShaderInput): ShaderValue {
+        return unaryCall('dpdy', a);
+    },
+
+    fwidth(a: ShaderInput): ShaderValue {
+        return unaryCall('fwidth', a);
+    },
+
     sign(a: ShaderInput): ShaderValue {
         return unaryCall('sign', a);
     },

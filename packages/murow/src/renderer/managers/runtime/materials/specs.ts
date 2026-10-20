@@ -107,6 +107,8 @@ export interface PbrTextures {
     readonly metallicRoughness?: string;
     /** Ambient occlusion map, sampled from R. */
     readonly occlusion?: string;
+    /** Tangent-space normal map. OpenGL convention (+Y green). */
+    readonly normal?: string;
     /** Emissive map. */
     readonly emissive?: string;
 }
@@ -122,6 +124,8 @@ export interface PbrMaterialSpec extends MaterialSpecBase {
     readonly roughness?: number;
     /** Ambient occlusion multiplier. Default `1`. */
     readonly occlusionStrength?: number;
+    /** Normal map strength. Default `1`. */
+    readonly normalScale?: number;
     /** Emissive color. Default `[0, 0, 0]`. */
     readonly emissive?: readonly [number, number, number];
     /** Opacity. Default `1`. */

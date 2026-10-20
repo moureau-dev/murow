@@ -218,6 +218,8 @@ export interface TypedStd extends TypedD {
     max(a: Input, b: Input): SV<any>;
     abs<A>(a: SV<A>): SV<A>;
     abs(a: Input): SV<any>;
+    sign<A>(a: SV<A>): SV<A>;
+    sign(a: Input): SV<any>;
     floor<A>(a: SV<A>): SV<A>;
     floor(a: Input): SV<any>;
     ceil<A>(a: SV<A>): SV<A>;
@@ -226,6 +228,12 @@ export interface TypedStd extends TypedD {
     fract(a: Input): SV<any>;
     sqrt<A>(a: SV<A>): SV<A>;
     sqrt(a: Input): SV<any>;
+    dpdx<A extends Vec<Scalar, any> | Scalar>(a: SV<A>): SV<A>;
+    dpdx(a: Input): SV<any>;
+    dpdy<A extends Vec<Scalar, any> | Scalar>(a: SV<A>): SV<A>;
+    dpdy(a: Input): SV<any>;
+    fwidth<A extends Vec<Scalar, any> | Scalar>(a: SV<A>): SV<A>;
+    fwidth(a: Input): SV<any>;
     pow(a: Input, b: Input): SV<'f32'>;
     step<A>(edge: Input, x: SV<A>): SV<A>;
     step(a: Input, b: Input): SV<any>;

@@ -76,6 +76,9 @@ export const PbrMaterialUniforms = d.struct({
     emissiveB: d.f32,
     /** 0 = use the metallic/roughness factors, 1 = sample the map. */
     hasMetallicRoughness: d.f32,
+    normalScale: d.f32,
+    /** 0 = vertex normal, 1 = sample the normal map. */
+    hasNormalMap: d.f32,
 });
 
 export function createPbrMaterialLayout() {
@@ -89,6 +92,8 @@ export function createPbrMaterialLayout() {
         occlusionSampler: { sampler: 'filtering' },
         emissiveMap: { texture: 'float' },
         emissiveSampler: { sampler: 'filtering' },
+        normalMap: { texture: 'float' },
+        normalSampler: { sampler: 'filtering' },
         shadow: { uniform: ShadowUniforms },
         shadowMap: { texture: 'float' },
         shadowSampler: { sampler: 'filtering' },
@@ -300,10 +305,33 @@ export function createPbrMaterialFragment(meshLayout: MeshDataLayout, matLayout:
         const ao = std.mix(d.f32(1.0), aoTex.x, m.occlusionStrength);
 
         const worldPos = input.vWorldPos;
-        const normal = std.mul(
+        const vertexNormal = std.mul(
             std.normalize(input.vNormal),
             std.select(d.vec3f(-1.0, -1.0, -1.0), d.vec3f(1.0, 1.0, 1.0), input.frontFacing),
         );
+        let normal = vertexNormal;
+        if (m.hasNormalMap > 0.5) {
+            const dp1 = std.dpdx(worldPos);
+            const dp2 = std.dpdy(worldPos);
+            const duv1 = std.dpdx(uv);
+            const duv2 = std.dpdy(uv);
+            const dp2perp = std.cross(dp2, vertexNormal);
+            const dp1perp = std.cross(vertexNormal, dp1);
+            const tangentRaw = std.add(std.mul(dp2perp, duv1.x), std.mul(dp1perp, duv2.x));
+            const bitangentRaw = std.add(std.mul(dp2perp, duv1.y), std.mul(dp1perp, duv2.y));
+            const tLen = std.max(std.length(tangentRaw), d.f32(0.00001));
+            const tangent = std.mul(tangentRaw, std.div(d.f32(1.0), tLen));
+            const bitangent = std.mul(std.cross(vertexNormal, tangent), std.sign(std.dot(std.cross(vertexNormal, tangent), bitangentRaw)));
+
+            const nTex = std.textureSample(mat.normalMap, mat.normalSampler, uv);
+            const nx = std.mul(std.sub(std.mul(nTex.x, 2.0), 1.0), m.normalScale);
+            const ny = std.mul(std.sub(std.mul(nTex.y, 2.0), 1.0), m.normalScale);
+            const nz = std.sqrt(std.max(std.sub(1.0, std.add(std.mul(nx, nx), std.mul(ny, ny))), 0.0));
+            normal = std.normalize(std.add(
+                std.add(std.mul(tangent, nx), std.mul(bitangent, ny)),
+                std.mul(vertexNormal, nz),
+            ));
+        }
         const viewDir = std.normalize(d.vec3f(
             std.sub(u.cameraX, worldPos.x),
             std.sub(u.cameraY, worldPos.y),

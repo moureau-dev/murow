@@ -324,18 +324,21 @@ export class MaterialLibrary {
             occlusionStrength: spec.occlusionStrength ?? 1,
             emissiveR: emissive[0], emissiveG: emissive[1], emissiveB: emissive[2],
             hasMetallicRoughness: spec.textures?.metallicRoughness ? 1 : 0,
+            normalScale: spec.normalScale ?? 1,
+            hasNormalMap: spec.textures?.normal ? 1 : 0,
         };
         this.deps.device.queue.writeBuffer(buffer, 0, pack(PbrMaterialUniforms, mirror) as RawBufferSource);
 
         const vertex = createTexturedMeshVertex(this.deps.meshLayout);
         const fragment = createPbrMaterialFragment(this.deps.meshLayout, layout);
 
-        const textureNames = ['baseColor', 'metallicRoughness', 'occlusion', 'emissive'];
+        const textureNames = ['baseColor', 'metallicRoughness', 'occlusion', 'emissive', 'normal'];
         const textureIds: Record<string, string | null> = {
             baseColor: spec.textures?.baseColor ?? null,
             metallicRoughness: spec.textures?.metallicRoughness ?? null,
             occlusion: spec.textures?.occlusion ?? null,
             emissive: spec.textures?.emissive ?? null,
+            normal: spec.textures?.normal ?? null,
         };
         const sampler = this.getSampler(spec.sampling?.wrap, spec.sampling?.filter);
         const samplerOverrides = {
@@ -343,6 +346,7 @@ export class MaterialLibrary {
             metallicRoughness: sampler,
             occlusion: sampler,
             emissive: sampler,
+            normal: sampler,
         };
         const pipeline = this.deps.pipelines.buildMaterialPipeline({
             vertex,
