@@ -65,6 +65,16 @@ describe('IblManager', () => {
         expect(last[3]).toBe(1);
     });
 
+    test('set updates intensity and rotation with one uniform upload', async () => {
+        const { device, uniforms } = fakeDevice();
+        const ibl = new IblManager(device);
+        const before = uniforms.length;
+        ibl.set({ intensity: 2.2, rotation: 1.1 });
+        expect(uniforms.length).toBe(before + 1);
+        expect(uniforms[uniforms.length - 1]![0]).toBeCloseTo(2.2);
+        expect(uniforms[uniforms.length - 1]![1]).toBeCloseTo(1.1);
+    });
+
     test('clear disables the environment', async () => {
         const { device, uniforms } = fakeDevice();
         const ibl = new IblManager(device);

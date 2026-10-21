@@ -65,6 +65,8 @@ export interface MaterialHandle<
     /** Material slot; the instance's `materialId` is `slot + 1` (0 = default). */
     readonly slot: number;
     readonly uniforms: UniformValues<U>;
+    /** Update several uniform fields with one buffer upload. */
+    setUniforms(values: Partial<UniformValues<U>>): void;
     setTexture(name: string, texture: string): void;
     /** Runtime toggle: whether this material's geometry casts a shadow. */
     setCastShadow(cast: boolean): void;
@@ -240,6 +242,9 @@ export class MaterialLibrary {
             get alive() { return !destroyed; },
             slot,
             uniforms,
+            setUniforms(values) {
+                self.setUniforms(slot, values);
+            },
             setTexture(name, texture) {
                 self.setTexture(slot, name, texture);
             },
@@ -633,6 +638,15 @@ export class MaterialLibrary {
         const entry = this.entries[slot];
         if (!entry || !('receiveShadow' in entry.mirror)) return;
         entry.mirror.receiveShadow = receive ? 1 : 0;
+        entry.write();
+    }
+
+    private setUniforms(slot: number, values: Record<string, unknown>): void {
+        const entry = this.entries[slot];
+        if (!entry) return;
+        for (const key of Object.keys(values)) {
+            entry.mirror[key] = values[key];
+        }
         entry.write();
     }
 

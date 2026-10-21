@@ -151,6 +151,8 @@ PBR materials use the direct sun, point, and spot lights. Call `renderer.ibl.loa
 const env = document.createElement('canvas');
 // draw an equirectangular sky/studio image into env
 await renderer.ibl.load({ equirect: env, intensity: 1, rotation: 0 });
+renderer.ibl.set({ intensity: 1.2, rotation: 0.4 });
+// or individually:
 renderer.ibl.intensity = 1.2;
 renderer.ibl.rotation = 0.4;
 renderer.ibl.clear();
@@ -198,6 +200,7 @@ steel.setTexture('baseColor', 'other-albedo');
 | `alive` | `false` after destroy. |
 | `slot: number` | Material identity. An instance's `materialId` is `slot + 1` (`0` = engine default). |
 | `uniforms` | Typed read/write over this material's uniform buffer. `holo.uniforms.scan = v` and `+=` both work. |
+| `setUniforms(values)` | Update several uniform fields with one buffer upload. |
 | `setTexture(name, texture)` | Re-binds a declared texture by name. |
 | `setCastShadow(bool)` / `setReceiveShadow(bool)` | Runtime shadow toggles (receive applies to `standard` and `pbr`). |
 | `destroy(opts?)` | Frees the slot and uniform buffer. Throws while instances still use it; `destroy({ force: true })` reassigns them to the default material first. |

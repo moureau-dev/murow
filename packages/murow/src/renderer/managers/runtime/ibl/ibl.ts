@@ -31,6 +31,14 @@ export interface IblPixels {
 /** Pixels accepted as an equirectangular source. */
 export type IblImage = HTMLCanvasElement | HTMLImageElement | ImageBitmap | ImageData | IblPixels;
 
+/** Runtime IBL settings that can be updated together. */
+export interface IblSetOptions {
+    /** Diffuse and specular multiplier. */
+    readonly intensity?: number;
+    /** Environment rotation around Y in radians. */
+    readonly rotation?: number;
+}
+
 /** Options for loading an equirectangular environment. */
 export interface IblLoadOptions {
     /** Source image in equirectangular layout. */
@@ -108,8 +116,7 @@ export class IblManager {
     }
 
     set intensity(value: number) {
-        this.uniformData[0] = value;
-        this.writeUniforms();
+        this.set({ intensity: value });
     }
 
     /** Environment rotation around Y in radians. */
@@ -118,8 +125,21 @@ export class IblManager {
     }
 
     set rotation(value: number) {
-        this.uniformData[1] = value;
-        this.writeUniforms();
+        this.set({ rotation: value });
+    }
+
+    /** Update several IBL settings with one uniform upload. */
+    set(options: IblSetOptions): void {
+        let changed = false;
+        if (options.intensity !== undefined) {
+            this.uniformData[0] = options.intensity;
+            changed = true;
+        }
+        if (options.rotation !== undefined) {
+            this.uniformData[1] = options.rotation;
+            changed = true;
+        }
+        if (changed) this.writeUniforms();
     }
 
     /** Whether an environment is active. */
