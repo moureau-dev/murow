@@ -313,7 +313,7 @@ class WebGpuOcclusion implements Occlusion {
             table[at + 2] = batch.candidateCount >>> 0;
             table[at + 3] = batch.outputOffset >>> 0;
             table[at + 4] = batch.indexCount >>> 0;
-            table[at + 5] = 0;
+            table[at + 5] = batch.forceVisible ? 1 : 0;
             table[at + 6] = 0;
             table[at + 7] = 0;
             if (batch.candidateCount > maxCandidates) maxCandidates = batch.candidateCount;

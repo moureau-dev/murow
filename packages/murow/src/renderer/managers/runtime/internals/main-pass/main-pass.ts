@@ -46,7 +46,7 @@ export class MainPass {
                     pass.setVertexBuffer(1, model.morphVertexBuffer ?? model.rawVertexBuffer);
                     if (model.rawIndexBuffer) {
                         pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                        if (indirectEnabled) pass.drawIndexedIndirect(indirectArgs, bi * 20);
+                        if (indirectEnabled && !batch.forceDirect) pass.drawIndexedIndirect(indirectArgs, bi * 20);
                         else pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
                     } else {
                         pass.draw(model.vertexCount, batch.count, 0, batch.offset);
@@ -76,7 +76,7 @@ export class MainPass {
                     pass.setVertexBuffer(1, model.morphVertexBuffer ?? model.rawVertexBuffer);
                     if (model.rawIndexBuffer) {
                         pass.setIndexBuffer(model.rawIndexBuffer, model.indexFormat);
-                        if (indirectEnabled) pass.drawIndexedIndirect(indirectArgs, bi * 20);
+                        if (indirectEnabled && !batch.forceDirect) pass.drawIndexedIndirect(indirectArgs, bi * 20);
                         else pass.drawIndexed(model.indexCount, batch.count, 0, 0, batch.offset);
                     } else {
                         pass.draw(model.vertexCount, batch.count, 0, batch.offset);

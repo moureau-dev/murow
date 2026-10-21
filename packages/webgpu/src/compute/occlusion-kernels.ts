@@ -158,11 +158,16 @@ export const cullBody = ({ globalId }, { res }) => {
     const candidateOffset = res.batches[base + d.u32(1)];
     const candidateCount = res.batches[base + d.u32(2)];
     const outputOffset = res.batches[base + d.u32(3)];
+    const forceVisible = res.batches[base + d.u32(5)];
     const ci = globalId.x;
     if (ci >= candidateCount) { return; }
 
     const slot = res.slots[candidateOffset + ci];
     res.occlusion[slot] = d.u32(1);
+    if (forceVisible != d.u32(0)) {
+        if (params.writeOcclusion == d.u32(0)) { const w = std.atomicAdd(res.args[b * d.u32(5) + d.u32(1)], d.u32(1)); res.slots[outputOffset + w] = slot; }
+        return;
+    }
     const dm = res.dynamic[slot];
     const sm = res.statics[slot];
     // modelBounds holds two vec4 per model: [2*id] = half extents, [2*id+1] = center offset.
@@ -221,6 +226,16 @@ export const cullBody = ({ globalId }, { res }) => {
     // No off-screen reject here: the frustum pass already culls off-screen
     // instances, and rejecting on the projected AABB was dropping large,
     // on-screen objects whose projection did not match the pass's bounds.
+
+    // Very large screen footprints are floor/wall-scale geometry. Their AABB
+    // depth is a poor approximation of the actual surface, so the HZB test can
+    // wrongly cull them as the camera turns. Draw them instead.
+    const halfScreenW = d.f32(params.screenW) * d.f32(0.5);
+    const halfScreenH = d.f32(params.screenH) * d.f32(0.5);
+    if ((maxX - minX) > halfScreenW || (maxY - minY) > halfScreenH) {
+        if (params.writeOcclusion == d.u32(0)) { const w = std.atomicAdd(res.args[b * d.u32(5) + d.u32(1)], d.u32(1)); res.slots[outputOffset + w] = slot; }
+        return;
+    }
 
     const extent = std.max(maxX - minX, maxY - minY);
     let mip = d.u32(0);

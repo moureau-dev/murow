@@ -77,6 +77,8 @@ export interface MainPassBatch {
     materialId: number;
     offset: number;
     count: number;
+    /** Draw directly, bypassing the occlusion indirect args for this batch. */
+    forceDirect?: boolean;
 }
 
 /** A visible skinned batch the main pass draws. */
@@ -295,6 +297,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
             const model = models.get(modelId);
             if (!model) return;
             const baseRadius = model.boundingRadius;
+            let forceVisible = false;
             const batchStart = indexOffset;
             for (let i = 0; i < count; i++) {
                 const slot = instances[i];
@@ -309,6 +312,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
                 const maxScale = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
                 const radius = baseRadius * maxScale;
                 if (frustum.intersectsSphere(cx, cy, cz, radius)) {
+                    if (!store.occlusionEnabled(slot)) forceVisible = true;
                     store.slotIndexData[indexOffset++] = slot;
                 }
             }
@@ -319,6 +323,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
                 batch.materialId = materialId;
                 batch.offset = batchStart;
                 batch.count = visibleCount;
+                batch.forceDirect = forceVisible;
 
                 const occ = this.occlusionBatchAt(occlusionCount++);
                 occ.modelId = modelId;
@@ -326,6 +331,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
                 occ.candidateCount = visibleCount;
                 occ.outputOffset = batchStart;
                 occ.indexCount = model.indexCount;
+                occ.forceVisible = forceVisible;
                 this.occlusionBatches.push(occ);
             }
         });

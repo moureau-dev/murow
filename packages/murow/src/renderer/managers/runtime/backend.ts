@@ -113,6 +113,8 @@ export interface OcclusionBatch {
     outputOffset: number;
     /** Index count for this batch's indirect draw args. */
     indexCount: number;
+    /** Draw every candidate in this batch, ignoring the depth test. */
+    forceVisible?: boolean;
 }
 
 export interface Occlusion {
