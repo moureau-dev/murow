@@ -47,10 +47,13 @@ export interface IblLoadOptions {
     readonly intensity?: number;
     /** Rotation around Y in radians. Default 0. */
     readonly rotation?: number;
+    /** Skybox equirect width. Height is width / 2. Default 512. */
+    readonly skyboxResolution?: number;
 }
 
 const FACE_SIZE = 64;
 const IRRADIANCE_SIZE = 8;
+const DEFAULT_SKYBOX_RESOLUTION = 512;
 const LEVELS = Math.floor(Math.log2(FACE_SIZE)) + 1;
 const FACE_COUNT = 6;
 
@@ -68,14 +71,24 @@ export class IblManager {
     readonly envView: RawTextureView;
     /** Irradiance cubemap view. */
     readonly irradianceView: RawTextureView;
+    /** Equirectangular view used by the visible skybox. */
+    equirectView!: RawTextureView;
     /** Shared sampler for both cubemaps. */
     readonly sampler: RawSampler;
+    /** Repeat-U / clamp-V sampler for the equirect skybox. */
+    readonly equirectSampler: RawSampler;
 
     private readonly envTexture: RawTexture;
     private readonly irradianceTexture: RawTexture;
+    private equirectTexture!: RawTexture;
     private readonly uniformData = new Float32Array([1, 0, LEVELS - 1, 0]);
     private readonly black: Uint8Array;
     private enabled = false;
+    private sourcePixels: Pixels | null = null;
+    private equirectWidth = DEFAULT_SKYBOX_RESOLUTION;
+    private equirectHeight = DEFAULT_SKYBOX_RESOLUTION / 2;
+    /** Incremented when the equirect texture or view is recreated. */
+    equirectVersion = 0;
 
     constructor(private readonly device: RawDevice) {
         this.envTexture = device.createTexture({
@@ -92,6 +105,7 @@ export class IblManager {
             mipLevelCount: 1,
             usage: RawTextureUsage.TEXTURE_BINDING | RawTextureUsage.COPY_DST,
         });
+        this.createEquirectTexture();
         this.envView = this.envTexture.createView({ dimension: 'cube' });
         this.irradianceView = this.irradianceTexture.createView({ dimension: 'cube' });
         this.sampler = device.createSampler({
@@ -99,6 +113,12 @@ export class IblManager {
             minFilter: 'linear',
             mipmapFilter: 'linear',
             addressModeU: 'clamp-to-edge',
+            addressModeV: 'clamp-to-edge',
+        });
+        this.equirectSampler = device.createSampler({
+            magFilter: 'linear',
+            minFilter: 'linear',
+            addressModeU: 'repeat',
             addressModeV: 'clamp-to-edge',
         });
         this.uniformBuffer = device.createBuffer({
@@ -142,6 +162,15 @@ export class IblManager {
         if (changed) this.writeUniforms();
     }
 
+    /** Skybox equirect width. Height is width / 2. */
+    get skyboxResolution(): number {
+        return this.equirectWidth;
+    }
+
+    set skyboxResolution(width: number) {
+        this.setSkyboxResolution(width);
+    }
+
     /** Whether an environment is active. */
     get active(): boolean {
         return this.enabled;
@@ -150,6 +179,11 @@ export class IblManager {
     /** Build and upload an environment from an equirectangular image. */
     async load(options: IblLoadOptions): Promise<void> {
         const source = readPixels(options.equirect);
+        this.sourcePixels = source;
+        if (options.skyboxResolution !== undefined) {
+            this.setSkyboxResolution(options.skyboxResolution);
+        }
+        this.uploadEquirect(source);
         const base = equirectToCube(source, FACE_SIZE);
         const mips = buildMips(base, FACE_SIZE);
         const irradiance = buildIrradiance(base, FACE_SIZE, IRRADIANCE_SIZE);
@@ -188,6 +222,52 @@ export class IblManager {
         this.uniformData[3] = 0;
         this.writeUniforms();
         this.writeBlack();
+    }
+
+    /** Recreate the equirect texture at the configured resolution. */
+    setSkyboxResolution(width: number): void {
+        const next = Math.max(64, Math.min(4096, Math.round(width)));
+        if (next === this.equirectWidth) return;
+        this.equirectWidth = next;
+        this.equirectHeight = Math.max(32, Math.round(next / 2));
+        this.createEquirectTexture();
+        if (this.sourcePixels) this.uploadEquirect(this.sourcePixels);
+    }
+
+    private createEquirectTexture(): void {
+        this.equirectTexture?.destroy();
+        this.equirectTexture = this.device.createTexture({
+            size: [this.equirectWidth, this.equirectHeight, 1],
+            dimension: '2d',
+            format: 'rgba8unorm',
+            mipLevelCount: 1,
+            usage: RawTextureUsage.TEXTURE_BINDING | RawTextureUsage.COPY_DST,
+        });
+        this.equirectView = this.equirectTexture.createView();
+        this.equirectVersion++;
+    }
+
+    /** Resample the source to the configured equirect size for the skybox. */
+    private uploadEquirect(source: Pixels): void {
+        const data = new Uint8Array(this.equirectWidth * this.equirectHeight * 4);
+        for (let y = 0; y < this.equirectHeight; y++) {
+            const v = ((y + 0.5) / this.equirectHeight) * source.height - 0.5;
+            for (let x = 0; x < this.equirectWidth; x++) {
+                const u = ((x + 0.5) / this.equirectWidth) * source.width - 0.5;
+                const c = sampleEquirect(source, u, v);
+                const i = (y * this.equirectWidth + x) * 4;
+                data[i] = c[0];
+                data[i + 1] = c[1];
+                data[i + 2] = c[2];
+                data[i + 3] = 255;
+            }
+        }
+        this.device.queue.writeTexture(
+            { texture: this.equirectTexture, mipLevel: 0, origin: [0, 0, 0] },
+            data,
+            { bytesPerRow: this.equirectWidth * 4, rowsPerImage: this.equirectHeight },
+            [this.equirectWidth, this.equirectHeight, 1],
+        );
     }
 
     private writeUniforms(): void {

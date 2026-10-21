@@ -75,6 +75,22 @@ describe('IblManager', () => {
         expect(uniforms[uniforms.length - 1]![1]).toBeCloseTo(1.1);
     });
 
+    test('skybox resolution is configurable and bumps the equirect version', async () => {
+        const { device } = fakeDevice();
+        const ibl = new IblManager(device);
+        const before = ibl.equirectVersion;
+        ibl.skyboxResolution = 256;
+        expect(ibl.skyboxResolution).toBe(256);
+        expect(ibl.equirectVersion).toBeGreaterThan(before);
+    });
+
+    test('load accepts a skybox resolution', async () => {
+        const { device } = fakeDevice();
+        const ibl = new IblManager(device);
+        await ibl.load({ equirect: pixels(64, 32), skyboxResolution: 384 });
+        expect(ibl.skyboxResolution).toBe(384);
+    });
+
     test('clear disables the environment', async () => {
         const { device, uniforms } = fakeDevice();
         const ibl = new IblManager(device);

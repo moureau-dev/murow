@@ -245,6 +245,13 @@ export interface TypedStd extends TypedD {
     sin(x: Input): SV<any>;
     tan<C extends Scalar>(x: SV<C>): SV<C>;
     tan(x: Input): SV<any>;
+    asin<C extends Scalar>(x: SV<C>): SV<C>;
+    asin(x: Input): SV<any>;
+    acos<C extends Scalar>(x: SV<C>): SV<C>;
+    acos(x: Input): SV<any>;
+    atan<C extends Scalar>(x: SV<C>): SV<C>;
+    atan(x: Input): SV<any>;
+    atan2(a: Input, b: Input): SV<'f32'>;
     length(x: Input): SV<'f32'>;
     normalize<A extends Vec<Scalar, any>>(x: SV<A>): SV<A>;
     normalize(x: Input): SV<any>;

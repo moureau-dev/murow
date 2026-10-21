@@ -1,5 +1,6 @@
 import {
     RawBindGroup,
+    RawBindGroupLayout,
     RawBuffer,
     RawBufferUsage,
     RawDevice,
@@ -61,7 +62,9 @@ export class SkyboxManager {
     private readonly device: RawDevice;
     private readonly ibl: IblManager;
     private readonly pipeline: RawRenderPipeline;
-    private readonly bindGroup: RawBindGroup;
+    private bindGroup: RawBindGroup;
+    private readonly bgl: RawBindGroupLayout;
+    private bindGroupVersion = -1;
     private readonly uniformBuffer: RawBuffer;
     private readonly uniformData = new Float32Array(SkyboxUniforms.size / 4);
 
@@ -72,7 +75,7 @@ export class SkyboxManager {
 
         const layout = new GpuBindGroupLayout({
             params: { uniform: SkyboxUniforms },
-            envMap: { texture: 'float', viewDimension: 'cube' },
+            envMap: { texture: 'float' },
             envSampler: { sampler: 'filtering' },
         });
 
@@ -120,7 +123,9 @@ export class SkyboxManager {
                     dir.y,
                     std.add(std.mul(dir.x, sinR), std.mul(dir.z, cosR)),
                 );
-                const tex = std.textureSampleLevel(sky.envMap, sky.envSampler, rotated, 0.0);
+                const uCoord = std.add(std.div(std.atan2(rotated.z, rotated.x), d.f32(6.283185307)), d.f32(0.5));
+                const vCoord = std.div(std.acos(std.clamp(rotated.y, d.f32(-1.0), d.f32(1.0))), d.f32(3.141592653));
+                const tex = std.textureSampleLevel(sky.envMap, sky.envSampler, d.vec2f(uCoord, vCoord), 0.0);
                 const tr = std.mix(u.prevTintR, u.tintR, u.alpha);
                 const tg = std.mix(u.prevTintG, u.tintG, u.alpha);
                 const tb = std.mix(u.prevTintB, u.tintB, u.alpha);
@@ -135,14 +140,14 @@ export class SkyboxManager {
 
         const { code } = this.runtime.compile([vertex, fragment]);
         const module = this.device.createShaderModule({ code, label: 'skybox' });
-        const bgl = this.runtime.createBindGroupLayout(layout.toDescriptor());
+        this.bgl = this.runtime.createBindGroupLayout(layout.toDescriptor());
         this.uniformBuffer = this.device.createBuffer({
             size: SkyboxUniforms.size,
             usage: RawBufferUsage.UNIFORM | RawBufferUsage.COPY_DST,
         });
         this.pipeline = this.device.createRenderPipeline({
             label: 'skybox',
-            layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.bgl] }),
             vertex: { module },
             fragment: { module, targets: [{ format: deps.format }] },
             primitive: { topology: 'triangle-list', cullMode: 'none' },
@@ -152,12 +157,26 @@ export class SkyboxManager {
                 depthCompare: 'always',
             },
         });
-        this.bindGroup = this.device.createBindGroup({
-            layout: bgl,
+        this.bindGroup = this.createBindGroup();
+    }
+
+    /** Skybox equirect width. Height is width / 2. */
+    get resolution(): number {
+        return this.ibl.skyboxResolution;
+    }
+
+    set resolution(width: number) {
+        this.ibl.skyboxResolution = width;
+    }
+
+    private createBindGroup(): RawBindGroup {
+        this.bindGroupVersion = this.ibl.equirectVersion;
+        return this.device.createBindGroup({
+            layout: this.bgl,
             entries: [
                 { binding: 0, resource: { buffer: this.uniformBuffer } },
-                { binding: 1, resource: this.ibl.envView },
-                { binding: 2, resource: this.ibl.sampler },
+                { binding: 1, resource: this.ibl.equirectView },
+                { binding: 2, resource: this.ibl.equirectSampler },
             ],
         });
     }
@@ -172,6 +191,7 @@ export class SkyboxManager {
     /** Record the background draw. No-op without an active environment. */
     render(pass: RawRenderPassEncoder, camera: Camera3D, alpha: number): void {
         if (!this.enabled || !this.ibl.active) return;
+        if (this.bindGroupVersion !== this.ibl.equirectVersion) this.bindGroup = this.createBindGroup();
         this.writeUniforms(camera, alpha);
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.bindGroup);

@@ -1395,7 +1395,7 @@ API:
 
 ## WebGPU Renderer (`murow/webgpu`)
 
-`WebGPU3DRenderer` / `WebGPU2DRenderer` are manager-based (3D: instances, materials, lights, shadows, decals, particles, models, camera; 2D: sprites, sheets, geometry, camera), with glTF + skeletal/morph animation, GPU frame interpolation, frustum and animation culling, and a full-screen effect chain (fxaa, bloom, grade, fog, motionBlur, vignette, chromatic, scanlines, posterize, custom). Materials support `standard`, `pbr` (metallic-roughness with direct lights and optional IBL), `unlit`, `emissive`, and custom `shader`. `renderer.ibl.load({ equirect })` adds CPU-prefiltered image-based lighting, and `renderer.skybox` draws the same environment as a background (`enabled`, `tint`).
+`WebGPU3DRenderer` / `WebGPU2DRenderer` are manager-based (3D: instances, materials, lights, shadows, decals, particles, models, camera; 2D: sprites, sheets, geometry, camera), with glTF + skeletal/morph animation, GPU frame interpolation, frustum and animation culling, and a full-screen effect chain (fxaa, bloom, grade, fog, motionBlur, vignette, chromatic, scanlines, posterize, custom). Materials support `standard`, `pbr` (metallic-roughness with direct lights and optional IBL), `unlit`, `emissive`, and custom `shader`. `renderer.ibl.load({ equirect })` adds CPU-prefiltered image-based lighting, and `renderer.skybox` draws the same environment as a background (`enabled`, `tint`, `resolution`; default equirect 512x256).
 
 The full guide — managers and handles, materials, lighting, shadows, decals, particles, cameras, animation, and 2D/3D usage — is in the [renderer guide](./docs/renderer.md), with [shader authoring](./docs/shaders.md) and [performance](./docs/performance.md) alongside.
 

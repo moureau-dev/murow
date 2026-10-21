@@ -165,9 +165,10 @@ The environment is prefiltered on the CPU at load time: an irradiance cubemap fo
 ```ts
 renderer.skybox.enabled = true;
 renderer.skybox.tint = [1, 1, 1];
+renderer.skybox.resolution = 512; // equirect width; height is width / 2
 ```
 
-Tint is interpolated on the GPU from the previous tick, like light transforms. The skybox is not a texture or material; it is a renderer-owned pass and does not appear in the material system.
+The skybox equirect defaults to `512x256`. Set `skyboxResolution` on `ibl.load` or assign `renderer.skybox.resolution` at runtime; changing it recreates the equirect texture and rebinds the skybox. Tint is interpolated on the GPU from the previous tick, like light transforms. The skybox is not a texture or material; it is a renderer-owned pass and does not appear in the material system.
 
 ```ts
 const steel = renderer.materials.create({
