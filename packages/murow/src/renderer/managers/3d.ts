@@ -13,6 +13,7 @@ import {
     MaterialManager,
     MaterialLibrary,
     IblManager,
+    SkyboxManager,
     LightManager,
     LightSystem,
     ShadowManager,
@@ -54,6 +55,7 @@ export class RendererManagers {
     readonly animation!: InstanceType<typeof SkeletalRuntime>;
     readonly materials!: MaterialManager;
     readonly ibl!: IblManager;
+    readonly skybox!: SkyboxManager;
     readonly lights!: LightManager;
     readonly particles!: ParticleManager;
     readonly models!: ModelsManager;
@@ -124,6 +126,7 @@ export class RendererManagers {
 
         const maxMaterials = rendererOptions.maxMaterials ?? DEFAULT_CAPACITIES.materials;
         const ibl = new IblManager(deps.core.device);
+        const skybox = new SkyboxManager({ runtime: deps.runtime, device: deps.core.device, format: deps.core.format, ibl });
         const materialLibrary = new MaterialLibrary({
             runtime: deps.runtime,
             root: deps.core.root,
@@ -163,6 +166,7 @@ export class RendererManagers {
         });
 
         this.ibl = ibl;
+        this.skybox = skybox;
         this.materials = new MaterialManager({
             capacity: maxMaterials,
             logger: deps.logger,

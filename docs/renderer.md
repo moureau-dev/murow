@@ -13,7 +13,7 @@ Referenced from [llms.txt](../llms.txt).
 5. **Materials are refcounted.** `material.destroy()` throws while instances still use it; `material.destroy({ force: true })` reassigns those instances to the default material first. Materials are GPU resources created **after `init()`**.
 6. **3D instance `color` is set at spawn only** (`instances.add({ color: [r, g, b] })`) — there is no `setColor`/`setTint` on a 3D handle. 2D sprites differ: `SpriteHandle.setTint(r, g, b, a)` is live.
 7. **`camera.fov` is DEGREES** (default 60). Pass `60`, not `Math.PI / 3`.
-8. **No skybox.** A metallic-roughness `pbr` material shades direct sun and point/spot lights, supports normal maps and IBL, and `renderer.ibl` adds image-based lighting from an equirectangular environment. There is no visible skybox. `standard` remains Lambert + two-sided.
+8. **Environment lighting and background.** A metallic-roughness `pbr` material shades direct sun and point/spot lights and supports normal maps. `renderer.ibl` adds image-based lighting from an equirectangular environment, and `renderer.skybox` draws that same environment as a fullscreen background. `standard` remains Lambert + two-sided.
 9. **Draw-call budget:** 3D batches by `(materialId, modelId)`; 2D by `(layer, sheet)`. Every extra material on a model is another batch and another draw.
 10. **Custom shaders and effect fragments go through `d`/`std`.** See the [shader guide](./shaders.md). Keep `minifySyntax` off for anything containing shader bodies.
 11. **Shadow cost is per-system.** The directional (sun) map is cached and re-rendered only on change; the spot (≤4/frame) and point/cube (≤2/frame) maps re-render every frame. Disable what you don't use.
@@ -103,7 +103,7 @@ loop.events.on('pre-tick', () => renderer.storePreviousState());
 
 `LightHandle` exposes `slot`, `id`, `alive`, `setPosition`, `setDirection`, `teleport`, `setColor`, readonly `position`/`direction`/`color` (per-handle reused tuples — copy out to retain), `intensity`, `range`, `angle`, `smoothness`, `enabled`, an optional `shadow` override, and `destroy()`.
 
-The 3D renderer supports a metallic-roughness `pbr` material with direct sun and point/spot lighting, normal maps, and image-based lighting through `renderer.ibl`. It does not include a visible skybox; use `standard` / `unlit` / `emissive` / custom `shader` for other looks. A single **directional shadow map** (the sun) is supported; see [Shadows](#shadows-3d).
+The 3D renderer supports a metallic-roughness `pbr` material with direct sun and point/spot lighting, normal maps, image-based lighting through `renderer.ibl`, and a visible environment background through `renderer.skybox`. Use `standard` / `unlit` / `emissive` / custom `shader` for other looks. A single **directional shadow map** (the sun) is supported; see [Shadows](#shadows-3d).
 
 ### Materials (3D)
 
@@ -156,7 +156,16 @@ renderer.ibl.rotation = 0.4;
 renderer.ibl.clear();
 ```
 
-The environment is prefiltered on the CPU at load time: an irradiance cubemap for diffuse and a box-filtered mip chain for roughness-based specular. It is an approximation, not a GGX-convolved split-sum pipeline. No skybox is drawn; the environment only lights and reflects.
+The environment is prefiltered on the CPU at load time: an irradiance cubemap for diffuse and a box-filtered mip chain for roughness-based specular. It is an approximation, not a GGX-convolved split-sum pipeline.
+
+`renderer.skybox` draws the same environment as a fullscreen background. It shares the environment rotation and intensity with IBL, and exposes `enabled` and `tint`:
+
+```ts
+renderer.skybox.enabled = true;
+renderer.skybox.tint = [1, 1, 1];
+```
+
+Tint is interpolated on the GPU from the previous tick, like light transforms. The skybox is not a texture or material; it is a renderer-owned pass and does not appear in the material system.
 
 ```ts
 const steel = renderer.materials.create({
@@ -750,7 +759,7 @@ handle.stop?.();
 - `GeometryData`, `BuiltInGeometry`, `resolveBuiltInGeometry` — for plugging custom vertex layouts into `createGeometry`.
 - `createCube`, `createPlane`, `createGrid`, `createSphere`, `createCylinder`, `createCone` — individual geometry factory functions (e.g. `createCube({ size: 2, uv: 'cross' })`).
 - `DynamicSprite`, `StaticSprite`, `SpriteUniforms`, `DynamicInstance3D`, `StaticInstance3D`, `DynamicMesh`, `StaticMesh`, `SkinnedStaticMesh`, `MeshUniforms` — exported `d.struct` shapes the renderer uses internally. Use these if you want to pack data into the same format the renderer reads.
-- Type exports: `MaterialSpec` / `EngineMaterialSpec` / `PbrMaterialSpec` / `PbrTextures` / `MaterialSampling` / `ShaderMaterialSpec` / `MaterialHandle` / `IblManager` / `IblLoadOptions` / `InstanceMaterials` / `MaterialRef` / `BlendMode` / `CullMode` / `LightSpec` / `LightHandle` / `MeshInstanceOptions` / `WebGPU3DRendererOptions` / `WebGPU2DRendererOptions` and the camera-effect types.
+- Type exports: `MaterialSpec` / `EngineMaterialSpec` / `PbrMaterialSpec` / `PbrTextures` / `MaterialSampling` / `ShaderMaterialSpec` / `MaterialHandle` / `IblManager` / `IblLoadOptions` / `SkyboxManager` / `InstanceMaterials` / `MaterialRef` / `BlendMode` / `CullMode` / `LightSpec` / `LightHandle` / `MeshInstanceOptions` / `WebGPU3DRendererOptions` / `WebGPU2DRendererOptions` and the camera-effect types.
 
 ### Shader util signatures (DSL helpers — call inside vertex/fragment closures)
 
@@ -835,7 +844,7 @@ loop.on('render', ({ alpha }) => renderer.render(alpha));
 - **A non-empty `camera.effects` chain forces the off-screen path.** Even one effect switches to the ping-pong path. Remove effects you no longer need to get the direct path back.
 - **Material count multiplies 3D draw calls.** `materials: [...]` draws the instance once per material (up to 4). Prefer one material per model on the hot path — see the [performance guide](./performance.md).
 - **Spot and point shadow maps re-render every frame.** Only the directional map is cached. Enable them sparingly and gate with `renderer.shadows.spot` / `.point`.
-- **Expecting a skybox.** The 3D renderer has point/spot lights + a configurable sun + ambient, a single directional shadow map, and `standard` / `pbr` / `unlit` / `emissive` / custom `shader` materials. `pbr` supports direct metallic-roughness shading, normal maps, and `renderer.ibl` environment lighting, but no visible skybox.
+- **Expecting an HDR skybox.** The skybox displays the same LDR environment used for IBL. There is no HDR/float environment path or exposure control yet.
 - **Textures in a 3D sprite atlas must sample LOD 0** to avoid cross-cell bleed (the engine particle path does; a custom shader does not automatically).
 - **`renderer.geometry` is on the 2D renderer.** The 3D renderer has no geometry manager (use `GeometryBuilder` indirectly through the 2D renderer or custom materials on meshes).
 - **`renderer.particles.update(dt)` is not a method.** The particle facade exposes `simulate(dt)` (and `renderer.render(alpha)` calls it for you); you only call `emitter.update(dt)` to queue that emitter's spawns.

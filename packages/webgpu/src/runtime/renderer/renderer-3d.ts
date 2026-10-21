@@ -24,6 +24,7 @@ import {
     InstanceManager,
     MaterialManager,
     IblManager,
+    SkyboxManager,
     LightManager,
     ShadowManager,
     DecalManager,
@@ -143,6 +144,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     materials!: MaterialManager;
     /** Image-based lighting environment. */
     ibl!: IblManager;
+    /** Visible environment background. */
+    skybox!: SkyboxManager;
     /** Dynamic light facade. */
     lights!: LightManager;
     /** Shadow passes facade. */
@@ -296,7 +299,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             canvas: this.canvas, assets: this._assets, prefabs: this._prefabs,
             elapsed: () => this.elapsed, nextDecalSeq: () => this.decalMaterialSeq++,
         });
-        this.animation = managers.animation; this.materials = managers.materials; this.ibl = managers.ibl; this.lights = managers.lights;
+        this.animation = managers.animation; this.materials = managers.materials; this.ibl = managers.ibl; this.skybox = managers.skybox; this.lights = managers.lights;
         this.particles = managers.particles; this.models = managers.models; this.instances = managers.instances;
         // GPU geomorph: blend adjacent LOD levels over ~8 ticks (set 0 to hard-switch).
         this.instances.lodFadeTicks = 8;
@@ -455,6 +458,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     }
 
     storePreviousState(): void {
+        this.skybox.storePrevious();
         for (let i = 0; i < this.interpolators.length; i++) {
             this.interpolators[i]!.storePrevious();
         }
@@ -572,6 +576,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             },
         });
 
+        this.skybox.render(pass, this.camera, alpha);
         this.renderMainPass(pass, vpMatrix);
         this.renderParticles(pass, vpMatrix);
         pass.end();
