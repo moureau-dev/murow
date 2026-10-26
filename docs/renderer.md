@@ -311,6 +311,41 @@ loop.on('pre-tick', () => renderer.storePreviousState());
 loop.on('render', ({ alpha }) => renderer.render(alpha));
 ```
 
+### Render layers
+
+Every renderer exposes `layers`, a `LayerRegistry` that maps names to bits. Objects carry one bit (`renderLayer`); cameras carry a mask (`camera.mask`). Culling and picking test the numbers, so the registry is setup-time only.
+
+```ts
+const world = renderer.layers.define('world');
+const viewmodel = renderer.layers.define('viewmodel');
+
+renderer.camera.mask = renderer.layers.mask('world', 'viewmodel');
+renderer.instances.add({ prefab: rock, renderLayer: world });
+renderer.instances.add({ prefab: gun, renderLayer: 'viewmodel' });
+```
+
+A prefab can declare `layer: 'world'`; the instance's `renderLayer` overrides it. Sprites keep `layer` as their sort order, so visibility on a sprite is `renderLayer`. `camera.mask` defaults to `layers.all`, and raycasts use the same mask. Layers are presentation-only; do not use them for authority or physics. `maxLayers` (1-32, default 32) caps the registry's capacity.
+
+### Cameras
+
+Both renderers expose `cameras`, a registry. `renderer.camera` is the primary camera, so single-camera code is unchanged.
+
+```ts
+const main = renderer.cameras.create({ position: [0, 5, -10], target: [0, 0, 0] });
+const minimap = renderer.cameras.create({
+  position: [0, 20, 0],
+  target: [0, 0, 0],
+  fov: 40,
+  rect: { x: 0.72, y: 0.72, width: 0.26, height: 0.26 },
+  priority: 1,
+});
+
+renderer.cameras.setPrimary(main);
+renderer.cameras.remove(minimap);
+```
+
+`create` throws when `maxCameras` (default 4) is reached. Views draw in ascending `priority`; the first enabled view clears the color target and later views load unless `clearColor` is set. Camera effects require a full-screen rect. Occlusion culling runs only with one view, and LOD plus directional shadows follow the primary camera. `raycast` and `worldToScreen` default to the primary; for a partial rect, screen coordinates are local to the view.
+
 ### 2D — `WebGPU2DRenderer`
 
 ```ts

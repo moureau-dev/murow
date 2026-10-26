@@ -1,5 +1,6 @@
 import { testHitbox2D, pointInQuad2D, type Hitbox } from 'murow/core/hitbox';
 import type { SpriteHandle } from 'murow/renderer';
+import { visibleTo } from '../../../../../layers';
 import type { Camera2D } from '../../../cameras/camera-2d';
 
 /** Destination for collected hits (structurally satisfied by `RaycastState2D`). */
@@ -22,6 +23,8 @@ export interface RaycastTarget2D {
     eachSprite(visit: (handle: SpriteHandle) => void): void;
     /** The sprite's declared hitbox, or `null` to use its rendered quad. */
     resolveHitbox(handle: SpriteHandle): Hitbox<'2d'> | null;
+    /** The sprite's render layer bit. */
+    layerOf(handle: SpriteHandle): number;
 }
 
 type Point = [number, number];
@@ -38,6 +41,7 @@ export class RaycastController2D {
         const [wx, wy] = camera.screenToWorld(screenX, screenY);
 
         this.target.eachSprite((handle) => {
+            if (!visibleTo(this.target.layerOf(handle), camera.mask)) return;
             const hb = this.target.resolveHitbox(handle);
             let part: string | null = null;
             if (hb) {

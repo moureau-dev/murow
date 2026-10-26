@@ -1,6 +1,9 @@
 // Core types
 export * from "./types";
 
+// Render layers
+export * from "./layers";
+
 // Base renderer contracts (abstract)
 export * from "./base/renderer";
 export * from "./base/renderer-2d";

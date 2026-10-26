@@ -13,6 +13,12 @@
 import type { ParsedGltf } from '../../../gltf/parser';
 import type { ParsedSpritesheet } from '../../../spritesheet/parser';
 
+/** A spec or parsed prefab that declares a default render layer. */
+export interface Layerable {
+    /** Render layer name. Resolved to a bit when an instance is spawned. */
+    readonly layer?: string;
+}
+
 /**
  * Extracts the spec's `metadata` literal type for the parsed prefab.
  * Missing metadata defaults to `{}` at parse time, so the parsed prefab's
@@ -183,7 +189,7 @@ export interface PrefabLodSpec {
 
 type WithLods<T> = T & { readonly lods?: readonly PrefabLodSpec[] };
 
-export type Prefab3DSpec = WithLods<GltfSpec | GridSpec | CubeSpec | CompositeSpec | PlaneSpec | SphereSpec | CylinderSpec | ConeSpec | MeshSpec>;
+export type Prefab3DSpec = WithLods<GltfSpec | GridSpec | CubeSpec | CompositeSpec | PlaneSpec | SphereSpec | CylinderSpec | ConeSpec | MeshSpec> & Layerable;
 
 /**
  * Map a spec's `animations` tuple to a record-keyed-by-name. Used to type
@@ -362,7 +368,7 @@ export interface PlanePrefab<S extends PlaneSpec = PlaneSpec> {
     readonly hitbox?: string;
 }
 
-export type Prefab3DData = WithLods<GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab | SpherePrefab | CylinderPrefab | ConePrefab | MeshPrefab>;
+export type Prefab3DData = WithLods<GltfPrefab | GridPrefab | CubePrefab | CompositePrefab | PlanePrefab | SpherePrefab | CylinderPrefab | ConePrefab | MeshPrefab> & Layerable;
 export type Prefab3D = Prefab3DData & { setLods(lods?: readonly PrefabLodSpec[]): void };
 
 // ============================================================================
@@ -382,7 +388,7 @@ export interface SpritesheetSpec {
     readonly hitbox?: string;
 }
 
-export type Prefab2DSpec = SpritesheetSpec | TextureSpec;
+export type Prefab2DSpec = (SpritesheetSpec | TextureSpec) & Layerable;
 
 export interface SpritesheetPrefab<S extends SpritesheetSpec = SpritesheetSpec> {
     readonly type: 'spritesheet';
@@ -395,7 +401,7 @@ export interface SpritesheetPrefab<S extends SpritesheetSpec = SpritesheetSpec> 
     readonly hitbox?: string;
 }
 
-export type Prefab2D = SpritesheetPrefab | TexturePrefab;
+export type Prefab2D = (SpritesheetPrefab | TexturePrefab) & Layerable;
 
 // ============================================================================
 // Spec → prefab mapping

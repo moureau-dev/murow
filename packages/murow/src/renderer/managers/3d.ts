@@ -5,7 +5,7 @@
  * manager as a property, so nothing backend-specific lives in the renderer.
  */
 import type { Logger } from 'murow/core';
-import type { AssetBucket, PrefabBucket3D } from 'murow/renderer';
+import type { AssetBucket, LayerRegistry, PrefabBucket3D } from 'murow/renderer';
 import {
     InstanceManager,
     InstanceStore,
@@ -39,6 +39,7 @@ export interface RendererManagersDeps {
     options: any;
     camera: CameraManager;
     skinCull: SkinCull;
+    layers: LayerRegistry;
     maxInstances: number;
     maxSkinnedInstances: number;
     maxTotalBones: number;
@@ -151,6 +152,7 @@ export class RendererManagers {
         const releaseMaterial = (materialId: number) => materialLibrary.release(materialId);
         const instanceStore = new InstanceStore({
             maxInstances: deps.maxInstances,
+            layers: deps.layers,
             getTextureBindGroup: (id) => deps.core.textures.get(id)?.bindGroup,
             retainMaterial,
             releaseMaterial,
@@ -159,6 +161,7 @@ export class RendererManagers {
             maxSkinnedInstances: deps.maxSkinnedInstances,
             maxTotalBones: deps.maxTotalBones,
             maxSkins: deps.prefabs ? deps.prefabs.size : 64,
+            layers: deps.layers,
             uploadRestPose: (skinModel, boneOffset, jointCount) => animation.writeRestPose(skinModel, boneOffset, jointCount),
             getTextureBindGroup: (id) => deps.core.textures.get(id)?.bindGroup,
             retainMaterial,
@@ -213,6 +216,7 @@ export class RendererManagers {
             skinned: skinnedStore,
             models: deps.core.models,
             prefabs: deps.prefabs,
+            layers: deps.layers,
             getSkinModel: (index) => deps.core.models.skinnedModel(index),
             materialName: (id) => materialLibrary.nameOf(id),
         });
@@ -220,6 +224,7 @@ export class RendererManagers {
             camera: deps.camera,
             eachInstance: this.instances.eachInstance.bind(this.instances),
             resolveHitbox: this.instances.resolveHitbox.bind(this.instances),
+            layerOf: this.instances.layerOf.bind(this.instances),
         }), deps.canvas);
         this.shadows = new ShadowManager({
             directional: shadowSystem,
@@ -249,7 +254,7 @@ export class RendererManagers {
         });
 
         // Snapshot order is irrelevant; the three snapshots are independent.
-        this.interpolators = [deps.camera, this.instances, this.lights];
+        this.interpolators = [this.instances, this.lights];
 
         this.mainPass = new MainPass(deps.core, this.instances, this.materials);
     }

@@ -19,6 +19,7 @@ import { Logger } from 'murow/core';
 import {
     type AssetBucket,
     type PrefabBucket3D,
+    LayerRegistry,
 } from 'murow/renderer';
 import {
     InstanceManager,
@@ -30,6 +31,9 @@ import {
     DecalManager,
     ParticleManager,
     CameraManager,
+    CameraRegistry,
+    applyCamera3DCreateOptions,
+    type Camera3DCreateOptions,
     ModelsManager,
 } from 'murow/renderer/managers/runtime';
 import { RendererManagers } from 'murow/renderer/managers';
@@ -122,8 +126,13 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
     private readonly skinCull: SkinCull;
 
-    readonly camera: CameraManager;
+    /** Camera registry. `camera` is the primary camera. */
+    readonly cameras: CameraRegistry<CameraManager, Camera3DCreateOptions>;
+    /** Render layer registry. Shared with every manager. */
+    readonly layers: LayerRegistry;
     raycast!: Raycast3D;
+    /** The primary camera. */
+    get camera(): CameraManager { return this.cameras.primary!; }
     /** Names auto-assigned to internal (decal) materials that have none. */
     private decalMaterialSeq = 0;
     private lastRenderTime = 0;
@@ -204,7 +213,19 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.core = new RendererCore();
         this.maxCameraEffects = options.maxCameraEffects ?? 20;
         this.logger = Logger.resolve(options.debug);
-        this.camera = new CameraManager({ maxEffects: this.maxCameraEffects });
+        this.layers = options.layers ?? new LayerRegistry({ capacity: options.maxLayers });
+        this.cameras = new CameraRegistry<CameraManager, Camera3DCreateOptions>(
+            options.maxCameras ?? 4,
+            (props) => {
+                const camera = new CameraManager({ maxEffects: props.maxEffects ?? this.maxCameraEffects });
+                applyCamera3DCreateOptions(camera, props);
+                camera.mask = props.mask === undefined
+                    ? this.layers.all
+                    : this.layers.resolveMask(props.mask);
+                return camera;
+            },
+        );
+        this.cameras.create({});
 
         this._assets = options.assets ?? null;
         this._prefabs = options.assets?.prefabs as unknown as PrefabBucket3D ?? null;
@@ -294,7 +315,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         const managers = new RendererManagers({
             runtime: this.runtime, core: this.core, logger: this.logger, options: this.options,
-            camera: this.camera, skinCull: this.skinCull, maxInstances: this.maxInstances,
+            camera: this.camera, skinCull: this.skinCull, layers: this.layers, maxInstances: this.maxInstances,
             maxSkinnedInstances: this.maxSkinnedInstances, maxTotalBones: this.maxTotalBones,
             canvas: this.canvas, assets: this._assets, prefabs: this._prefabs,
             elapsed: () => this.elapsed, nextDecalSeq: () => this.decalMaterialSeq++,
@@ -458,6 +479,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     }
 
     storePreviousState(): void {
+        this.cameras.storePrevious();
         this.skybox.storePrevious();
         for (let i = 0; i < this.interpolators.length; i++) {
             this.interpolators[i]!.storePrevious();
@@ -496,44 +518,115 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         if (!this._initialized) return;
 
         const frameDelta = this.advanceFrame();
-        this.camera.interpolate(alpha);
+        this.cameras.interpolate(alpha);
 
-        const vpMatrix = this.camera.getViewProjectionMatrix();
-        this.core.frustum.setFromViewProjection(vpMatrix);
-        // Off-screen emitters skip spawning (their live particles still finish).
+        this.updateModelBounds();
+        this.uploadInstanceData();
+
+        // Particle emission culling uses the primary view this frame.
+        this.core.frustum.setFromViewProjection(this.camera.getViewProjectionMatrix());
         this.particles.setCullFrustum(this.core.frustum);
-
-        this.uploadInstanceBuffers();
-
         // Flush queued particle spawns and advance the pool once per frame.
         this.particles.simulate(frameDelta);
 
         const swapchainView = this.core.context.getCurrentTexture().createView();
-        const enabledEffects = this.camera.effects.enableCount();
-        const targetView = enabledEffects > 0 ? this.cameraEffects.sceneTarget(this._width, this._height) : swapchainView;
-        const encoder = this.core.device.createCommandEncoder();
 
-        // Occlusion is optional: the port may be absent or disabled.
-        const occ = this.occlusion.enabled ? this.runtime.occlusion : undefined;
-        const occlusionCandidates = occ
+        // Lights are camera-independent; upload once.
+        this.lights.upload(
+            this.core.device,
+            this.core.pipelines.rawLightBuffer,
+            this.core.uniformData,
+            MESH_UNIFORM_LIGHT_OFFSET,
+        );
+
+        // Shadow passes run once per frame, fitted around the primary camera.
+        const shadowEncoder = this.core.device.createCommandEncoder();
+        this.renderShadowPasses(shadowEncoder);
+        this.core.device.queue.submit([shadowEncoder.finish()]);
+
+        const views = this.cameras.ordered();
+        // Occlusion uses one HZB and one previous view-projection; keep it to
+        // the single-camera case until per-view occlusion exists.
+        const occlusionActive = this.occlusion.enabled
+            && views.length === 1
+            && this.runtime.occlusion !== undefined;
+
+        let firstView = true;
+        for (const camera of views) {
+            this.renderView(camera, alpha, swapchainView, occlusionActive, firstView);
+            firstView = false;
+        }
+    }
+
+    /** Draw one camera view into the swapchain. */
+    private renderView(
+        camera: CameraManager,
+        alpha: number,
+        swapchainView: GPUTextureView,
+        occlusionActive: boolean,
+        firstView: boolean,
+    ): void {
+        const rect = camera.rect;
+        const x = Math.max(0, Math.floor(rect.x * this._width));
+        const y = Math.max(0, Math.floor(rect.y * this._height));
+        const width = Math.max(1, Math.min(this._width - x, Math.floor(rect.width * this._width)));
+        const height = Math.max(1, Math.min(this._height - y, Math.floor(rect.height * this._height)));
+
+        // Aspect comes from the view's CSS size so raycasts keep using CSS pixels.
+        const cssW = this.canvas.clientWidth || this._width;
+        const cssH = this.canvas.clientHeight || this._height;
+        camera.setAspect(cssW * rect.width, cssH * rect.height);
+
+        const vpMatrix = camera.getViewProjectionMatrix();
+        this.core.frustum.setFromViewProjection(vpMatrix);
+        // Off-screen emitters skip spawning (their live particles still finish).
+        this.particles.setCullFrustum(this.core.frustum);
+
+        this.instances.prepareFrame(this.core.frustum, camera.mask);
+        this.uploadSlotIndices();
+
+        const fullRect = x === 0 && y === 0 && width === this._width && height === this._height;
+        const enabledEffects = camera.effects.enableCount();
+        if (enabledEffects > 0 && !fullRect) {
+            this.logger.warn('camera effects require a full-screen rect; effects are skipped for this view');
+        }
+        const effectsActive = enabledEffects > 0 && fullRect;
+
+        const clearColor = camera.clearColor === false
+            ? undefined
+            : (camera.clearColor ?? this._clearColor);
+        // A clear affects the whole attachment, not the viewport. Only the first
+        // view clears by default; later views load unless they opt in.
+        const clear = firstView || (camera.clearColor !== undefined && camera.clearColor !== false);
+        const loadOp = clear && clearColor !== undefined ? 'clear' : 'load';
+
+        const targetView = effectsActive
+            ? this.cameraEffects.sceneTarget(this._width, this._height)
+            : swapchainView;
+
+        this.core.scene.write({
+            vpMatrix,
+            alpha,
+            time: this.elapsed,
+            cameraPos: camera.position,
+            width: this._width,
+            height: this._height,
+        });
+
+        const encoder = this.core.device.createCommandEncoder();
+        const occluder = occlusionActive ? this.runtime.occlusion : undefined;
+        const occlusionCandidates = occluder
             ? (this.instances.store.slotIndexBuffer ?? this.core.pipelines.rawSlotIndexBuffer)
             : null;
-        const occlusionActive = occ !== undefined && occlusionCandidates !== null;
+        const useOcclusion = occluder !== undefined && occlusionCandidates !== null;
 
-        // Shadow passes run first, then the main mesh pass, then particles/post.
-        this.renderShadowPasses(encoder);
-        this.uploadLightsAndUniforms(alpha, vpMatrix);
-
-        // Cull candidates against the pyramid built from last frame's depth.
-        if (occlusionActive) {
+        if (useOcclusion) {
             // Project with the camera the pyramid was built with (last frame).
             if (this.occlusionVp) this.core.device.queue.writeBuffer(this.occlusionVp, 0, this.prevVp);
-            (occ as { bias?: number }).bias = this.occlusion.bias;
-            occ!.cull(encoder, occlusionCandidates!, this.instances.occlusionBatches);
-            // Skinned instances: cull against their own buffers and clear the
-            // per-slot visibility the skinned vertex shader reads.
+            (occluder as { bias?: number }).bias = this.occlusion.bias;
+            occluder!.cull(encoder, occlusionCandidates!, this.instances.occlusionBatches);
             if (this.instances.skinnedOcclusionBatchCount > 0) {
-                occ!.cull(
+                occluder!.cull(
                     encoder,
                     this.core.pipelines.rawSkinnedSlotIndexBuffer,
                     this.instances.skinnedOcclusionBatches,
@@ -547,48 +640,56 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         for (let i = 0; i < this.instances.occlusionBatchCount; i++) {
             candidateTotal += this.instances.occlusionBatches[i]!.candidateCount;
         }
-        this.occlusion.stats.batches = occlusionActive ? this.instances.occlusionBatchCount : 0;
-        this.occlusion.stats.candidates = occlusionActive ? candidateTotal : 0;
+        this.occlusion.stats.batches = useOcclusion ? this.instances.occlusionBatchCount : 0;
+        this.occlusion.stats.candidates = useOcclusion ? candidateTotal : 0;
 
-        // The mesh pipelines switch to indirect draws while occlusion is active.
         const pipelines = this.core.pipelines as MeshPipelines & {
             indirectEnabled?: boolean;
             rawIndirectArgsBuffer?: RawBuffer | null;
         };
-        pipelines.indirectEnabled = occlusionActive;
-        if (occlusionActive) pipelines.rawIndirectArgsBuffer = occ!.indirectArgs ?? null;
+        pipelines.indirectEnabled = useOcclusion;
+        if (useOcclusion) pipelines.rawIndirectArgsBuffer = occluder!.indirectArgs ?? null;
 
         const pass = encoder.beginRenderPass({
             colorAttachments: [{
                 view: targetView,
-                loadOp: 'clear',
+                loadOp,
                 storeOp: 'store',
-                clearValue: {
-                    r: this._clearColor[0], g: this._clearColor[1],
-                    b: this._clearColor[2], a: this._clearColor[3],
-                },
+                ...(loadOp === 'clear' && clearColor !== undefined
+                    ? { clearValue: { r: clearColor[0], g: clearColor[1], b: clearColor[2], a: clearColor[3] } }
+                    : {}),
             }],
             depthStencilAttachment: {
                 view: this.core.pipelines.depthTexture.createView(),
-                depthLoadOp: 'clear',
+                depthLoadOp: camera.clearDepth ? 'clear' : 'load',
                 depthStoreOp: 'store',
                 depthClearValue: 1.0,
             },
         });
+        pass.setViewport?.(x, y, width, height, 0, 1);
+        pass.setScissorRect?.(x, y, width, height);
 
-        this.skybox.render(pass, this.camera, alpha);
+        this.skybox.render(pass, camera, alpha);
         this.renderMainPass(pass, vpMatrix);
-        this.renderParticles(pass, vpMatrix);
+        this.renderParticles(pass, vpMatrix, camera);
         pass.end();
 
         // Build this frame's pyramid from the opaque depth written by the pass.
-        if (occlusionActive) occ!.buildPyramid(encoder);
+        if (useOcclusion) occluder!.buildPyramid(encoder);
 
-        this.renderPost(encoder, swapchainView, enabledEffects);
+        if (effectsActive) {
+            this.cameraEffects.setDepth(
+                this.core.pipelines.depthTexture.createView(),
+                this.core.pipelines.depthSampler,
+                camera.near,
+                camera.far,
+            );
+            this.cameraEffects.apply(encoder, swapchainView as never, camera.effects, this.elapsed, this._width, this._height);
+        }
 
         this.core.device.queue.submit([encoder.finish()]);
-        // Remember this frame's camera for next frame's cull.
-        this.prevVp.set(vpMatrix);
+        // Remember the view-projection for next frame's occlusion cull.
+        if (useOcclusion) this.prevVp.set(vpMatrix);
     }
 
     /** Advance the render clock and skeletal animations; returns the frame delta. */
@@ -626,12 +727,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         (this.runtime.occlusion as any)?.writeModelBounds?.(bd, n);
     }
 
-    /** Upload instance transforms and bone matrices for the frame's packed batches. */
-    private uploadInstanceBuffers(): void {
+    /** Upload instance transforms and bone matrices once per frame. */
+    private uploadInstanceData(): void {
         this.updateModelBounds();
-        // Pick a level per LOD instance from the (interpolated) camera before culling.
-        // Gather, cull and pack the visible batch lists into the manager.
-        this.instances.prepareFrame(this.core.frustum);
 
         // Upload dynamic data
         this.core.device.queue.writeBuffer(
@@ -646,14 +744,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                 this.instances.store.staticData.buffer, this.instances.store.staticData.byteOffset, this.instances.store.staticData.byteLength,
             );
             this.instances.store.staticDirty = false;
-        }
-
-        if (this.instances.slotIndexCount > 0) {
-            this.core.device.queue.writeBuffer(
-                this.core.pipelines.rawSlotIndexBuffer, 0,
-                this.instances.store.slotIndexData.buffer, this.instances.store.slotIndexData.byteOffset,
-                this.instances.slotIndexCount * 4,
-            );
         }
 
         // --- Upload skinned buffers ---
@@ -672,7 +762,17 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         // Upload bone matrices from CPU only if GPU compute is not active
         this.animation.flushBoneMatrices();
+    }
 
+    /** Upload the slot lists packed by the current view's `prepareFrame`. */
+    private uploadSlotIndices(): void {
+        if (this.instances.slotIndexCount > 0) {
+            this.core.device.queue.writeBuffer(
+                this.core.pipelines.rawSlotIndexBuffer, 0,
+                this.instances.store.slotIndexData.buffer, this.instances.store.slotIndexData.byteOffset,
+                this.instances.slotIndexCount * 4,
+            );
+        }
         if (this.instances.skinnedSlotIndexCount > 0) {
             this.core.device.queue.writeBuffer(
                 this.core.pipelines.rawSkinnedSlotIndexBuffer, 0,
@@ -680,9 +780,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                 this.instances.skinnedSlotIndexCount * 4,
             );
         }
-
-        // (Skinned slot visibility is reset to 1 by the occlusion cull pass; the
-        // cull clears the slots it rejects and the vertex shader collapses a 0.)
     }
 
     /** Delegate each shadow pass to its manager (caster gather plus encode). */
@@ -690,24 +787,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.shadows.directional.render(encoder);
         this.shadows.spot.render(encoder);
         this.shadows.point.render(encoder);
-    }
-
-    /** Pack the light buffer and write the frame uniforms. Runs after the light assignments. */
-    private uploadLightsAndUniforms(alpha: number, vpMatrix: Float32Array): void {
-        this.lights.upload(
-            this.core.device,
-            this.core.pipelines.rawLightBuffer,
-            this.core.uniformData,
-            MESH_UNIFORM_LIGHT_OFFSET,
-        );
-        this.core.scene.write({
-            vpMatrix,
-            alpha,
-            time: this.elapsed,
-            cameraPos: this.camera.position,
-            width: this._width,
-            height: this._height,
-        });
     }
 
     /** Draw the batched non-skinned and skinned meshes, then debug hitboxes. */
@@ -719,16 +798,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     }
 
     /** Draw the particle systems into the current pass. */
-    private renderParticles(pass: RawRenderPassEncoder, vpMatrix: Float32Array): void {
-        cameraBasis(this.camera.position, this.camera.target, this.camera.up, this._camRight, this._camUp);
+    private renderParticles(pass: RawRenderPassEncoder, vpMatrix: Float32Array, camera: CameraManager): void {
+        cameraBasis(camera.position, camera.target, camera.up, this._camRight, this._camUp);
         this.particles.draw(pass, vpMatrix, this._camRight, this._camUp);
-    }
-
-    /** Apply the enabled camera effects into the swapchain. */
-    private renderPost(encoder: RawCommandEncoder, swapchainView: GPUTextureView, enabledEffects: number): void {
-        if (enabledEffects > 0) {
-            this.cameraEffects.apply(encoder, swapchainView as never, this.camera.effects, this.elapsed, this._width, this._height);
-        }
     }
 
     // Visibility + skinning culling lives in ./cull (Frustum, SkinCull).

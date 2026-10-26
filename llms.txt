@@ -1393,6 +1393,54 @@ API:
 
 ---
 
+## Render Layers
+
+`renderer.layers` is a `LayerRegistry` on every renderer. It maps names to bits; the default layer is bit 0. Objects carry one bit (`renderLayer`); cameras carry a mask (`camera.mask`). Filtering happens in the per-view cull, so the hot path is plain numbers.
+
+```ts
+const world = renderer.layers.define('world');
+const viewmodel = renderer.layers.define('viewmodel');
+
+renderer.camera.mask = renderer.layers.mask('world', 'viewmodel');
+const rock = renderer.instances.add({ prefab: rockPrefab, renderLayer: world });
+const gun = renderer.instances.add({ prefab: gunPrefab, renderLayer: 'viewmodel' });
+```
+
+- `layers.define(name)` returns the bit and is idempotent. Capacity is 32 bits; `default` is bit 0.
+- Pass `maxLayers` to sizes the default registry's capacity (1-32). Pass a `LayerRegistry` to share names between renderers.
+- `layers.mask(...names)` ORs names. `layers.resolveLayer(name | bit)` resolves one layer. `layers.all` matches every bit.
+- Prefabs accept `layer?: string`; an instance's `renderLayer` overrides it.
+- **Sprites use `layer` for sort order.** Visibility on a sprite is `renderLayer`.
+- `camera.mask` defaults to `layers.all`. Raycasts use the camera mask.
+- Render layers are presentation-only: never use them for authority, interest, or physics.
+- Both `WebGPU3DRenderer` and `WebGPU2DRenderer` expose `layers` and accept `{ layers }` to share one registry.
+
+## Cameras
+
+Every renderer exposes `cameras`, a registry. `renderer.camera` is the primary camera, so single-camera code keeps working.
+
+```ts
+const main = renderer.cameras.create({ position: [0, 5, -10], target: [0, 0, 0] });
+const minimap = renderer.cameras.create({
+  position: [0, 20, 0],
+  target: [0, 0, 0],
+  fov: 40,
+  rect: { x: 0.72, y: 0.72, width: 0.26, height: 0.26 },
+  priority: 1,
+});
+
+renderer.cameras.setPrimary(main);
+renderer.cameras.remove(minimap);
+```
+
+- `cameras.create(props)` throws when `maxCameras` (default 4) is reached.
+- View fields: `rect` (normalized, top-left origin), `mask`, `enabled`, `priority`, `clearColor`, `clearDepth`, `name`.
+- Views draw in ascending `priority`. The first enabled view clears the color target; later views load unless `clearColor` is set. A clear affects the whole attachment, not the viewport.
+- Camera effects require a full-screen `rect`; partial views skip them.
+- Occlusion culling is enabled only with a single camera view. LOD and directional shadows follow the primary camera.
+- `raycast`, `worldToScreen`, and `storePreviousState` defaults use the primary camera. For a partial rect, screen coordinates for that camera are local to the view.
+- `maxCameras` bounds the registry only; per-view GPU resources are not preallocated.
+
 ## WebGPU Renderer (`murow/webgpu`)
 
 `WebGPU3DRenderer` / `WebGPU2DRenderer` are manager-based (3D: instances, materials, lights, shadows, decals, particles, models, camera; 2D: sprites, sheets, geometry, camera), with glTF + skeletal/morph animation, GPU frame interpolation, frustum and animation culling, and a full-screen effect chain (fxaa, bloom, grade, fog, motionBlur, vignette, chromatic, scanlines, posterize, custom). Materials support `standard`, `pbr` (metallic-roughness with direct lights and optional IBL), `unlit`, `emissive`, and custom `shader`. `renderer.ibl.load({ equirect })` adds CPU-prefiltered image-based lighting, and `renderer.skybox` draws the same environment as a background (`enabled`, `tint`, `resolution`; default equirect 512x256).
@@ -1427,6 +1475,9 @@ To ask "is this instance hidden?" from gameplay, **track** the handles: `const t
 | Reading `input.mouse.position.y` as world Y in a 2D game | Mouse Y is screen-space (top = 0). Flip: `worldY = canvas.height - input.mouse.position.y` |
 | Calling `mouseLook.lock(canvas)` without a click handler | Pointer Lock requires a user gesture. Bind it inside `canvas.addEventListener('click', ...)` |
 | `renderer.camera.position[0] = 5` | Tuple property is a shared reference; use `renderer.camera.setPosition(5, y, z)` |
+| Treating `sprite.layer` as camera visibility | `sprite.layer` is sort order; use `renderLayer` + `camera.mask` for visibility |
+| Using render layers for authority or interest | Layers are presentation-only; use netcode interest plugins |
+| Expecting occlusion or camera effects on every view | Occlusion runs with one view; effects need a full-screen rect |
 | `renderer.camera.fov = Math.PI / 3` (radians) | `fov` is DEGREES in 0.1.8 (default 60): `renderer.camera.fov = 60`. Radians give a ~1° view — effectively black |
 | `import { WebGPU3DRenderer } from "https://esm.sh/murow/webgpu"` (browser) | Not a supported browser entry point. Use the documented pair: jsDelivr `+esm` for core + `murow/dist/webgpu/esm/murow.webgpu.bundle.js` for the renderer |
 | `instances.add({ prefab: 'hero' })` relying on the string id | Pass the prefab object: `instances.add({ prefab: assets.prefabs.get('hero') })` — type-safe and avoids a runtime bucket lookup |

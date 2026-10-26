@@ -4,6 +4,7 @@ import { SlotMap } from 'murow/core/slot-map';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { InstanceLodStore } from './lod-store';
 import type { SkeletalAnimState, PlayOptions, TexturePrefab } from 'murow/renderer';
+import { resolveRenderLayer, type LayerRegistry } from '../../../layers';
 import { DYNAMIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../engine-core/types';
 import type { MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../types';
 import {
@@ -34,6 +35,8 @@ export interface SkinnedInstanceStoreDeps {
     maxTotalBones: number;
     /** Upper bound on distinct skin indices; sizes the free-offset table. */
     maxSkins: number;
+    /** Resolves layer names and the default bit. */
+    layers: LayerRegistry;
     /** Upload the skin's rest pose into the shared bone-matrix buffer at `boneOffset`. */
     uploadRestPose(skinModel: SkinModelLike, boneOffset: number, jointCount: number): void;
     getTextureBindGroup(id: string): RawBindGroup | undefined;
@@ -53,6 +56,8 @@ export class SkinnedInstanceStore {
     readonly dynamicData: Float32Array;
     readonly staticData: Float32Array;
     readonly slotIndexData: Uint32Array;
+    /** Per-slot render layer bit. */
+    readonly layerData: Uint32Array;
     readonly instanceModelIds: Uint8Array;
     readonly instanceBoneOffsets: Uint32Array;
     readonly instanceHandles: (MeshInstanceHandle | null)[];
@@ -91,6 +96,7 @@ export class SkinnedInstanceStore {
         this.staticData = new Float32Array(n * SKINNED_STATIC_MESH_FLOATS);
         this.staticDV = new DataView(this.staticData.buffer);
         this.slotIndexData = new Uint32Array(n);
+        this.layerData = new Uint32Array(n);
         this.instanceModelIds = new Uint8Array(n);
         this.instanceBoneOffsets = new Uint32Array(n);
         this.animStates = new Array(n).fill(null);
@@ -111,6 +117,11 @@ export class SkinnedInstanceStore {
     /** Per-slot texture override bind group, or undefined for the model default. */
     textureBindGroup(slot: number): RawBindGroup | undefined {
         return this.textureBGs[slot] ?? undefined;
+    }
+
+    /** Render layer bit for a slot. */
+    layerOf(slot: number): number {
+        return this.layerData[slot] ?? 0;
     }
 
     /** Number of materials in a slot's list (0 if the slot is empty). */
@@ -226,6 +237,12 @@ export class SkinnedInstanceStore {
     ): MeshInstanceHandle {
         const slot = this.slots.add();
         if (slot === -1) throw new Error(`Max skinned instances (${this.deps.maxSkinnedInstances}) reached`);
+
+        this.layerData[slot] = resolveRenderLayer(
+            this.deps.layers,
+            opts.renderLayer,
+            (opts.prefab as { layer?: string } | undefined)?.layer,
+        );
 
         const jointCount = skinModel.jointCount;
         let boneOffset: number;
@@ -399,6 +416,7 @@ export class SkinnedInstanceStore {
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 stat.fill(0, statBase, statBase + SKINNED_STATIC_MESH_FLOATS);
                 self.textureBGs[slot] = null;
+                self.layerData[slot] = 0;
                 animStates[slot] = null;
                 self.instanceHandles[slot] = null;
                 self.staticDirty = true;

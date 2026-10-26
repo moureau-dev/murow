@@ -28,6 +28,8 @@ renderer/
 │   └── asset/             (AssetBucket — textures + prefabs under one roof)
 ├── raycast/           — abstract pick / ray-test contracts
 │   └── raycast.ts         (Raycast, RaycastMemo, RaycastHit, RaycastOptions)
+├── layers/            — name-to-bit render layer registry
+│   └── layers.ts          (LayerRegistry, visibleTo)
 ├── managers/          — the agnostic renderer
 │   ├── runtime/           (managers, core, internals, cameras, feature ports)
 │   │   └── backend.ts         (RendererRuntime, Skinning, Particles3D, Presentation)
@@ -39,6 +41,44 @@ renderer/
 ├── math.ts            — TRS/mat4 math (zero-alloc)
 └── types.ts           — SpriteHandle, SpritesheetHandle, Camera*State, etc.
 ```
+
+## Render layers
+
+`LayerRegistry` maps layer names to bits. An object carries one bit (`renderLayer`); a camera carries a mask (`camera.mask`). The per-view cull tests numbers with `visibleTo`, so no registry lookup runs per frame.
+
+```typescript
+const layers = renderer.layers;
+const world = layers.define('world');
+const viewmodel = layers.define('viewmodel');
+
+renderer.camera.mask = layers.mask('world', 'viewmodel');
+renderer.instances.add({ prefab: rock, renderLayer: world });
+```
+
+- `sprite.layer` remains the sprite sort/batch layer. Visibility for sprites is `renderLayer`.
+- A prefab can declare `layer: 'world'`; the instance's `renderLayer` overrides it.
+- A numeric `renderLayer` must be a single bit. A name is resolved when the object is spawned.
+- Raycasts use the camera's mask, so a camera cannot pick a layer it does not see.
+- Layers are presentation only. Do not use them for authority, interest, or physics.
+- `maxLayers` (1-32, default 32) caps the default registry. Inject a `LayerRegistry` to share names across renderers.
+
+## Cameras
+
+A renderer exposes `cameras` (a `CameraRegistry`) and keeps `camera` as an alias for the primary. Views carry a normalized `rect`, `mask`, `priority`, and clear flags; the renderer draws enabled cameras in priority order.
+
+```typescript
+const main = renderer.cameras.create({ position: [0, 5, -10], target: [0, 0, 0] });
+const minimap = renderer.cameras.create({
+  position: [0, 20, 0],
+  target: [0, 0, 0],
+  fov: 40,
+  rect: { x: 0.72, y: 0.72, width: 0.26, height: 0.26 },
+  priority: 1,
+});
+renderer.cameras.setPrimary(main);
+```
+
+`create` throws at `maxCameras` (default 4). The first view clears the color target; later views load unless `clearColor` is set. Camera effects need a full-screen rect. Occlusion culling is limited to one view, and LOD, directional shadows, raycasts, and `worldToScreen` default to the primary camera.
 
 ## Assets
 

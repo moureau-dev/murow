@@ -11,6 +11,7 @@ import type { Handles } from '../handles';
 import type { MaterialHandle } from '../materials';
 import type { ModelLibrary } from '../internals/model-library';
 import type { Frustum } from '../internals/frustum';
+import { resolveRenderLayer, visibleTo, type LayerRegistry } from '../../../layers';
 import { InstanceStore } from './instance-store';
 import { SkinnedInstanceStore, type SkinModelLike } from './skinned-instance-store';
 import { isPrefab3D, resolvePrefabHandle } from './prefab-handle';
@@ -37,6 +38,8 @@ export interface InstanceManagerDeps {
     skinned: SkinnedInstanceStore;
     models: ModelLibrary;
     prefabs: PrefabBucket3D | null;
+    /** Layer registry used to resolve per-instance render layers. */
+    layers: LayerRegistry;
     /** Upper bound on distinct skin indices; sizes the free-offset table. */
     getSkinModel(index: number): SkinModelLike | undefined;
     /** Registered name of a 1-based material id, for the `materials` view. */
@@ -179,6 +182,12 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         const userPrefabId = prefab ? prefab.id : null;
         const materialIds = materialIdsFromOptions(resolvedOpts);
 
+        const prefabLayer = (prefab as { layer?: string } | undefined)?.layer;
+        resolvedOpts = {
+            ...resolvedOpts,
+            renderLayer: resolveRenderLayer(this.deps.layers, resolvedOpts.renderLayer, prefabLayer),
+        };
+
         // LOD: explicit per-instance chain wins; else inherit the prefab's.
         let lods: readonly LodSpec[] | undefined = Array.isArray(resolvedOpts.lod) ? resolvedOpts.lod : undefined;
         const prefabLods = prefab === undefined ? undefined : (prefab as unknown as { lods?: readonly LodSpec[] }).lods;
@@ -279,7 +288,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
      * occlusion port, which keeps non-cullable instances in its output.
      * @internal
      */
-    prepareFrame(frustum: Frustum): void {
+    prepareFrame(frustum: Frustum, mask: number = 0xffffffff): void {
         const store = this.deps.store;
         // Mirror active LOD fade companions from their main instances first.
         store.syncCompanions();
@@ -311,6 +320,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
                 const sz = stat[sBase + STAT_SZ];
                 const maxScale = sx > sy ? (sx > sz ? sx : sz) : (sy > sz ? sy : sz);
                 const radius = baseRadius * maxScale;
+                if (!visibleTo(store.layerData[slot]!, mask)) continue;
                 if (frustum.intersectsSphere(cx, cy, cz, radius)) {
                     if (!store.occlusionEnabled(slot)) forceVisible = true;
                     store.slotIndexData[indexOffset++] = slot;
@@ -363,6 +373,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
                 const sz = sStat[sBase + SSTAT_SZ];
                 const maxScale = Math.abs(sx) > Math.abs(sy) ? (Math.abs(sx) > Math.abs(sz) ? Math.abs(sx) : Math.abs(sz)) : (Math.abs(sy) > Math.abs(sz) ? Math.abs(sy) : Math.abs(sz));
                 const radius = baseRadius * maxScale;
+                if (!visibleTo(skinned.layerData[slot]!, mask)) continue;
                 if (frustum.intersectsSphere(cx, cy, cz, radius)) {
                     skinned.slotIndexData[skinnedIndexOffset++] = slot;
                 }
@@ -444,6 +455,14 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
                     model.centerX, model.centerY, model.centerZ);
             }
         });
+    }
+
+    /**
+     * Render layer bit of an instance.
+     * @internal
+     */
+    layerOf(handle: MeshInstanceHandle): number {
+        return handle.skinned ? this.deps.skinned.layerOf(handle.slot) : this.deps.store.layerOf(handle.slot);
     }
 
     /**

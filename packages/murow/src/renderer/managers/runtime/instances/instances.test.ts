@@ -4,6 +4,7 @@ import { InstanceManager } from './instances';
 import { InstanceStore } from './instance-store';
 import { SkinnedInstanceStore } from './skinned-instance-store';
 import { setPrefabHandle } from './prefab-handle';
+import { LayerRegistry } from '../../../layers';
 import type { ModelHandle } from '../../types';
 
 function setup() {
@@ -18,11 +19,12 @@ function setup() {
     const composite = (id: string, partIds: string[]) =>
         prefabs.set(id, { type: 'composite', id, parts: partIds.map((pid) => ({ partId: pid })) });
 
-    const store = new InstanceStore({ maxInstances: 32, getTextureBindGroup: () => undefined });
+    const store = new InstanceStore({ maxInstances: 32, layers: new LayerRegistry(), getTextureBindGroup: () => undefined });
     const skinned = new SkinnedInstanceStore({
         maxSkinnedInstances: 8,
         maxTotalBones: 64,
         maxSkins: 4,
+        layers: new LayerRegistry(),
         uploadRestPose: () => {},
         getTextureBindGroup: () => undefined,
     });
@@ -37,6 +39,7 @@ function setup() {
         skinned,
         models,
         prefabs: { get: (id: string) => prefabs.get(id) } as never,
+        layers: new LayerRegistry(),
         getSkinModel: () => undefined,
     });
     const lodSlots = () => {

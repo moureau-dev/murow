@@ -6,7 +6,7 @@
  * manager as a property, so nothing backend-specific lives in the renderer.
  */
 import type { Logger } from 'murow/core';
-import type { PrefabBucket2D } from 'murow/renderer';
+import type { LayerRegistry, PrefabBucket2D } from 'murow/renderer';
 import { CameraManager2D, SpritesheetManager, SpriteManager, GeometryManager } from './runtime';
 import type { Renderer2DCore } from './runtime';
 import type { RendererRuntime } from './runtime/backend';
@@ -20,6 +20,7 @@ export interface RendererManagers2DDeps {
     camera: CameraManager2D;
     maxSprites: number;
     prefabs: PrefabBucket2D | null;
+    layers: LayerRegistry;
     getClearColor(): [number, number, number, number];
 }
 
@@ -38,6 +39,7 @@ export class RendererManagers2D {
             capacity: deps.maxSprites,
             logger: deps.logger,
             prefabs: deps.prefabs,
+            layers: deps.layers,
         });
         this.geometry = new GeometryManager({ 
             core: deps.core,

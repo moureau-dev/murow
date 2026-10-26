@@ -1,6 +1,7 @@
 import type { Hitbox } from 'murow/core/hitbox';
 import type { Ray3D } from 'murow/core/ray';
 import { testHitbox3D } from 'murow/core/hitbox';
+import { visibleTo } from '../../../../../layers';
 import type { Camera3D } from '../../../cameras/camera-3d';
 import type { MeshInstanceHandle } from '../../../types';
 
@@ -31,6 +32,8 @@ export interface RaycastTarget {
     ) => void): void;
     /** The instance's declared hitbox, or `null` to use its bounding box. */
     resolveHitbox(handle: MeshInstanceHandle): Hitbox<'3d'> | null;
+    /** The instance's render layer bit. */
+    layerOf(handle: MeshInstanceHandle): number;
 }
 
 /**
@@ -48,6 +51,7 @@ export class RaycastController {
         const maxDistance = camera.far;
 
         this.target.eachInstance((handle, cx, cy, cz, sx, sy, sz, halfX, halfY, halfZ, centerX, centerY, centerZ) => {
+            if (!visibleTo(this.target.layerOf(handle), camera.mask)) return;
             const hit = this.test(ray, handle, cx, cy, cz, sx, sy, sz, halfX, halfY, halfZ, centerX, centerY, centerZ);
             if (hit === null) return;
             const t = hit.distance;

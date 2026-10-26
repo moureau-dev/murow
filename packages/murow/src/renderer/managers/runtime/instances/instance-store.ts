@@ -3,6 +3,7 @@ import { RawBindGroup, RawBindGroupEntry, RawBindGroupLayout, RawBlendComponent,
 import { SlotMap, SlotSet } from 'murow/core/slot-map';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { TexturePrefab } from 'murow/renderer';
+import { resolveRenderLayer, type LayerRegistry } from '../../../layers';
 import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS } from '../engine-core/types';
 import type { MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../types';
 import {
@@ -20,6 +21,8 @@ import { EMPTY_MATERIALS } from './empty-materials';
 
 export interface InstanceStoreDeps {
     maxInstances: number;
+    /** Resolves layer names and the default bit. */
+    layers: LayerRegistry;
     /** Bind group for a registered texture id, or undefined. */
     getTextureBindGroup(id: string): RawBindGroup | undefined;
     /** Record one instance starting to use a 1-based material id (0 = default). */
@@ -37,6 +40,8 @@ export class InstanceStore {
     readonly dynamicData: Float32Array;
     readonly staticData: Float32Array;
     readonly slotIndexData: Uint32Array;
+    /** Per-slot render layer bit. */
+    readonly layerData: Uint32Array;
     /** Bumped on any transform/structure change; lets consumers cache GPU passes. */
     dynamicVersion = 0;
     readonly instanceModelIds: Uint8Array;
@@ -74,6 +79,7 @@ export class InstanceStore {
         this.dynamicData = new Float32Array(n * DYNAMIC_MESH_FLOATS);
         this.staticData = new Float32Array(n * STATIC_MESH_FLOATS);
         this.slotIndexData = new Uint32Array(n);
+        this.layerData = new Uint32Array(n);
         this.instanceModelIds = new Uint8Array(n);
         this.instanceHandles = new Array(n).fill(null);
         this.materialIds = new Uint16Array(n * MAX_MATERIALS_PER_INSTANCE);
@@ -102,6 +108,11 @@ export class InstanceStore {
     /** Whether a slot may be occlusion-culled by the depth pyramid. */
     occlusionEnabled(slot: number): boolean {
         return (this.instanceFlags[slot]! & 1) !== 0;
+    }
+
+    /** Render layer bit for a slot. */
+    layerOf(slot: number): number {
+        return this.layerData[slot] ?? 0;
     }
 
     /** Whether a slot contributes depth to the occluder pyramid. */
@@ -180,6 +191,12 @@ export class InstanceStore {
     spawn(opts: MeshInstanceOptions<any>, modelHandle: ModelHandle, userPrefabId: string | null, id: number, materialIds: readonly number[] = [0]): MeshInstanceHandle {
         const slot = this.slots.add();
         if (slot === -1) throw new Error(`Max instances (${this.deps.maxInstances}) reached`);
+
+        this.layerData[slot] = resolveRenderLayer(
+            this.deps.layers,
+            opts.renderLayer,
+            (opts.prefab as { layer?: string } | undefined)?.layer,
+        );
 
         let flags = 0;
         if (opts.occlusion !== false) flags |= 1;
@@ -346,6 +363,7 @@ export class InstanceStore {
                 self.slots.remove(slot);
                 dyn.fill(0, dynBase, dynBase + DYNAMIC_MESH_FLOATS);
                 stat.fill(0, statBase, statBase + STATIC_MESH_FLOATS);
+                self.layerData[slot] = 0;
                 self.instanceHandles[slot] = null;
                 self.staticDirty = true;
             },
@@ -416,6 +434,7 @@ export class InstanceStore {
         for (let i = 0; i < STATIC_MESH_FLOATS; i++) stat[cStat + i] = stat[sStat + i]!;
         this.instanceModelIds[c] = modelId;
         this.instanceFlags[c] = this.instanceFlags[slot]!;
+        this.layerData[c] = this.layerData[slot]!;
         const kS = slot * MAX_MATERIALS_PER_INSTANCE;
         const kC = c * MAX_MATERIALS_PER_INSTANCE;
         const count = this.materialCount[slot] ?? 0;
@@ -446,6 +465,7 @@ export class InstanceStore {
         this.instanceHandles[c] = null;
         this.textureBGs[c] = null;
         this.instanceFlags[c] = 0;
+        this.layerData[c] = 0;
         this.slots.remove(c);
         this.companions[slot] = -1;
         this.companionSlots.remove(slot);

@@ -1,6 +1,7 @@
 import { test, expect, describe } from 'bun:test';
 import { SkinnedInstanceStore, type SkinModelLike } from './skinned-instance-store';
 import type { ModelHandle } from '../../types';
+import { LayerRegistry } from '../../../layers';
 
 const model: ModelHandle = { id: 3, vertexCount: 3, indexCount: 0, skinned: true };
 
@@ -22,6 +23,7 @@ function store() {
         maxSkinnedInstances: 8,
         maxTotalBones: 64,
         maxSkins: 4,
+        layers: new LayerRegistry(),
         uploadRestPose: () => {},
         getTextureBindGroup: () => undefined,
     });

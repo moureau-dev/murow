@@ -17,8 +17,9 @@ import { d } from '../../gpu';
 import { runtime } from '../runtime';
 import type { RendererRuntime } from 'murow/renderer/managers';
 import { RendererManagers2D } from 'murow/renderer/managers';
-import { Renderer2DCore, CameraEffectStack, DynamicSprite, StaticSprite, SpriteUniforms, createSpriteLayout, createTextureLayout, createSpriteVertex, createSpriteFragment, Raycast2D, RaycastController2D, CameraManager2D, SpriteManager, SpritesheetManager, GeometryManager, setPrefab2DHandle } from 'murow/renderer/managers/runtime';
+import { Renderer2DCore, CameraEffectStack, DynamicSprite, StaticSprite, SpriteUniforms, createSpriteLayout, createTextureLayout, createSpriteVertex, createSpriteFragment, Raycast2D, RaycastController2D, CameraManager2D, CameraRegistry, applyCamera2DCreateOptions, type Camera2DCreateOptions, SpriteManager, SpritesheetManager, GeometryManager, setPrefab2DHandle } from 'murow/renderer/managers/runtime';
 import { BaseRenderer } from 'murow/renderer';
+import { LayerRegistry } from 'murow/renderer';
 import type {
     AssetBucket,
     Renderer2DOptions,
@@ -51,6 +52,12 @@ export interface WebGPU2DRendererOptions<A extends AssetBucket<'2d', any, any> =
      * and the renderer's compiled-effect resources. Default 20.
      */
     maxEffects?: number;
+    /** Render layer registry. Defaults to a registry owned by the renderer. */
+    layers?: LayerRegistry;
+    /** Layer capacity for the default registry. Default 32, maximum 32. */
+    maxLayers?: number;
+    /** Max registered cameras. Defaults to 4. */
+    maxCameras?: number;
 }
 
 export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucket<'2d', any, any>> extends BaseRenderer<Renderer2DOptions> {
@@ -69,6 +76,10 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
 
     /** Pooled sprite facade. */
     sprites!: SpriteManager;
+    /** Camera registry. `camera` is the primary camera. */
+    readonly cameras: CameraRegistry<CameraManager2D, Camera2DCreateOptions>;
+    /** Render layer registry. Shared with every manager. */
+    readonly layers: LayerRegistry;
     /** Spritesheet upload facade. */
     sheets!: SpritesheetManager;
     /** Custom geometry facade. */
@@ -86,7 +97,21 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         this.maxEffects = options.maxEffects ?? 20;
         this.core = new Renderer2DCore();
         this.logger = Logger.resolve(options.debug);
-        this.core.camera = new CameraManager2D(canvas.width || 800, canvas.height || 600, { maxEffects: this.maxEffects });
+        this.layers = options.layers ?? new LayerRegistry({ capacity: options.maxLayers });
+        this.cameras = new CameraRegistry<CameraManager2D, Camera2DCreateOptions>(
+            options.maxCameras ?? 4,
+            (props) => {
+                const camera = new CameraManager2D(canvas.width || 800, canvas.height || 600, {
+                    maxEffects: props.maxEffects ?? this.maxEffects,
+                });
+                applyCamera2DCreateOptions(camera, props);
+                camera.mask = props.mask === undefined
+                    ? this.layers.all
+                    : this.layers.resolveMask(props.mask);
+                return camera;
+            },
+        );
+        this.core.camera = this.cameras.create({});
         this.core.width = canvas.width || 1;
         this.core.height = canvas.height || 1;
         this._prefabs = (options.assets?.prefabs as unknown as PrefabBucket2D | undefined) ?? null;
@@ -95,8 +120,8 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     get device(): RawDevice { return this.core.device; }
     get format(): RawTextureFormat { return this.core.format; }
 
-    /** The 2D camera. Shared with every manager through the renderer core. */
-    get camera(): CameraManager2D { return this.core.camera; }
+    /** The primary 2D camera. */
+    get camera(): CameraManager2D { return this.cameras.primary ?? this.core.camera; }
 
     /**
      * Project a 2D world point to canvas CSS pixels (for HTML overlays via
@@ -191,6 +216,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
             camera: this.core.camera,
             maxSprites: this.maxSprites,
             prefabs: this._prefabs,
+            layers: this.layers,
             getClearColor: () => this._clearColor,
         });
         this.sheets = managers.sheets;
@@ -211,6 +237,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
             camera: this.camera,
             eachSprite: this.sprites.eachSprite.bind(this.sprites),
             resolveHitbox: this.sprites.resolveHitbox.bind(this.sprites),
+            layerOf: this.sprites.layerOf.bind(this.sprites),
         }), this.canvas);
 
         this.setupResizeObserver();
@@ -291,7 +318,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     }
 
     storePreviousState(): void {
-        this.camera.storePrevious();
+        this.cameras.storePrevious();
         this.sprites.storePrevious();
     }
 
@@ -299,79 +326,103 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         if (!this._initialized) return;
 
         this.advanceTime();
-        this.camera.interpolate(alpha);
+        this.cameras.interpolate(alpha);
 
-        // Pack the frame's batches and upload the sprite buffers.
-        this.sprites.prepareFrame();
-        this.sprites.upload(this.core.device);
+        // Sprite transforms and static data go once per frame.
+        this.sprites.uploadData(this.core.device);
 
-        // Upload uniforms (mat3x3 padded + alpha + resolution)
-        const uniformData = this.core.uniformData;
-        const matrix = this.camera.getMatrix();
-        uniformData.set(matrix, 0);
-        uniformData[12] = alpha;
-        uniformData[14] = this._width;
-        uniformData[15] = this._height;
-        this.core.device.queue.writeBuffer(
-            this.core.rawUniformBuffer, 0,
-            uniformData.buffer, uniformData.byteOffset, 64,
-        );
-
-        // Camera effects render the sprite pass off-screen, then present the
-        // result to the swapchain through the effect chain. With none enabled,
-        // the sprite pass targets the swapchain directly (unchanged path).
         const swapchainView = this.core.context.getCurrentTexture().createView();
-        const enabledEffects = this.camera.effects.enableCount();
-        const targetView = enabledEffects > 0
-            ? this.cameraEffects.sceneTarget(this._width, this._height)
-            : swapchainView;
+        const views = this.cameras.ordered();
 
-        // Render pass
-        const encoder = this.core.device.createCommandEncoder();
-        const pass = encoder.beginRenderPass({
-            colorAttachments: [{
-                view: targetView,
-                loadOp: 'clear',
-                storeOp: 'store',
-                clearValue: {
-                    r: this._clearColor[0], g: this._clearColor[1],
-                    b: this._clearColor[2], a: this._clearColor[3],
-                },
-            }],
-        });
+        let firstView = true;
+        for (const camera of views) {
+            // Pack and upload this view's visible slot list.
+            this.sprites.prepareFrame(camera.mask);
+            this.sprites.uploadSlots(this.core.device);
 
-        pass.setPipeline(this.core.rawPipeline);
-        pass.setBindGroup(0, this.core.rawSpriteBindGroup);
-
-        // Draw per batch using firstInstance to offset into the index buffer
-        let drawOffset = 0;
-        const batches = this.sprites.batches;
-        const batchCount = this.sprites.batchCount;
-        for (let i = 0; i < batchCount; i++) {
-            const batch = batches[i]!;
-            if (batch.count === 0) continue;
-            const texBindGroup = this.sheets.bindGroup(batch.sheetId);
-            if (!texBindGroup) continue;
-
-            pass.setBindGroup(1, texBindGroup);
-            pass.draw(6, batch.count, 0, drawOffset);
-            drawOffset += batch.count;
-        }
-
-        pass.end();
-
-        if (enabledEffects > 0) {
-            this.cameraEffects.apply(
-                encoder,
-                swapchainView,
-                this.camera.effects,
-                this.elapsed,
-                this._width,
-                this._height,
+            // Upload uniforms (mat3x3 padded + alpha + resolution)
+            const uniformData = this.core.uniformData;
+            uniformData.set(camera.getMatrix(), 0);
+            uniformData[12] = alpha;
+            uniformData[14] = this._width;
+            uniformData[15] = this._height;
+            this.core.device.queue.writeBuffer(
+                this.core.rawUniformBuffer, 0,
+                uniformData.buffer, uniformData.byteOffset, 64,
             );
-        }
 
-        this.core.device.queue.submit([encoder.finish()]);
+            const rect = camera.rect;
+            const x = Math.max(0, Math.floor(rect.x * this._width));
+            const y = Math.max(0, Math.floor(rect.y * this._height));
+            const width = Math.max(1, Math.min(this._width - x, Math.floor(rect.width * this._width)));
+            const height = Math.max(1, Math.min(this._height - y, Math.floor(rect.height * this._height)));
+            const fullRect = x === 0 && y === 0 && width === this._width && height === this._height;
+
+            const enabledEffects = camera.effects.enableCount();
+            if (enabledEffects > 0 && !fullRect) {
+                this.logger.warn('camera effects require a full-screen rect; effects are skipped for this view');
+            }
+            const effectsActive = enabledEffects > 0 && fullRect;
+            const targetView = effectsActive
+                ? this.cameraEffects.sceneTarget(this._width, this._height)
+                : swapchainView;
+
+            const clearColor = camera.clearColor === false
+                ? undefined
+                : (camera.clearColor ?? this._clearColor);
+            // A clear affects the whole attachment. Only the first view clears by
+            // default; later views load unless they opt in.
+            const clear = firstView || (camera.clearColor !== undefined && camera.clearColor !== false);
+            const loadOp = clear && clearColor !== undefined ? 'clear' : 'load';
+
+            const encoder = this.core.device.createCommandEncoder();
+            const pass = encoder.beginRenderPass({
+                colorAttachments: [{
+                    view: targetView,
+                    loadOp,
+                    storeOp: 'store',
+                    ...(loadOp === 'clear' && clearColor !== undefined
+                        ? { clearValue: { r: clearColor[0], g: clearColor[1], b: clearColor[2], a: clearColor[3] } }
+                        : {}),
+                }],
+            });
+            pass.setViewport?.(x, y, width, height, 0, 1);
+            pass.setScissorRect?.(x, y, width, height);
+
+            pass.setPipeline(this.core.rawPipeline);
+            pass.setBindGroup(0, this.core.rawSpriteBindGroup);
+
+            // Draw per batch using firstInstance to offset into the index buffer
+            let drawOffset = 0;
+            const batches = this.sprites.batches;
+            const batchCount = this.sprites.batchCount;
+            for (let i = 0; i < batchCount; i++) {
+                const batch = batches[i]!;
+                if (batch.count === 0) continue;
+                const texBindGroup = this.sheets.bindGroup(batch.sheetId);
+                if (!texBindGroup) continue;
+
+                pass.setBindGroup(1, texBindGroup);
+                pass.draw(6, batch.count, 0, drawOffset);
+                drawOffset += batch.count;
+            }
+
+            pass.end();
+
+            if (effectsActive) {
+                this.cameraEffects.apply(
+                    encoder,
+                    swapchainView,
+                    camera.effects,
+                    this.elapsed,
+                    this._width,
+                    this._height,
+                );
+            }
+
+            this.core.device.queue.submit([encoder.finish()]);
+            firstView = false;
+        }
     }
 
     /** Advance the render clock; the frame delta is clamped to avoid a large jump on resume. */

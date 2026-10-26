@@ -115,9 +115,12 @@ export class Bucket<
                 const prefab = await parser(spec, ctx);
                 // Carry spec fields the parser does not model (e.g. a LOD chain)
                 // and expose a setter so they can be (re)configured after load().
-                const mutable = prefab as { lods?: unknown; setLods?: (lods?: unknown) => void };
+                const mutable = prefab as { lods?: unknown; layer?: unknown; setLods?: (lods?: unknown) => void };
                 if ((spec as { lods?: unknown }).lods !== undefined) {
                     mutable.lods = (spec as { lods?: unknown }).lods;
+                }
+                if ((spec as { layer?: unknown }).layer !== undefined) {
+                    mutable.layer = (spec as { layer?: unknown }).layer;
                 }
                 mutable.setLods = (lods?: unknown) => { mutable.lods = lods; };
                 loaded++;

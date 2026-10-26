@@ -1,6 +1,7 @@
 import { test, expect, describe } from 'bun:test';
 import { DYNAMIC_MESH_FLOATS } from '../engine-core/types';
 import { InstanceStore } from './instance-store';
+import { LayerRegistry } from '../../../layers';
 import type { ModelHandle } from '../types';
 import { DYN_CURR_PX, DYN_CURR_PY, DYN_CURR_PZ, DYN_PREV_PX } from './offsets';
 
@@ -8,7 +9,7 @@ const model: ModelHandle = { id: 7, vertexCount: 3, indexCount: 0, skinned: fals
 
 let idc = 0;
 function store() {
-    return new InstanceStore({ maxInstances: 4, getTextureBindGroup: () => ({}) as GPUBindGroup });
+    return new InstanceStore({ maxInstances: 4, layers: new LayerRegistry(), getTextureBindGroup: () => ({}) as GPUBindGroup });
 }
 
 describe('InstanceStore', () => {
@@ -43,7 +44,7 @@ describe('InstanceStore', () => {
     });
 
     test('throws when capacity is exceeded', () => {
-        const s = new InstanceStore({ maxInstances: 1, getTextureBindGroup: () => undefined });
+        const s = new InstanceStore({ maxInstances: 1, layers: new LayerRegistry(), getTextureBindGroup: () => undefined });
         s.spawn({ prefab: model }, model, null, ++idc);
         expect(() => s.spawn({ prefab: model }, model, null, ++idc)).toThrow('Max instances');
     });
@@ -146,5 +147,29 @@ describe('InstanceStore LOD', () => {
         h.destroy();
         expect(s.lod.slots.size).toBe(0);
         expect(s.selectLod(1e6, 0, 0, 1, 0.1)).toBe(0);
+    });
+
+    test('resolves render layers from options, prefab and the default', () => {
+        const layers = new LayerRegistry();
+        const world = layers.define('world');
+        const s = new InstanceStore({
+            maxInstances: 4,
+            layers,
+            getTextureBindGroup: () => undefined,
+        });
+
+        const fromPrefab = s.spawn(
+            { prefab: { ...model, layer: 'world' } as unknown as ModelHandle },
+            model, null, ++idc,
+        );
+        const fromOption = s.spawn(
+            { prefab: model, renderLayer: world } as any,
+            model, null, ++idc,
+        );
+        const fallback = s.spawn({ prefab: model }, model, null, ++idc);
+
+        expect(s.layerOf(fromPrefab.slot)).toBe(world);
+        expect(s.layerOf(fromOption.slot)).toBe(world);
+        expect(s.layerOf(fallback.slot)).toBe(layers.defaultBit);
     });
 });

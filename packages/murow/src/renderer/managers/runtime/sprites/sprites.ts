@@ -13,6 +13,7 @@ import type {
 } from 'murow/renderer';
 import type { Renderer2DCore } from '../core/2d';
 import type { SpriteId } from '../../types';
+import { resolveRenderLayer, visibleTo, type LayerRegistry } from '../../../layers';
 import {
     DYNAMIC_FLOATS_PER_SPRITE,
     DYNAMIC_OFFSET_CURR_X,
@@ -56,12 +57,15 @@ export interface SpriteManagerDeps {
     capacity: number;
     logger: Logger;
     prefabs: PrefabBucket2D | null;
+    /** Layer registry used to resolve per-sprite render layers. */
+    layers: LayerRegistry;
 }
 
 interface PendingSprite {
     opts: SpriteAddOptions;
     sheet: SpritesheetHandle;
     hitbox: Hitbox<'2d'> | null;
+    renderLayer: number;
 }
 
 /**
@@ -72,6 +76,7 @@ interface PendingSprite {
 export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, number> {
     private readonly core: Renderer2DCore;
     private readonly prefabs: PrefabBucket2D | null;
+    private readonly layers: LayerRegistry;
     private readonly dynamicData: Float32Array;
     private readonly staticData: Float32Array;
     private readonly batcher: SparseBatcher;
@@ -79,6 +84,8 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
     private pending: PendingSprite | null = null;
     private readonly accessors: (SpriteAccessor | null)[];
     private readonly hitboxes: (Hitbox<'2d'> | null)[];
+    /** Per-slot render layer bit. */
+    private readonly layerData: Uint32Array;
 
     /** @internal CPU-side slot indices packed by `prepareFrame`. */
     readonly slotIndexData: Uint32Array;
@@ -93,12 +100,14 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
         super({ poolSize: deps.capacity, capacity: deps.capacity, logger: deps.logger });
         this.core = deps.core;
         this.prefabs = deps.prefabs;
+        this.layers = deps.layers;
         this.dynamicData = new Float32Array(deps.capacity * DYNAMIC_FLOATS_PER_SPRITE);
         this.staticData = new Float32Array(deps.capacity * STATIC_FLOATS_PER_SPRITE);
         this.slotIndexData = new Uint32Array(deps.capacity);
         this.batcher = new SparseBatcher(deps.capacity);
         this.accessors = new Array(deps.capacity).fill(null);
         this.hitboxes = new Array(deps.capacity).fill(null);
+        this.layerData = new Uint32Array(deps.capacity);
     }
 
     /**
@@ -112,8 +121,10 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
         const hitboxName = fromPrefab ? (opts.sheet as Prefab2D).hitbox : undefined;
         const lib = this.prefabs?.hitboxLibrary ?? null;
         const hitbox = hitboxName && lib ? (lib.get(hitboxName as never) as Hitbox<'2d'>) : null;
+        const prefabLayer = fromPrefab ? (opts.sheet as Prefab2D).layer : undefined;
+        const renderLayer = resolveRenderLayer(this.layers, opts.renderLayer, prefabLayer);
 
-        this.pending = { opts, sheet, hitbox };
+        this.pending = { opts, sheet, hitbox, renderLayer };
         const allocated = this.allocateItem();
         this.pending = null;
         return allocated ? allocated.item : null;
@@ -139,17 +150,23 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
      * Pack the visible slot indices contiguously and build the draw batch list.
      * @internal Called by the renderer each frame.
      */
-    prepareFrame(): void {
+    prepareFrame(mask: number = 0xffffffff): void {
         let indexOffset = 0;
         let batchCount = 0;
         this.batcher.each((sheetId, instances, count) => {
             if (count === 0) return;
-            this.slotIndexData.set(instances.subarray(0, count), indexOffset);
+            const batchStart = indexOffset;
+            for (let i = 0; i < count; i++) {
+                const slot = instances[i]!;
+                if (!visibleTo(this.layerData[slot]!, mask)) continue;
+                this.slotIndexData[indexOffset++] = slot;
+            }
+            const visible = indexOffset - batchStart;
+            if (visible === 0) return;
             const batch = this.batchAt(batchCount++);
             batch.sheetId = sheetId;
-            batch.offset = indexOffset;
-            batch.count = count;
-            indexOffset += count;
+            batch.offset = batchStart;
+            batch.count = visible;
         });
         this.batchCount = batchCount;
         this.slotIndexCount = indexOffset;
@@ -159,7 +176,11 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
      * Upload the dynamic, static (when dirty) and slot-index buffers.
      * @internal Called by the renderer each frame.
      */
-    upload(device: RawDevice): void {
+    /**
+     * Upload the dynamic and static sprite buffers.
+     * @internal Called once per frame, before the per-camera pass loop.
+     */
+    uploadData(device: RawDevice): void {
         const core = this.core;
         device.queue.writeBuffer(
             core.rawDynamicBuffer, 0,
@@ -172,13 +193,26 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
             );
             this.staticDirty = false;
         }
+    }
+
+    /**
+     * Upload the slot list packed by the current camera's `prepareFrame`.
+     * @internal Called once per camera view.
+     */
+    uploadSlots(device: RawDevice): void {
         if (this.slotIndexCount > 0) {
             device.queue.writeBuffer(
-                core.rawSlotIndexBuffer, 0,
+                this.core.rawSlotIndexBuffer, 0,
                 this.slotIndexData.buffer, this.slotIndexData.byteOffset,
                 this.slotIndexCount * 4,
             );
         }
+    }
+
+    /** Upload data and the slot list. */
+    upload(device: RawDevice): void {
+        this.uploadData(device);
+        this.uploadSlots(device);
     }
 
     /**
@@ -200,6 +234,14 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
      */
     resolveHitbox(handle: SpriteHandle): Hitbox<'2d'> | null {
         return this.hitboxes[handle.slot] ?? null;
+    }
+
+    /**
+     * Render layer bit of a sprite.
+     * @internal Used by the 2D raycast controller.
+     */
+    layerOf(handle: SpriteHandle): number {
+        return this.layerData[handle.slot] ?? 0;
     }
 
     protected createItem(id: SpriteId, slot: number): SpriteAccessor {
@@ -232,6 +274,7 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
         stat[statBase + STATIC_OFFSET_UV_MAX_Y] = uv.maxY;
 
         stat[statBase + STATIC_OFFSET_LAYER] = opts.layer ?? 0;
+        this.layerData[slot] = p.renderLayer;
         stat[statBase + STATIC_OFFSET_FLIP_X] = opts.flipX ? 1 : 0;
         stat[statBase + STATIC_OFFSET_FLIP_Y] = opts.flipY ? 1 : 0;
         stat[statBase + STATIC_OFFSET_OPACITY] = opts.opacity ?? 1;
@@ -262,6 +305,7 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
         const statBase = slot * STATIC_FLOATS_PER_SPRITE;
         this.dynamicData.fill(0, dynBase, dynBase + DYNAMIC_FLOATS_PER_SPRITE);
         this.staticData.fill(0, statBase, statBase + STATIC_FLOATS_PER_SPRITE);
+        this.layerData[slot] = 0;
         this.accessors[slot] = null;
         this.hitboxes[slot] = null;
         this.staticDirty = true;

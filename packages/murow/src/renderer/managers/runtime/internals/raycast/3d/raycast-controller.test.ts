@@ -15,6 +15,7 @@ function makeTarget(screenRay: Ray3D, far = 100): RaycastTarget {
         camera,
         eachInstance: (visit) => visit(handle, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0),
         resolveHitbox: () => null,
+        layerOf: () => 1,
     };
 }
 
@@ -52,6 +53,7 @@ describe('RaycastController', () => {
                 // origin at y=0 (feet), bbox center y=centerY, half-height 0.5
                 eachInstance: (visit) => visit(handle, 0, 0, 0, 1, 1, 1, 1, 0.5, 1, 0, centerY, 0),
                 resolveHitbox: () => null,
+                layerOf: () => 1,
             } as unknown as RaycastTarget;
         };
         const cast = (ray: Ray3D, centerY: number) => {

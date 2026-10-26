@@ -5,6 +5,7 @@
  */
 import { lerp } from "murow/core/lerp";
 import type { Camera2DState } from 'murow/renderer';
+import type { CameraRect, CameraViewOptions, ClearColor } from '../../../types';
 import { CameraEffectList } from './camera-effect';
 
 export interface Camera2DOptions {
@@ -12,11 +13,38 @@ export interface Camera2DOptions {
     maxEffects?: number;
 }
 
+/** Creation options for a camera added to a renderer's camera registry. */
+export interface Camera2DCreateOptions extends CameraViewOptions {
+    x?: number;
+    y?: number;
+    zoom?: number;
+    rotation?: number;
+    width?: number;
+    height?: number;
+    maxEffects?: number;
+}
+
 export class Camera2D implements Camera2DState {
+    /** Registry-assigned id, or -1 when the camera is not registered. */
+    id: number = -1;
     x: number = 0;
     y: number = 0;
     zoom: number = 1;
     rotation: number = 0;
+    /** Render layers this camera draws. Default: every layer. */
+    mask: number = 0xffffffff;
+    /** Normalized screen rect. Default: the full canvas. */
+    rect: CameraRect = { x: 0, y: 0, width: 1, height: 1 };
+    /** Draw this camera. */
+    enabled: boolean = true;
+    /** Draw order, ascending. */
+    priority: number = 0;
+    /** Clear color, `false` to load, or `undefined` for the renderer clear color. */
+    clearColor: ClearColor | false | undefined = undefined;
+    /** Clear depth before drawing. */
+    clearDepth: boolean = true;
+    /** Debug label. */
+    name: string = '';
     /** Ordered fullscreen camera effects. Non-empty enables the off-screen path. */
     readonly effects: CameraEffectList;
 
@@ -153,4 +181,26 @@ export class Camera2D implements Camera2DState {
 
         return m;
     }
+}
+
+/** Apply creation options to a 2D camera. */
+export function applyCamera2DCreateOptions(camera: Camera2D, options: Camera2DCreateOptions): void {
+    if (options.x !== undefined) camera.x = options.x;
+    if (options.y !== undefined) camera.y = options.y;
+    if (options.zoom !== undefined) camera.zoom = options.zoom;
+    if (options.rotation !== undefined) camera.rotation = options.rotation;
+    if (options.width !== undefined && options.height !== undefined) {
+        camera.setViewport(options.width, options.height);
+    }
+    if (options.rect) {
+        camera.rect.x = options.rect.x ?? camera.rect.x;
+        camera.rect.y = options.rect.y ?? camera.rect.y;
+        camera.rect.width = options.rect.width ?? camera.rect.width;
+        camera.rect.height = options.rect.height ?? camera.rect.height;
+    }
+    if (options.enabled !== undefined) camera.enabled = options.enabled;
+    if (options.priority !== undefined) camera.priority = options.priority;
+    camera.clearColor = options.clearColor;
+    if (options.clearDepth !== undefined) camera.clearDepth = options.clearDepth;
+    if (options.name !== undefined) camera.name = options.name;
 }

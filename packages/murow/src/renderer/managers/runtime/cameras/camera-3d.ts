@@ -6,7 +6,7 @@
  import { lerp } from "murow/core/lerp";
  import { Ray3D } from "murow/core/ray";
  import { mat4Mul } from '../../../math';
- import type { Camera3DState } from '../../../types';
+ import type { Camera3DState, CameraRect, CameraViewOptions, ClearColor } from '../../../types';
  import type { Interpolator } from '../types';
  import { CameraEffectList } from './camera-effect';
 
@@ -15,7 +15,23 @@ export interface Camera3DOptions {
     maxEffects?: number;
 }
 
+/** Creation options for a camera added to a renderer's camera registry. */
+export interface Camera3DCreateOptions extends CameraViewOptions {
+    position?: readonly [x: number, y: number, z: number];
+    target?: readonly [x: number, y: number, z: number];
+    up?: readonly [x: number, y: number, z: number];
+    fov?: number;
+    near?: number;
+    far?: number;
+    movement?: 'local' | 'grounded' | 'global';
+    lodBias?: number;
+    lodEnabled?: boolean;
+    maxEffects?: number;
+}
+
 export class Camera3D implements Camera3DState, Interpolator {
+    /** Registry-assigned id, or -1 when the camera is not registered. */
+    id: number = -1;
     position: [number, number, number] = [0, 5, -10];
     target: [number, number, number] = [0, 0, 0];
     up: [number, number, number] = [0, 1, 0];
@@ -24,6 +40,20 @@ export class Camera3D implements Camera3DState, Interpolator {
     far: number = 1000;
     aspect: number = 1;
     movement: 'local' | 'grounded' | 'global' = 'local';
+    /** Render layers this camera draws. Default: every layer. */
+    mask: number = 0xffffffff;
+    /** Normalized screen rect. Default: the full canvas. */
+    rect: CameraRect = { x: 0, y: 0, width: 1, height: 1 };
+    /** Draw this camera. */
+    enabled: boolean = true;
+    /** Draw order, ascending. */
+    priority: number = 0;
+    /** Clear color, `false` to load, or `undefined` for the renderer clear color. */
+    clearColor: ClearColor | false | undefined = undefined;
+    /** Clear depth before drawing. */
+    clearDepth: boolean = true;
+    /** Debug label. */
+    name: string = '';
     /** LOD distance multiplier for this camera (`>1` keeps detail farther out). Default 1. */
     lodBias: number = 1;
     /** Whether this camera drives LOD selection. Default true. */
@@ -268,6 +298,42 @@ export class Camera3D implements Camera3DState, Interpolator {
         this.position[1] = this.target[1] + oy * scale;
         this.position[2] = this.target[2] + oz * scale;
     }
+}
+
+/** Apply creation options to a camera. Copies tuples so caller arrays are not aliased. */
+export function applyCamera3DCreateOptions(camera: Camera3D, options: Camera3DCreateOptions): void {
+    if (options.position) {
+        camera.position[0] = options.position[0];
+        camera.position[1] = options.position[1];
+        camera.position[2] = options.position[2];
+    }
+    if (options.target) {
+        camera.target[0] = options.target[0];
+        camera.target[1] = options.target[1];
+        camera.target[2] = options.target[2];
+    }
+    if (options.up) {
+        camera.up[0] = options.up[0];
+        camera.up[1] = options.up[1];
+        camera.up[2] = options.up[2];
+    }
+    if (options.fov !== undefined) camera.fov = options.fov;
+    if (options.near !== undefined) camera.near = options.near;
+    if (options.far !== undefined) camera.far = options.far;
+    if (options.movement !== undefined) camera.movement = options.movement;
+    if (options.lodBias !== undefined) camera.lodBias = options.lodBias;
+    if (options.lodEnabled !== undefined) camera.lodEnabled = options.lodEnabled;
+    if (options.rect) {
+        camera.rect.x = options.rect.x ?? camera.rect.x;
+        camera.rect.y = options.rect.y ?? camera.rect.y;
+        camera.rect.width = options.rect.width ?? camera.rect.width;
+        camera.rect.height = options.rect.height ?? camera.rect.height;
+    }
+    if (options.enabled !== undefined) camera.enabled = options.enabled;
+    if (options.priority !== undefined) camera.priority = options.priority;
+    camera.clearColor = options.clearColor;
+    if (options.clearDepth !== undefined) camera.clearDepth = options.clearDepth;
+    if (options.name !== undefined) camera.name = options.name;
 }
 
 // --- Inline math (no allocations, no dependencies) ---

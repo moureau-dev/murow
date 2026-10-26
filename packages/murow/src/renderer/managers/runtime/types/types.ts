@@ -14,6 +14,7 @@ import type {
     RaycastOptions as RaycastOptionsBase,
 } from 'murow/renderer';
 import type { Logger } from 'murow/core';
+import type { LayerRegistry } from '../../../layers';
 import type { Handles } from '../handles';
 import type { MaterialHandle } from '../materials';
 
@@ -88,6 +89,12 @@ export interface MeshInstanceOptions<A extends AssetBucket<'3d', any, any> = Ass
     occlusion?: boolean;
     /** Set `false` to exclude this instance from the occluder depth. Default true. */
     occluder?: boolean;
+    /**
+     * Render layer for this instance. A name resolves through `renderer.layers`;
+     * a number is used as the bit directly. Defaults to the prefab's layer, then
+     * to the registry's default layer.
+     */
+    renderLayer?: string | number;
     /** World position. Defaults to `[0, 0, 0]`. */
     position?: readonly [x: number, y: number, z: number];
     /** Euler rotation in radians. Defaults to `[0, 0, 0]`. */
@@ -104,6 +111,10 @@ export type Raycast = RaycastBase<MeshInstanceHandle, [number, number, number]>;
 export type RaycastMemo = RaycastMemoBase<MeshInstanceHandle, [number, number, number]>;
 
 export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> = AssetBucket<'3d', any, any>> extends Renderer3DOptions {
+    /** Render layer registry. Defaults to a registry owned by the renderer. */
+    layers?: LayerRegistry;
+    /** Layer capacity for the default registry. Default 32, maximum 32. */
+    maxLayers?: number;
     /**
      * Occlusion culling. Only active when the backend runtime provides the port.
      * `interval` is how many ticks between tracked-handle refreshes (default 15);
@@ -123,6 +134,8 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
      * pool and the off-screen pass count. Defaults to 20.
      */
     maxCameraEffects?: number;
+    /** Max registered cameras. Defaults to 4. */
+    maxCameras?: number;
     /**
      * Max live 3D particles (rounded up to a power of two). Defaults to 4096.
      */
