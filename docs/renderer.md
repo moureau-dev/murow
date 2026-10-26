@@ -8,7 +8,7 @@ Referenced from [llms.txt](../llms.txt).
 
 1. **A renderer is a composition root.** `new WebGPU3DRenderer(canvas, options)` → `await init()` → drive instances → `render(alpha)`. `init()`, `render(alpha)`, `storePreviousState()`, `destroy()`, `onResize`, `worldToScreen` live on the renderer; every subsystem (`renderer.instances`, `.materials`, `.lights`, `.shadows`, `.decals`, `.particles`, `.models`, `.camera`, …) hangs off it.
 2. **Call `storePreviousState()` in `pre-tick` and `render(alpha)` in `render`.** Without the first, motion snaps at low tick rates; the GPU interpolates `mix(prev, curr, alpha)` in the vertex shader.
-3. **Creation is named per manager:** `add` is a cheap pool insert; `create` compiles or allocates GPU resources (materials). Both can return `null` at capacity.
+3. **Creation is named per manager:** `add` is a cheap pool insert; `create` compiles or allocates GPU resources (materials). Both throw at capacity and log through the logger.
 4. **Handles are versioned numbers.** Compare by `.id`, never by reference. `destroy()` is idempotent; a stale handle is inert (mutating methods no-op, reads return the last values). `handle.destroy()` frees the pool slot for reuse, not memory — full reclamation is `renderer.destroy()`.
 5. **Materials are refcounted.** `material.destroy()` throws while instances still use it; `material.destroy({ force: true })` reassigns those instances to the default material first. Materials are GPU resources created **after `init()`**.
 6. **3D instance `color` is set at spawn only** (`instances.add({ color: [r, g, b] })`) — there is no `setColor`/`setTint` on a 3D handle. 2D sprites differ: `SpriteHandle.setTint(r, g, b, a)` is live.
@@ -27,22 +27,26 @@ The renderer is a composition root. Lifecycle stays on it (`init`, `render(alpha
 
 | Manager | Creation | Returns |
 |---|---|---|
-| `renderer.instances` | `add(spec)` | `MeshInstanceHandle` (or `InstanceHandle`), or `null` at capacity |
-| `renderer.materials` | `create(spec)` | `MaterialHandle<U>`, or `null` at capacity |
-| `renderer.lights` | `add(spec)` | `LightHandle`, or `null` at capacity; `renderer.lights.ambient(color)` and `renderer.lights.sun(dir, color, intensity)` set the scene terms |
+| `renderer.instances` | `add(spec)` | `MeshInstanceHandle` (or `InstanceHandle`); throws at capacity |
+| `renderer.materials` | `create(spec)` | `MaterialHandle<U>`; throws at capacity |
+| `renderer.lights` | `add(spec)` | `LightHandle`; throws at capacity. `renderer.lights.ambient(color)` and `renderer.lights.sun(dir, color, intensity)` set the scene terms |
 | `renderer.decals` | `createLayer(spec)` | a decal layer; `layer.add(x, y, z, nx, ny, nz, opts)` returns a `DecalHandle` |
 | `renderer.shadows` | (system) | `enabled`, `resolution`, plus `directional` / `spot` / `point` sub-managers |
 | `renderer.particles` | `addEmitter(spec)` | a particle emitter handle |
-| `renderer.camera` | (system) | the 2D or 3D camera + `renderer.camera.effects` |
+| `renderer.cameras` | `create(props)` | a camera handle; `renderer.camera` is the primary |
+| `renderer.layers` | `define(name)` | a layer bit + `renderer.layers.mask(...)` |
+| `renderer.camera` | (system) | the primary 2D or 3D camera + `renderer.camera.effects` |
 | `renderer.models` | `createGrid` / `createCube` / `loadModel` / `loadGltf` / `uploadParsedGltf` | a `ModelHandle` / `GltfModel` for `instances.add` |
 | `renderer.raycast` | (system) | cursor picking (`renderer.raycast.update(input)` / `.hit({ filter })`) |
 | `renderer.sprites` / `.sheets` / `.geometry` | 2D only | sprites / spritesheets / custom geometry |
 
-Collection managers (`instances`, `materials`, `lights`, `decals`, `particles`, and 2D `sprites`) share one read and lifecycle contract: `get(id)`, `has(id)`, `each(cb)`, `remove(id)`, `clear()`, `destroy()`, `capacity`, `count`, and an `events` system (`add` / `remove` / `clear`). Creation is named per manager: `add` for a cheap pool insert, `create` when the manager compiles or allocates GPU resources.
+Pooled managers (`instances`, `materials`, `lights`, `decals`, `particles`, and 2D `sprites`) share one read and lifecycle contract: `get(id)`, `has(id)`, `each(cb)`, `remove(id)`, `clear()`, `destroy()`, `capacity`, `count`, and an `events` system (`add` / `remove` / `clear`). Creation is named per manager: `add` for a cheap pool insert, `create` when the manager compiles or allocates GPU resources. Capacity errors log and throw; they do not return `null`.
 
-Ids are versioned numbers, so a stale id never aliases a recycled slot. Every handle carries a readonly `id` and an `alive` flag; compare handles by `.id`, never by reference. `destroy()` is idempotent; a stale handle is inert (mutating methods are no-ops, reads return the last values). `handle.destroy()` frees the pool slot for reuse, not memory; full reclamation is `renderer.destroy()`.
+`cameras` is a `CameraRegistry` over `SlotMap`: `create`, `add`, `get`, `has`, `remove`, `each`, `all`, `ordered`, `primary`, `setPrimary`, `capacity`, `count`, and `events` (`add` / `remove` / `primary`). A camera handle has `destroy()`, which refuses to remove the last camera. `layers` is a static name registry with `define`, `mask`, `resolveLayer`, `resolveMask`, `count`, `capacity`, and `events` (`add` / `clear`).
 
-Materials are refcounted: `material.destroy()` throws while instances still use it, and `material.destroy({ force: true })` reassigns those instances to the default material first. Particle `capacity` is `{ maxEmitters, maxParticles }`. Every renderer manager is a `PooledCollection` over the core collection framework — see the [zero-allocation guide](./zero-allocation.md) for the pooled/versioned container toolkit.
+Pooled ids are versioned numbers, so a stale id never aliases a recycled slot. Pooled handles carry a readonly `id` and an `alive` flag; compare handles by `.id`, never by reference. Camera handles carry a branded `CameraId` and `destroy()`. `destroy()` is idempotent; a stale handle is inert (mutating methods are no-ops, reads return the last values). `handle.destroy()` frees the pool slot for reuse, not memory; full reclamation is `renderer.destroy()`.
+
+Materials are refcounted: `material.destroy()` throws while instances still use it, and `material.destroy({ force: true })` reassigns those instances to the default material first. Particle `capacity` is `{ maxEmitters, maxParticles }`. Pooled managers use the core collection framework; cameras use `SlotMap`; layers use a name-to-bit map. See the [zero-allocation guide](./zero-allocation.md) for the container toolkit.
 
 ### Lighting (3D)
 
@@ -107,7 +111,7 @@ The 3D renderer supports a metallic-roughness `pbr` material with direct sun and
 
 ### Materials (3D)
 
-`renderer.materials.create(spec)` compiles a `MaterialSpec` into a `MaterialHandle`, or returns `null` at capacity. Materials are GPU resources created **after `init()`**. `name` is optional and unique per renderer (auto-assigned `mat_<id>` when omitted); a duplicate **throws** (`Material "x" is already registered`). The name is registered in the material library and released on `destroy()`. The handle is typed `MaterialHandle<N, U>` (literal `name` when given, typed `uniforms`) and also carries a runtime `id: MaterialId`.
+`renderer.materials.create(spec)` compiles a `MaterialSpec` into a `MaterialHandle` and throws at capacity. Materials are GPU resources created **after `init()`**. `name` is optional and unique per renderer (auto-assigned `mat_<id>` when omitted); a duplicate **throws** (`Material "x" is already registered`). The name is registered in the material library and released on `destroy()`. The handle is typed `MaterialHandle<N, U>` (literal `name` when given, typed `uniforms`) and also carries a runtime `id: MaterialId`.
 
 ```ts
 import { d, std } from 'murow/webgpu';
@@ -324,7 +328,7 @@ renderer.instances.add({ prefab: rock, renderLayer: world });
 renderer.instances.add({ prefab: gun, renderLayer: 'viewmodel' });
 ```
 
-A prefab can declare `layer: 'world'`; the instance's `renderLayer` overrides it. Sprites keep `layer` as their sort order, so visibility on a sprite is `renderLayer`. `camera.mask` defaults to `layers.all`, and raycasts use the same mask. Layers are presentation-only; do not use them for authority or physics. `maxLayers` (1-32, default 32) caps the registry's capacity.
+A prefab can declare `layer: 'world'`; the instance's `renderLayer` overrides it. Sprites keep `layer` as their sort order, so visibility on a sprite is `renderLayer`. `camera.mask` defaults to `layers.all`, and raycasts use the same mask. Layers are presentation-only; do not use them for authority or physics. `maxLayers` (1-32, default 32) caps the default registry and is ignored when `layers` is provided.
 
 ### Cameras
 
@@ -344,7 +348,7 @@ renderer.cameras.setPrimary(main);
 renderer.cameras.remove(minimap);
 ```
 
-`create` throws when `maxCameras` (default 4) is reached. Views draw in ascending `priority`; the first enabled view clears the color target and later views load unless `clearColor` is set. Camera effects require a full-screen rect. Occlusion culling runs only with one view, and LOD plus directional shadows follow the primary camera. `raycast` and `worldToScreen` default to the primary; for a partial rect, screen coordinates are local to the view.
+`create` throws when `maxCameras` (default 2) is reached. Views draw in ascending `priority`; the first enabled view clears the color target and later views load unless `clearColor` is set. Camera effects require a full-screen rect. Occlusion culling runs only with one view, and LOD plus directional shadows follow the primary camera. `raycast` and `worldToScreen` default to the primary; for a partial rect, screen coordinates are local to the view.
 
 ### 2D — `WebGPU2DRenderer`
 
@@ -356,6 +360,8 @@ interface WebGPU2DRendererOptions {
   clearColor?: [number, number, number, number];
   autoResize?: boolean;
   maxEffects?: number;            // camera-effect chain capacity (default 20)
+  maxCameras?: number;            // registered camera capacity (default 2)
+  maxLayers?: number;             // default layer registry capacity (1-32, default 32)
   debug?: boolean | Logger;
 }
 
@@ -424,6 +430,8 @@ interface WebGPU3DRendererOptions {
   maxMaterials?: number;                   // max live materials (default 64)
   maxDecals?: number;                      // max decal layers (default 16)
   maxCameraEffects?: number;               // camera-effect chain capacity (default 20)
+  maxCameras?: number;                     // registered camera capacity (default 2)
+  maxLayers?: number;                      // default layer registry capacity (1-32, default 32)
   maxParticles?: number;                   // max live 3D particles, rounded to a power of two (default 4096)
   maxParticleMaterials?: number;           // max distinct particle materials (default 16)
   maxParticleEmitters?: number;            // max live particle emitters (default 64)
@@ -488,8 +496,13 @@ handle.destroy();                         // frees the slot + bone-matrix block;
 renderer.instances.remove(handle.id);
 renderer.setAnimationCullDistance(20);
 renderer.animationCullDistance;           // getter
-renderer.maxSkinned;                      // capacity for skinned (animated) instances
-renderer.lightCount;                      // live dynamic lights
+renderer.instances.capacity;              // non-skinned instance capacity
+renderer.instances.count;                 // live non-skinned instances
+renderer.instances.skinnedCapacity;       // skinned instance capacity
+renderer.instances.skinnedCount;          // live skinned instances
+renderer.instances.totalCapacity;         // both pools
+renderer.instances.totalCount;            // both pools
+renderer.lights.count;                    // live dynamic lights
 renderer.storePreviousState();            // call in 'pre-tick' for GPU lerp
 renderer.render(alpha);                   // call in 'render'
 
@@ -888,7 +901,7 @@ loop.on('render', ({ alpha }) => renderer.render(alpha));
 - **`renderer.geometry` is on the 2D renderer.** The 3D renderer has no geometry manager (use `GeometryBuilder` indirectly through the 2D renderer or custom materials on meshes).
 - **`renderer.particles.update(dt)` is not a method.** The particle facade exposes `simulate(dt)` (and `renderer.render(alpha)` calls it for you); you only call `emitter.update(dt)` to queue that emitter's spawns.
 - **There is no public `renderer.compute`.** Skeletal animation and GPU particles are backend ports the WebGPU runtime implements with an internal `ComputeBuilder`; `renderer.geometry` (2D) covers custom instanced draws.
-- **Fixed capacities are set at construction.** `maxInstances`, `maxSkinnedInstances`, `maxLights`, `maxMaterials`, `maxParticles`, emitter counts, shadow capacities, and the camera-effect chain are all sized up front (many from the `AssetBucket`); exceeding a pool returns `null` or throws.
+- **Fixed capacities are set at construction.** `maxInstances`, `maxSkinnedInstances`, `maxLights`, `maxMaterials`, `maxParticles`, emitter counts, shadow capacities, and the camera-effect chain are all sized up front (many from the `AssetBucket`); exceeding a fixed pool logs and throws.
 
 ## Quick reference
 

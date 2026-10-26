@@ -28,20 +28,20 @@ export class LightManager extends PooledCollection<LightId, LightHandle, number>
     private pendingSpec: LightSpec | null = null;
 
     constructor(deps: LightManagerDeps) {
-        super({ poolSize: deps.capacity, capacity: deps.capacity, logger: deps.logger });
+        super({ poolSize: deps.capacity, capacity: deps.capacity, logger: deps.logger, name: 'lights' });
         this.system = deps.system;
         this.origDestroy = new Array(deps.capacity).fill(null);
     }
 
     /**
      * Add a dynamic point or spot light.
-     * @returns the light handle, or `null` when the pool is full.
+     * @returns the light handle. Throws when the pool is full.
      */
-    add(spec: LightSpec): LightHandle | null {
+    add(spec: LightSpec): LightHandle {
         this.pendingSpec = spec;
-        const allocated = this.allocateItem();
+        const item = this.allocateItem().item;
         this.pendingSpec = null;
-        return allocated ? allocated.item : null;
+        return item;
     }
 
     /** Set the global ambient term. Defaults to `(0.3, 0.3, 0.3)`. */

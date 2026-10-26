@@ -23,9 +23,8 @@ class TestCollection extends PooledCollection<TestId, TestHandle, number> {
     constructor(capacity: number, logger: Logger = Logger.none) {
         super({ poolSize: capacity, capacity, logger });
     }
-    add(): TestHandle | null {
-        const allocated = this.allocateItem();
-        return allocated ? allocated.item : null;
+    add(): TestHandle {
+        return this.allocateItem().item;
     }
     protected createItem(id: TestId): TestHandle {
         return new TestHandle(this, id);
@@ -76,12 +75,12 @@ describe('PooledCollection', () => {
         expect(seen).toContain(b.id);
     });
 
-    test('overflow logs and returns null', () => {
+    test('overflow logs and throws', () => {
         const messages: string[] = [];
         const logger = new Logger({ sink: (level, message) => messages.push(`${level}:${message}`) });
         const c = new TestCollection(1, logger);
         expect(c.add()).not.toBeNull();
-        expect(c.add()).toBeNull();
+        expect(() => c.add()).toThrow('collection capacity (1) reached');
         expect(messages.some((m) => m.startsWith('error:'))).toBe(true);
     });
 

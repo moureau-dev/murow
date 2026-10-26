@@ -6,6 +6,9 @@
  * {@link visibleTo}, never the registry.
  */
 
+import { EventSystem } from 'murow/core/events';
+import type { Logger } from 'murow/core';
+
 /** A single layer bit, a power of two. */
 export type LayerBit = number;
 
@@ -27,7 +30,15 @@ export interface LayerRegistryOptions {
     capacity?: number;
     /** Name of the layer at bit 0. Default `'default'`. */
     defaultLayer?: string;
+    /** Optional logger for capacity errors. */
+    logger?: Logger;
 }
+
+/** Events emitted by a layer registry. */
+export type LayerRegistryEvents = [
+    ['add', { name: string; bit: LayerBit }],
+    ['clear', undefined],
+];
 
 /**
  * Name-to-bit registry for render layers.
@@ -40,7 +51,10 @@ export class LayerRegistry {
     readonly capacity: number;
     /** Name of the layer assigned to bit 0. */
     readonly defaultName: string;
+    /** Lifecycle events for layer definitions. */
+    readonly events: EventSystem<LayerRegistryEvents>;
 
+    private readonly logger: Logger | undefined;
     private readonly byName = new Map<string, LayerBit>();
     private readonly names: string[] = [];
     private nextIndex = 0;
@@ -52,6 +66,8 @@ export class LayerRegistry {
             throw new Error(`LayerRegistry: capacity must be an integer from 1 to ${MAX_LAYERS} (got ${capacity})`);
         }
         this.capacity = capacity;
+        this.logger = options.logger;
+        this.events = new EventSystem<LayerRegistryEvents>({ events: ['add', 'clear'] });
         const defaultName = options.defaultLayer ?? 'default';
         if (defaultName.length === 0) {
             throw new Error('LayerRegistry: defaultLayer must be a non-empty name');
@@ -61,7 +77,7 @@ export class LayerRegistry {
     }
 
     /** Number of defined layers. */
-    get size(): number {
+    get count(): number {
         return this.names.length;
     }
 
@@ -89,13 +105,16 @@ export class LayerRegistry {
         const existing = this.byName.get(name);
         if (existing !== undefined) return existing;
         if (this.nextIndex >= this.capacity) {
-            throw new Error(`LayerRegistry: capacity of ${this.capacity} layers reached`);
+            const message = `LayerRegistry capacity (${this.capacity}) reached`;
+            this.logger?.error(message);
+            throw new Error(message);
         }
         const bit = (1 << this.nextIndex) >>> 0;
         this.nextIndex += 1;
         this.byName.set(name, bit);
         this.names.push(name);
         this.defined = (this.defined | bit) >>> 0;
+        this.events.emit('add', { name, bit });
         return bit;
     }
 
@@ -171,6 +190,7 @@ export class LayerRegistry {
         this.nextIndex = 0;
         this.defined = 0;
         this.define(this.defaultName);
+        this.events.emit('clear', undefined);
     }
 }
 

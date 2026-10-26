@@ -47,11 +47,10 @@ creation method (`add` / `create`), and implement two hooks:
 
 ```ts
 class Sprites extends PooledCollection<SpriteId, SpriteHandle, number> {
-  add(opts): SpriteHandle | null {
-    const allocated = this.allocateItem();       // slot + id + item, or null at capacity
-    if (!allocated) return null;
-    // ...write this sprite's domain data at allocated.slot...
-    return allocated.item;
+  add(opts): SpriteHandle {
+    const { slot, item } = this.allocateItem();  // logs and throws at capacity
+    // ...write this sprite's domain data at `slot`...
+    return item;
   }
   protected createItem(id: SpriteId, slot: number): SpriteHandle { /* build the handle */ }
   protected destroySlot(slot: number): void { /* free this slot's domain data */ }

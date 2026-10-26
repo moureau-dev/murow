@@ -28,20 +28,20 @@ export class DecalManager extends PooledCollection<LayerId, ManagedDecalLayer, n
     private pendingOptions: DecalLayerOptions | null = null;
 
     constructor(deps: DecalManagerDeps) {
-        super({ poolSize: deps.capacity, capacity: deps.capacity, logger: deps.logger });
+        super({ poolSize: deps.capacity, capacity: deps.capacity, logger: deps.logger, name: 'decal layers' });
         this.deps = deps;
         this.inner = new Array(deps.capacity).fill(null);
     }
 
     /**
      * Create a pooled decal layer (blood / scorch / AoE marks).
-     * @returns the layer, or `null` when the pool is full.
+     * @returns the layer. Throws when the pool is full.
      */
-    createLayer(spec: DecalLayerOptions): ManagedDecalLayer | null {
+    createLayer(spec: DecalLayerOptions): ManagedDecalLayer {
         this.pendingOptions = spec;
-        const allocated = this.allocateItem();
+        const item = this.allocateItem().item;
         this.pendingOptions = null;
-        return allocated ? allocated.item : null;
+        return item;
     }
 
     protected createItem(id: LayerId, slot: number): ManagedDecalLayer {
@@ -79,8 +79,8 @@ class ManagedDecalLayerImpl implements ManagedDecalLayer {
     get count(): number { return this.layer.count; }
     get alive(): boolean { return !this.destroyed; }
 
-    add(x: number, y: number, z: number, nx: number, ny: number, nz: number, opts?: unknown): DecalHandle | null {
-        if (this.destroyed) return null;
+    add(x: number, y: number, z: number, nx: number, ny: number, nz: number, opts?: unknown): DecalHandle {
+        if (this.destroyed) throw new Error('Decal layer is destroyed');
         const slot = this.layer.spawn(x, y, z, nx, ny, nz, (opts ?? {}) as SpawnDecalOptions);
         const version = this.layer.versionOf(slot);
         return new ManagedDecalHandle(slot as DecalId, x, y, z, () => this.layer.remove(slot, version));

@@ -1406,8 +1406,9 @@ const rock = renderer.instances.add({ prefab: rockPrefab, renderLayer: world });
 const gun = renderer.instances.add({ prefab: gunPrefab, renderLayer: 'viewmodel' });
 ```
 
-- `layers.define(name)` returns the bit and is idempotent. Capacity is 32 bits; `default` is bit 0.
-- Pass `maxLayers` to sizes the default registry's capacity (1-32). Pass a `LayerRegistry` to share names between renderers.
+- `layers.define(name)` returns the bit and is idempotent. Capacity is 32 bits; `default` is bit 0. `layers.count` is the number defined.
+- Layer events: `add`, `clear`.
+- Pass `maxLayers` (1-32) to size the default registry. It is ignored when `layers` is provided. Pass a `LayerRegistry` to share names between renderers.
 - `layers.mask(...names)` ORs names. `layers.resolveLayer(name | bit)` resolves one layer. `layers.all` matches every bit.
 - Prefabs accept `layer?: string`; an instance's `renderLayer` overrides it.
 - **Sprites use `layer` for sort order.** Visibility on a sprite is `renderLayer`.
@@ -1433,13 +1434,17 @@ renderer.cameras.setPrimary(main);
 renderer.cameras.remove(minimap);
 ```
 
-- `cameras.create(props)` throws when `maxCameras` (default 4) is reached.
+- `cameras.create(props)` throws when `maxCameras` (default 2) is reached.
 - View fields: `rect` (normalized, top-left origin), `mask`, `enabled`, `priority`, `clearColor`, `clearDepth`, `name`.
 - Views draw in ascending `priority`. The first enabled view clears the color target; later views load unless `clearColor` is set. A clear affects the whole attachment, not the viewport.
 - Camera effects require a full-screen `rect`; partial views skip them.
 - Occlusion culling is enabled only with a single camera view. LOD and directional shadows follow the primary camera.
 - `raycast`, `worldToScreen`, and `storePreviousState` defaults use the primary camera. For a partial rect, screen coordinates for that camera are local to the view.
+- Camera handles have `destroy()`, which refuses to remove the last camera. `get`/`primary` return `undefined` when absent.
+- `cameras.each` is zero-alloc; `all()` and `ordered()` return reused arrays. Events: `add`, `remove`, `primary`.
 - `maxCameras` bounds the registry only; per-view GPU resources are not preallocated.
+
+**Renderer manager capacity and counts.** Creation throws and logs at capacity; it never returns `null`. Counts and capacities live on the manager: `instances.count` / `instances.capacity` / `instances.skinnedCount` / `instances.skinnedCapacity` / `instances.totalCount` / `instances.totalCapacity`, `lights.count`, `cameras.count`, `layers.count`. The renderer no longer exposes `lightCount` or `maxSkinned`.
 
 ## WebGPU Renderer (`murow/webgpu`)
 

@@ -153,6 +153,7 @@ export class RendererManagers {
         const instanceStore = new InstanceStore({
             maxInstances: deps.maxInstances,
             layers: deps.layers,
+            logger: deps.logger,
             getTextureBindGroup: (id) => deps.core.textures.get(id)?.bindGroup,
             retainMaterial,
             releaseMaterial,
@@ -162,6 +163,7 @@ export class RendererManagers {
             maxTotalBones: deps.maxTotalBones,
             maxSkins: deps.prefabs ? deps.prefabs.size : 64,
             layers: deps.layers,
+            logger: deps.logger,
             uploadRestPose: (skinModel, boneOffset, jointCount) => animation.writeRestPose(skinModel, boneOffset, jointCount),
             getTextureBindGroup: (id) => deps.core.textures.get(id)?.bindGroup,
             retainMaterial,

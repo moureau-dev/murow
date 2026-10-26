@@ -7,6 +7,7 @@
  import { Ray3D } from "murow/core/ray";
  import { mat4Mul } from '../../../math';
  import type { Camera3DState, CameraRect, CameraViewOptions, ClearColor } from '../../../types';
+import type { CameraId } from '../../types';
  import type { Interpolator } from '../types';
  import { CameraEffectList } from './camera-effect';
 
@@ -31,7 +32,7 @@ export interface Camera3DCreateOptions extends CameraViewOptions {
 
 export class Camera3D implements Camera3DState, Interpolator {
     /** Registry-assigned id, or -1 when the camera is not registered. */
-    id: number = -1;
+    id: CameraId = -1 as CameraId;
     position: [number, number, number] = [0, 5, -10];
     target: [number, number, number] = [0, 0, 0];
     up: [number, number, number] = [0, 1, 0];
@@ -88,6 +89,9 @@ export class Camera3D implements Camera3DState, Interpolator {
      * Store current position/target as previous. Call before each tick.
      * @internal Called by the renderer's pre-tick, not for direct user calls.
      */
+    /** Remove this camera from its registry. No-op when not registered. */
+    destroy(): void {}
+
     storePrevious(): void {
         this._prevPosition[0] = this.position[0];
         this._prevPosition[1] = this.position[1];

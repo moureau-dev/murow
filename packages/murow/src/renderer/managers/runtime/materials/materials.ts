@@ -27,7 +27,7 @@ export class MaterialManager extends PooledCollection<MaterialId, MaterialHandle
     private pendingSpec: MaterialSpec | null = null;
 
     constructor(deps: MaterialManagerDeps) {
-        super({ poolSize: deps.capacity, capacity: deps.capacity, logger: deps.logger });
+        super({ poolSize: deps.capacity, capacity: deps.capacity, logger: deps.logger, name: 'materials' });
         this.deps = deps;
         this.library = deps.library;
         this.origDestroy = new Array(deps.capacity).fill(null);
@@ -39,19 +39,21 @@ export class MaterialManager extends PooledCollection<MaterialId, MaterialHandle
      * `name` is unique per renderer; a duplicate throws rather than returning a
      * handle. Omit it to auto-assign a `mat_<id>` name.
      *
-     * @returns the material handle, or `null` when the pool is full.
+     * @returns the material handle. Throws when the pool is full.
      */
     create<const N extends string = string, U extends Record<string, AnyField> = {}>(
         spec: MaterialSpec & { name?: N; uniforms?: U },
-    ): MaterialHandle<U, N> | null {
+    ): MaterialHandle<U, N> {
         const name = spec.name ?? (generateId({ prefix: 'mat_' }) as N);
         if (this.library.hasName(name)) {
-            throw new Error(`Material "${name}" is already registered`);
+            const message = `Material "${name}" is already registered`;
+            this.deps.logger.error(message);
+            throw new Error(message);
         }
         this.pendingSpec = spec.name === undefined ? { ...spec, name } : spec;
-        const allocated = this.allocateItem();
+        const item = this.allocateItem().item;
         this.pendingSpec = null;
-        return (allocated ? allocated.item : null) as unknown as MaterialHandle<U, N> | null;
+        return item as unknown as MaterialHandle<U, N>;
     }
 
     protected destroySlot(slot: number): void {

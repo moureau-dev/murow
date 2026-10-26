@@ -97,9 +97,12 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         this.maxEffects = options.maxEffects ?? 20;
         this.core = new Renderer2DCore();
         this.logger = Logger.resolve(options.debug);
-        this.layers = options.layers ?? new LayerRegistry({ capacity: options.maxLayers });
+        if (options.layers !== undefined && options.maxLayers !== undefined) {
+            this.logger.warn('maxLayers is ignored when layers is provided');
+        }
+        this.layers = options.layers ?? new LayerRegistry({ capacity: options.maxLayers, logger: this.logger });
         this.cameras = new CameraRegistry<CameraManager2D, Camera2DCreateOptions>(
-            options.maxCameras ?? 4,
+            options.maxCameras ?? 2,
             (props) => {
                 const camera = new CameraManager2D(canvas.width || 800, canvas.height || 600, {
                     maxEffects: props.maxEffects ?? this.maxEffects,
@@ -110,6 +113,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
                     : this.layers.resolveMask(props.mask);
                 return camera;
             },
+            this.logger,
         );
         this.core.camera = this.cameras.create({});
         this.core.width = canvas.width || 1;

@@ -46,7 +46,7 @@ describe('InstanceStore', () => {
     test('throws when capacity is exceeded', () => {
         const s = new InstanceStore({ maxInstances: 1, layers: new LayerRegistry(), getTextureBindGroup: () => undefined });
         s.spawn({ prefab: model }, model, null, ++idc);
-        expect(() => s.spawn({ prefab: model }, model, null, ++idc)).toThrow('Max instances');
+        expect(() => s.spawn({ prefab: model }, model, null, ++idc)).toThrow('instances capacity');
     });
 
     test('exposes live slots densely for O(live) iteration', () => {

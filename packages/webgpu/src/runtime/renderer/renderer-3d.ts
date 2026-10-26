@@ -213,9 +213,12 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.core = new RendererCore();
         this.maxCameraEffects = options.maxCameraEffects ?? 20;
         this.logger = Logger.resolve(options.debug);
-        this.layers = options.layers ?? new LayerRegistry({ capacity: options.maxLayers });
+        if (options.layers !== undefined && options.maxLayers !== undefined) {
+            this.logger.warn('maxLayers is ignored when layers is provided');
+        }
+        this.layers = options.layers ?? new LayerRegistry({ capacity: options.maxLayers, logger: this.logger });
         this.cameras = new CameraRegistry<CameraManager, Camera3DCreateOptions>(
-            options.maxCameras ?? 4,
+            options.maxCameras ?? 2,
             (props) => {
                 const camera = new CameraManager({ maxEffects: props.maxEffects ?? this.maxCameraEffects });
                 applyCamera3DCreateOptions(camera, props);
@@ -224,6 +227,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
                     : this.layers.resolveMask(props.mask);
                 return camera;
             },
+            this.logger,
         );
         this.cameras.create({});
 
@@ -428,20 +432,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     /** Current animation cull distance (in world units). See `setAnimationCullDistance`. */
     get animationCullDistance(): number {
         return this.skinCull.distance;
-    }
-
-    /**
-     * Max skinned instances the renderer was sized for at construction.
-     * Independent budget from `maxInstances` since skinned characters use a
-     * separate set of GPU buffers. Read-only.
-     */
-    get maxSkinned(): number {
-        return this.maxSkinnedInstances;
-    }
-
-    /** Number of live dynamic lights. */
-    get lightCount(): number {
-        return this.lights.count;
     }
 
     /**

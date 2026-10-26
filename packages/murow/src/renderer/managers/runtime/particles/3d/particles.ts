@@ -33,20 +33,20 @@ export class ParticleManager extends PooledCollection<EmitterId, ParticleEmitter
     private pendingSpec: ParticleEmitter3DOptions | null = null;
 
     constructor(deps: ParticleManagerDeps) {
-        super({ poolSize: deps.capacity.maxEmitters, capacity: deps.capacity, logger: deps.logger });
+        super({ poolSize: deps.capacity.maxEmitters, capacity: deps.capacity, logger: deps.logger, name: 'particle emitters' });
         this.system = deps.system;
         this.rawEmitters = new Array(deps.capacity.maxEmitters).fill(null);
     }
 
     /**
      * Register an emitter.
-     * @returns the emitter handle, or `null` when the emitter pool is full.
+     * @returns the emitter handle. Throws when the emitter pool is full.
      */
-    addEmitter(spec: ParticleEmitter3DOptions = {}): ParticleEmitter | null {
+    addEmitter(spec: ParticleEmitter3DOptions = {}): ParticleEmitter {
         this.pendingSpec = spec;
-        const allocated = this.allocateItem();
+        const item = this.allocateItem().item;
         this.pendingSpec = null;
-        return allocated ? allocated.item : null;
+        return item;
     }
 
     /** Global spawn-rate multiplier for quality scaling. */

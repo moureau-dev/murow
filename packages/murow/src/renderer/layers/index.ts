@@ -7,5 +7,6 @@ export {
     type LayerBit,
     type LayerInput,
     type LayerMask,
+    type LayerRegistryEvents,
     type LayerRegistryOptions,
 } from './layers';

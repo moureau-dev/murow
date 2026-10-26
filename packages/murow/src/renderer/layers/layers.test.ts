@@ -7,7 +7,7 @@ describe('LayerRegistry', () => {
         expect(layers.defaultName).toBe('default');
         expect(layers.defaultBit).toBe(1);
         expect(layers.nameOf(1)).toBe('default');
-        expect(layers.size).toBe(1);
+        expect(layers.count).toBe(1);
         expect(layers.definedMask).toBe(1);
         expect(layers.all).toBe(ALL_LAYERS);
     });
@@ -17,7 +17,7 @@ describe('LayerRegistry', () => {
         expect(layers.define('world')).toBe(2);
         expect(layers.define('ui')).toBe(4);
         expect(layers.define('world')).toBe(2);
-        expect(layers.size).toBe(3);
+        expect(layers.count).toBe(3);
         expect(layers.definedMask).toBe(7);
     });
 
@@ -59,10 +59,21 @@ describe('LayerRegistry', () => {
         expect(visibleTo(ui, world)).toBe(false);
     });
 
+    test('emits add and clear events and exposes count', () => {
+        const layers = new LayerRegistry();
+        const log: string[] = [];
+        layers.events.on('add', ({ name }) => log.push(name));
+        layers.events.on('clear', () => log.push('clear'));
+        layers.define('world');
+        expect(layers.count).toBe(2);
+        layers.clear();
+        expect(log).toEqual(['world', 'default', 'clear']);
+    });
+
     test('throws when capacity is reached', () => {
         const layers = new LayerRegistry({ capacity: 2 });
         layers.define('world');
-        expect(() => layers.define('ui')).toThrow('capacity of 2 layers reached');
+        expect(() => layers.define('ui')).toThrow('LayerRegistry capacity (2) reached');
     });
 
     test('supports a custom default layer name', () => {
@@ -77,7 +88,7 @@ describe('LayerRegistry', () => {
         const layers = new LayerRegistry();
         layers.define('world');
         layers.clear();
-        expect(layers.size).toBe(1);
+        expect(layers.count).toBe(1);
         expect(layers.definedMask).toBe(1);
         expect(layers.has('world')).toBe(false);
     });

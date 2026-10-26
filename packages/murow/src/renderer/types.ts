@@ -4,6 +4,7 @@
  * to share the same API surface.
  */
 import type { Ray2D } from '../core/ray/ray-2d';
+import type { CameraId } from './managers/types';
 import type { Ray3D } from '../core/ray/ray-3d';
 
 export type ClearColor = [r: number, g: number, b: number, a: number];
@@ -60,7 +61,7 @@ export interface Renderer3DOptions extends RendererOptions {
 }
 
 export interface Camera2DState {
-    id: number;
+    id: CameraId;
     x: number;
     y: number;
     zoom: number;
@@ -73,13 +74,14 @@ export interface Camera2DState {
     clearColor?: ClearColor | false;
     clearDepth: boolean;
     name: string;
+    destroy(): void;
     setPosition(x: number, y: number): void;
     move(x: number, y: number): void;
     screenToWorld(screenX: number, screenY: number): [number, number];
 }
 
 export interface Camera3DState {
-    id: number;
+    id: CameraId;
     position: [x: number, y: number, z: number];
     target: [x: number, y: number, z: number];
     up: [x: number, y: number, z: number];
@@ -96,6 +98,7 @@ export interface Camera3DState {
     clearColor?: ClearColor | false;
     clearDepth: boolean;
     name: string;
+    destroy(): void;
     setPosition(x: number, y: number, z: number): void;
     move(right: number, up: number, forward: number): void;
     screenToRay(screenX: number, screenY: number): Ray3D;

@@ -144,7 +144,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
     lodFadeTicks = 0;
 
     constructor(deps: InstanceManagerDeps) {
-        super({ poolSize: deps.poolSize, capacity: deps.capacity, logger: deps.logger });
+        super({ poolSize: deps.poolSize, capacity: deps.capacity, logger: deps.logger, name: 'instances' });
         this.deps = deps;
         this.rawHandles = new Array(deps.poolSize).fill(null);
         this.origDestroy = new Array(deps.poolSize).fill(null);
@@ -164,9 +164,9 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
      * Add an instance. For skinned models, pass `linkedTo` to share bone
      * matrices with another instance (e.g. when spawning all parts of a
      * character).
-     * @returns the instance handle, or `null` when the pool is full.
+     * @returns the instance handle. Throws when a pool is full.
      */
-    add(opts: MeshInstanceOptions<any>): MeshInstanceHandle | null {
+    add(opts: MeshInstanceOptions<any>): MeshInstanceHandle {
         const rawModel: ModelHandle | GltfModel | Prefab3D | string = opts.prefab as never;
 
         let prefab: Prefab3D | undefined;
@@ -211,6 +211,36 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         }
 
         return this.spawnStatic(resolvedOpts, modelHandle, userPrefabId, materialIds, lods);
+    }
+
+    /** Live non-skinned instances. */
+    get count(): number {
+        return this.deps.store.slots.size;
+    }
+
+    /** Non-skinned instance capacity. */
+    get capacity(): number {
+        return this.deps.store.slots.capacity;
+    }
+
+    /** Live skinned instances. */
+    get skinnedCount(): number {
+        return this.deps.skinned.slots.size;
+    }
+
+    /** Skinned instance capacity. */
+    get skinnedCapacity(): number {
+        return this.deps.skinned.slots.capacity;
+    }
+
+    /** Live instances across both pools. */
+    get totalCount(): number {
+        return this.deps.store.slots.size + this.deps.skinned.slots.size;
+    }
+
+    /** Capacity across both pools. */
+    get totalCapacity(): number {
+        return this.deps.store.slots.capacity + this.deps.skinned.slots.capacity;
     }
 
     /**
@@ -603,12 +633,12 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         lods: readonly LodSpec[] | undefined,
     ): MeshInstanceHandle | null {
         this.pending = { kind: 'static', opts, modelHandle, prefabId, materialIds };
-        const allocated = this.allocateItem();
+        const item = this.allocateItem().item;
         this.pending = null;
-        if (allocated && lods !== undefined && lods.length > 0) {
-            this.applyLod(allocated.item.slot, modelHandle.id, lods);
+        if (lods !== undefined && lods.length > 0) {
+            this.applyLod(item.slot, modelHandle.id, lods);
         }
-        return allocated ? allocated.item : null;
+        return item;
     }
 
     private spawnSkinned(
@@ -621,7 +651,7 @@ export class InstanceManager extends PooledCollection<InstanceId, MeshInstanceHa
         lods: readonly LodSpec[] | undefined,
     ): MeshInstanceHandle | null {
         const skinModel = this.deps.models.skinnedModel(skinIndex);
-        if (!skinModel) return null;
+        if (!skinModel) throw new Error(`instances.add: skinned model (skin ${skinIndex}) not found`);
         this.pending = {
             kind: 'skinned', opts, modelHandle, skinIndex,
             skinModel: skinModel as unknown as SkinModelLike, linkedSlot, prefabId, materialIds,

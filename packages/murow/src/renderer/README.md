@@ -60,7 +60,7 @@ renderer.instances.add({ prefab: rock, renderLayer: world });
 - A numeric `renderLayer` must be a single bit. A name is resolved when the object is spawned.
 - Raycasts use the camera's mask, so a camera cannot pick a layer it does not see.
 - Layers are presentation only. Do not use them for authority, interest, or physics.
-- `maxLayers` (1-32, default 32) caps the default registry. Inject a `LayerRegistry` to share names across renderers.
+- `maxLayers` (1-32, default 32) caps the default registry; it is ignored when a `LayerRegistry` is injected.
 
 ## Cameras
 
@@ -78,7 +78,7 @@ const minimap = renderer.cameras.create({
 renderer.cameras.setPrimary(main);
 ```
 
-`create` throws at `maxCameras` (default 4). The first view clears the color target; later views load unless `clearColor` is set. Camera effects need a full-screen rect. Occlusion culling is limited to one view, and LOD, directional shadows, raycasts, and `worldToScreen` default to the primary camera.
+`create` throws at `maxCameras` (default 2). The first view clears the color target; later views load unless `clearColor` is set. Camera effects need a full-screen rect. Occlusion culling is limited to one view, and LOD, directional shadows, raycasts, and `worldToScreen` default to the primary camera.
 
 ## Assets
 

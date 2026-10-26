@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { CameraId } from '../../types';
 import { CameraRegistry, type RegisteredCamera } from './registry';
 
 interface TestCamera extends RegisteredCamera {
@@ -8,12 +9,13 @@ interface TestCamera extends RegisteredCamera {
 
 function camera(priority = 0, enabled = true): TestCamera {
     return {
-        id: -1,
+        id: -1 as CameraId,
         enabled,
         priority,
         rect: { x: 0, y: 0, width: 1, height: 1 },
         clearDepth: true,
         mask: 0xffffffff,
+        destroy() {},
         previous: 0,
         interpolated: 0,
         storePrevious() { this.previous += 1; },
@@ -79,10 +81,53 @@ describe('CameraRegistry', () => {
     test('reuses freed ids', () => {
         const registry = new CameraRegistry<TestCamera>(4);
         const a = registry.add(camera());
+        const id = a.id;
         registry.add(camera());
         expect(registry.remove(a)).toBe(true);
         const reused = registry.add(camera());
-        expect(reused.id).toBe(a.id);
+        expect(reused.id).toBe(id);
+    });
+
+    test('all reuses one array and each visits every camera', () => {
+        const registry = new CameraRegistry<TestCamera>(4);
+        registry.add(camera());
+        const first = registry.all();
+        const second = registry.all();
+        expect(second).toBe(first);
+        let seen = 0;
+        registry.each(() => { seen += 1; });
+        expect(seen).toBe(1);
+    });
+
+    test('destroy removes the camera and is idempotent', () => {
+        const registry = new CameraRegistry<TestCamera>(4);
+        const a = registry.add(camera());
+        const b = registry.add(camera());
+        a.destroy();
+        expect(registry.count).toBe(1);
+        expect(registry.primary).toBe(b);
+        expect(a.id).toBe(-1 as CameraId);
+        a.destroy();
+        expect(registry.count).toBe(1);
+    });
+
+    test('destroying the last camera throws', () => {
+        const registry = new CameraRegistry<TestCamera>(1);
+        const a = registry.add(camera());
+        expect(() => a.destroy()).toThrow('cannot destroy the last camera');
+    });
+
+    test('emits add, remove and primary events', () => {
+        const registry = new CameraRegistry<TestCamera>(4);
+        const log: string[] = [];
+        registry.events.on('add', () => log.push('add'));
+        registry.events.on('remove', () => log.push('remove'));
+        registry.events.on('primary', () => log.push('primary'));
+        const a = registry.add(camera());
+        const b = registry.add(camera());
+        registry.setPrimary(b);
+        a.destroy();
+        expect(log).toEqual(['add', 'add', 'primary', 'remove']);
     });
 
     test('ordered reuses one array', () => {

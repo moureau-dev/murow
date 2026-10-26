@@ -11,6 +11,8 @@ export interface PooledCollectionOptions<Capacity> {
     readonly capacity: Capacity;
     /** Logger used to report overflow. */
     readonly logger: Logger;
+    /** Name used in capacity errors and logs. Defaults to `collection`. */
+    readonly name?: string;
 }
 
 /**
@@ -30,10 +32,12 @@ export abstract class PooledCollection<
     readonly events: CollectionEvents<Item>;
     private readonly items: (Item | null)[];
     private readonly capacityValue: Capacity;
+    private readonly collectionName: string;
 
     protected constructor(options: PooledCollectionOptions<Capacity>) {
         this.allocator = new GenerationAllocator(options.poolSize);
         this.logger = options.logger;
+        this.collectionName = options.name ?? 'collection';
         this.capacityValue = options.capacity;
         this.items = new Array<Item | null>(options.poolSize).fill(null);
         this.events = new EventSystem<CollectionEventTuple<Item>>({
@@ -91,13 +95,14 @@ export abstract class PooledCollection<
 
     /**
      * Allocate a slot, create and store its item, and emit `add`.
-     * @returns the new id, slot and item, or `null` (after logging) when full.
+     * Logs and throws when the collection is full.
      */
-    protected allocateItem(): { id: Id; slot: number; item: Item } | null {
+    protected allocateItem(): { id: Id; slot: number; item: Item } {
         const packed = this.allocator.allocate();
         if (packed === -1) {
-            this.logger.error(`collection at capacity (${this.allocator.capacity}); add aborted`);
-            return null;
+            const message = `${this.collectionName} capacity (${this.allocator.capacity}) reached`;
+            this.logger.error(message);
+            throw new Error(message);
         }
         const slot = this.allocator.slotOf(packed);
         const id = packed as Id;

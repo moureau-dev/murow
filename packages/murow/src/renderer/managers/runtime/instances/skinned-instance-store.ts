@@ -5,6 +5,7 @@ import { SparseBatcher } from 'murow/core/sparse-batcher';
 import { InstanceLodStore } from './lod-store';
 import type { SkeletalAnimState, PlayOptions, TexturePrefab } from 'murow/renderer';
 import { resolveRenderLayer, type LayerRegistry } from '../../../layers';
+import type { Logger } from 'murow/core';
 import { DYNAMIC_MESH_FLOATS, SKINNED_STATIC_MESH_FLOATS } from '../engine-core/types';
 import type { MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../types';
 import {
@@ -37,6 +38,8 @@ export interface SkinnedInstanceStoreDeps {
     maxSkins: number;
     /** Resolves layer names and the default bit. */
     layers: LayerRegistry;
+    /** Optional logger for capacity errors. */
+    logger?: Logger;
     /** Upload the skin's rest pose into the shared bone-matrix buffer at `boneOffset`. */
     uploadRestPose(skinModel: SkinModelLike, boneOffset: number, jointCount: number): void;
     getTextureBindGroup(id: string): RawBindGroup | undefined;
@@ -236,7 +239,11 @@ export class SkinnedInstanceStore {
         id: number,
     ): MeshInstanceHandle {
         const slot = this.slots.add();
-        if (slot === -1) throw new Error(`Max skinned instances (${this.deps.maxSkinnedInstances}) reached`);
+        if (slot === -1) {
+            const message = `skinned instances capacity (${this.deps.maxSkinnedInstances}) reached`;
+            this.deps.logger?.error(message);
+            throw new Error(message);
+        }
 
         this.layerData[slot] = resolveRenderLayer(
             this.deps.layers,

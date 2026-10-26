@@ -18,3 +18,6 @@ export type EmitterId = SlotId<'emitter'>;
 // 2D
 export type SpriteId = SlotId<'sprite'>;
 export type SheetId = SlotId<'sheet'>;
+
+// Shared
+export type CameraId = SlotId<'camera'>;

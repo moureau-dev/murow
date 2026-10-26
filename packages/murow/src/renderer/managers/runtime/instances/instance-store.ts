@@ -4,6 +4,7 @@ import { SlotMap, SlotSet } from 'murow/core/slot-map';
 import { SparseBatcher } from 'murow/core/sparse-batcher';
 import type { TexturePrefab } from 'murow/renderer';
 import { resolveRenderLayer, type LayerRegistry } from '../../../layers';
+import type { Logger } from 'murow/core';
 import { DYNAMIC_MESH_FLOATS, STATIC_MESH_FLOATS } from '../engine-core/types';
 import type { MeshInstanceHandle, MeshInstanceOptions, ModelHandle } from '../types';
 import {
@@ -23,6 +24,8 @@ export interface InstanceStoreDeps {
     maxInstances: number;
     /** Resolves layer names and the default bit. */
     layers: LayerRegistry;
+    /** Optional logger for capacity errors. */
+    logger?: Logger;
     /** Bind group for a registered texture id, or undefined. */
     getTextureBindGroup(id: string): RawBindGroup | undefined;
     /** Record one instance starting to use a 1-based material id (0 = default). */
@@ -190,7 +193,11 @@ export class InstanceStore {
     /** Allocate a slot, write the initial transform, and return a live handle. */
     spawn(opts: MeshInstanceOptions<any>, modelHandle: ModelHandle, userPrefabId: string | null, id: number, materialIds: readonly number[] = [0]): MeshInstanceHandle {
         const slot = this.slots.add();
-        if (slot === -1) throw new Error(`Max instances (${this.deps.maxInstances}) reached`);
+        if (slot === -1) {
+            const message = `instances capacity (${this.deps.maxInstances}) reached`;
+            this.deps.logger?.error(message);
+            throw new Error(message);
+        }
 
         this.layerData[slot] = resolveRenderLayer(
             this.deps.layers,

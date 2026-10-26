@@ -6,6 +6,7 @@
 import { lerp } from "murow/core/lerp";
 import type { Camera2DState } from 'murow/renderer';
 import type { CameraRect, CameraViewOptions, ClearColor } from '../../../types';
+import type { CameraId } from '../../types';
 import { CameraEffectList } from './camera-effect';
 
 export interface Camera2DOptions {
@@ -26,7 +27,7 @@ export interface Camera2DCreateOptions extends CameraViewOptions {
 
 export class Camera2D implements Camera2DState {
     /** Registry-assigned id, or -1 when the camera is not registered. */
-    id: number = -1;
+    id: CameraId = -1 as CameraId;
     x: number = 0;
     y: number = 0;
     zoom: number = 1;
@@ -128,6 +129,9 @@ export class Camera2D implements Camera2DState {
     /**
      * Store current state as previous. Call before each tick.
      */
+    /** Remove this camera from its registry. No-op when not registered. */
+    destroy(): void {}
+
     storePrevious(): void {
         this._prevX = this.x;
         this._prevY = this.y;

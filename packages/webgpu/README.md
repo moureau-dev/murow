@@ -236,7 +236,7 @@ from `'murow'`.
 - [`ComputeBuilder`](./src/compute/compute-builder.ts) — internal GPU compute builder (backing the `Skinning`/`Particles3D` ports)
 
 ### Materials (3D)
-- `renderer.materials.create(spec)` — `standard` (lit), `unlit`, `emissive`, and custom `shader` materials. `name` is optional and unique per renderer (auto `mat_<id>` when omitted; a duplicate throws); returns a typed `MaterialHandle<N, U>` (`name`, `slot`, `uniforms`, `setTexture`, `destroy`) or `null` at capacity
+- `renderer.materials.create(spec)` — `standard` (lit), `unlit`, `emissive`, and custom `shader` materials. `name` is optional and unique per renderer (auto `mat_<id>` when omitted; a duplicate throws); returns a typed `MaterialHandle<N, U>` (`name`, `slot`, `uniforms`, `setTexture`, `destroy`) and throws at capacity
 - `MaterialSpec` / `EngineMaterialSpec` / `ShaderMaterialSpec` / `BlendMode` / `CullMode` — material spec types, exported from `murow/webgpu`
 
 ### Shadows

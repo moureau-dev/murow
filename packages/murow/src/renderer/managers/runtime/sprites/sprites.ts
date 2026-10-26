@@ -97,7 +97,7 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
     batchCount = 0;
 
     constructor(deps: SpriteManagerDeps) {
-        super({ poolSize: deps.capacity, capacity: deps.capacity, logger: deps.logger });
+        super({ poolSize: deps.capacity, capacity: deps.capacity, logger: deps.logger, name: 'sprites' });
         this.core = deps.core;
         this.prefabs = deps.prefabs;
         this.layers = deps.layers;
@@ -113,9 +113,9 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
     /**
      * Add a sprite. A prefab source may name a hitbox, which is resolved from the
      * bucket's hitbox library.
-     * @returns the sprite handle, or `null` when the pool is full.
+     * @returns the sprite handle. Throws when the pool is full.
      */
-    add(opts: SpriteAddOptions): SpriteAccessor | null {
+    add(opts: SpriteAddOptions): SpriteAccessor {
         const fromPrefab = isPrefab2D(opts.sheet);
         const sheet = fromPrefab ? resolveSpritePrefabHandle(opts.sheet as Prefab2D) : (opts.sheet as SpritesheetHandle);
         const hitboxName = fromPrefab ? (opts.sheet as Prefab2D).hitbox : undefined;
@@ -125,9 +125,9 @@ export class SpriteManager extends PooledCollection<SpriteId, SpriteAccessor, nu
         const renderLayer = resolveRenderLayer(this.layers, opts.renderLayer, prefabLayer);
 
         this.pending = { opts, sheet, hitbox, renderLayer };
-        const allocated = this.allocateItem();
+        const item = this.allocateItem().item;
         this.pending = null;
-        return allocated ? allocated.item : null;
+        return item;
     }
 
     /**
