@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://menina.moureau.dev/schema/v1/menina.schema.json
+version: 1
+project: multiplayer-cube-arena
+environment: production
+
+vars:
+  ENVIRONMENT: production
+
+defaults:
+  # The build needs the monorepo packages, so the Docker context is the repo root.
+  context: ../..
+  tag: ${ENVIRONMENT}
+
+apps:
+  cube-arena:
+    dockerfile: Dockerfile
+    service: { port: 4000 }
+    host: cube-arena.moureau.dev
+    env:
+      PORT: "4000"
+    health:
+      readiness: /health

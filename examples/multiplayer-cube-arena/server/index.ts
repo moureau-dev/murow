@@ -5,6 +5,7 @@ import {
     WS_PATH,
     Arena,
     intents,
+    protocol,
     predictions,
     Components,
     rpcs,
@@ -31,6 +32,10 @@ const transport = Transports.BunWsServer.create(PORT, {
         const url = new URL(req.url);
         const path = url.pathname === '/' ? '/index.html' : url.pathname;
 
+        if (path === '/health') {
+            return new Response('Healthy', { status: 200 });
+        }
+
         const file = Bun.file(`${distRoot}${path}`);
         if (await file.exists()) {
             return new Response(file);
@@ -50,7 +55,7 @@ const server = new GameServer({
     loop: arena.loop,
     world: arena.world,
     transport,
-    protocol: { intents, rpcs },
+    protocol,
     snapshot: { rate: TICK_RATE },
 });
 server.use(predictions);

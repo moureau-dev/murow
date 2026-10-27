@@ -10,6 +10,7 @@ import {
     Components,
     WS_PATH,
     intents,
+    protocol,
     predictions,
     rpcs,
     clamp,
@@ -89,7 +90,7 @@ const client = new GameClient({
     world: arena.world,
     loop: arena.loop,
     transport,
-    protocol: { intents, rpcs },
+    protocol,
     strategy: { // optional. defaults to { kind: 'snapshot-interpolation' }
         kind: 'snapshot-interpolation', // currently the only implemented strategy. more to come later!
         delay: MIN_DELAY_MS, // optional. Snapshot interpolation delay, ms. Default 100.
