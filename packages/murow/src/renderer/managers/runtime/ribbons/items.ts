@@ -157,7 +157,7 @@ export class RibbonItem implements RibbonHandle {
 export class TrailItem implements TrailHandle {
     readonly id: TrailId;
     readonly maxPoints: number;
-    readonly lifetime: number;
+    lifetime: number;
     enabled = true;
     private readonly pool: RibbonPoolHost<TrailId>;
     private readonly batch: RibbonBatch;
@@ -271,6 +271,10 @@ export class TrailItem implements TrailHandle {
         this.width = width;
     }
 
+    setLifetime(seconds: number): void {
+        this.lifetime = Math.max(1e-3, seconds);
+    }
+
     setColor(start: RibbonColor, end: RibbonColor): void {
         this.color = [copyColor(start), copyColor(end)];
     }
@@ -374,7 +378,7 @@ export class BeamItem implements BeamHandle {
     private readonly drawOptions: AppendStripOptions;
     private readonly uvScroll: number;
     private readonly segments: number;
-    private readonly noise: number;
+    private noise: number;
     private readonly noiseFrequency: number;
     private readonly noiseSpeed: number;
     private readonly scratch: Float32Array;
@@ -434,6 +438,10 @@ export class BeamItem implements BeamHandle {
 
     setWidth(width: number): void {
         this.width = width;
+    }
+
+    setNoise(amount: number): void {
+        this.noise = Math.max(0, amount);
     }
 
     setColor(r: number, g: number, b: number, a: number): void {

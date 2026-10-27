@@ -686,10 +686,11 @@ const beam = renderer.ribbons.createBeam({
   `setWidth`, `enabled`, `destroy`). `add` accepts `closed` and `facing`.
 - `createTrail` returns a `TrailHandle`. Call `setHead(x, y, z)` in `tick`;
   points are committed by `minDistance`, and `lifetime` is in seconds.
-  `clear()` resets the history.
+  `setLifetime`, `setWidth`, `setColor`, and `clear()` are live.
 - `createBeam` returns a `BeamHandle`. Call `set(from, to)` in `tick`.
   `segments` subdivides for `noise`; `noiseSpeed` moves the wave pattern
   (`0` = standing tether), and `uvScroll` moves the texture along the beam.
+  `setWidth`, `setColor`, and `setNoise` are live.
 - Width is in world units (`number` or `[start, end]`). Color is RGBA or a
   `[start, end]` gradient.
 - `facing: 'camera'` billboards the strip toward the current view;

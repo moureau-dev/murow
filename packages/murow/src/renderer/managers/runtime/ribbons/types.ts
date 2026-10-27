@@ -120,6 +120,7 @@ export interface TrailHandle extends HandleBase<TrailId> {
     readonly pointCount: number;
     readonly lifetime: number;
     setHead(x: number, y: number, z: number): void;
+    setLifetime(seconds: number): void;
     setWidth(width: RibbonWidth): void;
     setColor(start: RibbonColor, end: RibbonColor): void;
     clear(): void;
@@ -130,6 +131,7 @@ export interface TrailHandle extends HandleBase<TrailId> {
 export interface BeamHandle extends HandleBase<BeamId> {
     set(fromX: number, fromY: number, fromZ: number, toX: number, toY: number, toZ: number): void;
     setWidth(width: number): void;
+    setNoise(amount: number): void;
     setColor(r: number, g: number, b: number, a: number): void;
     enabled: boolean;
 }

@@ -101,6 +101,18 @@ describe('TrailItem', () => {
         expect(b.fake.calls.length).toBe(0);
         expect(trail.pointCount).toBe(0);
     });
+
+    test('lifetime and beam noise are live', () => {
+        const b = batch();
+        const trail = new TrailItem(1 as TrailId, host, b.value, { lifetime: 1 }, 64);
+        trail.setLifetime(0.25);
+        expect(trail.lifetime).toBe(0.25);
+        const beam = new BeamItem(2 as BeamId, host, b.value, { noise: 0.5 });
+        beam.setNoise(0.1);
+        beam.set(0, 0, 0, 1, 0, 0);
+        beam.write(1);
+        expect(b.fake.calls.length).toBe(1);
+    });
 });
 
 describe('BeamItem', () => {
