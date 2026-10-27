@@ -20,25 +20,7 @@ import { CameraManager } from 'murow/renderer/managers/runtime/index';
 // Renderer + prefabs
 // ──────────────────────────────────────────────────────────────────────
 
-const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
-const statusEl = document.getElementById('status')!;
-const playerCountEl = document.getElementById('playerCount')!;
-const mobileForwardBtn = document.getElementById('mobileForward')!;
-const mobileBackBtn    = document.getElementById('mobileBack')!;
-const mobileLeftBtn    = document.getElementById('mobileLeft')!;
-const mobileRightBtn   = document.getElementById('mobileRight')!;
-
-let mobileForward = false, mobileBack = false, mobileLeft = false, mobileRight = false;
-
-function wire(btn: HTMLElement, set: (v: boolean) => void) {
-    btn.onpointerdown  = (e) => { e.preventDefault(); set(true); };
-    btn.onpointerup    = () => set(false);
-    btn.onpointerleave = () => set(false);
-}
-wire(mobileForwardBtn, (v) => { mobileForward = v; });
-wire(mobileBackBtn,    (v) => { mobileBack    = v; });
-wire(mobileLeftBtn,    (v) => { mobileLeft    = v; });
-wire(mobileRightBtn,   (v) => { mobileRight   = v; });
+const { canvas, playerCount, status, mobile} = setup();
 
 const assets = new AssetBucket('3d')
     .prefabs(({ bucket }) => bucket
@@ -118,7 +100,7 @@ client.on('spawn', ({ entity }) => {
         position: [p.x, 0.45, p.z],
     }));
 
-    playerCountEl.textContent = String(handles.size);
+    playerCount.textContent = String(handles.size);
 });
 
 // The server tells us which entity is ours via `assignEntity`. The
@@ -135,17 +117,17 @@ client.on('despawn', ({ entity }) => {
         handles.remove(entity);
     }
     if (localEntity === entity) localEntity = null;
-    playerCountEl.textContent = String(handles.size);
+    playerCount.textContent = String(handles.size);
 });
 
 client.on('connected', () => {
-    statusEl.textContent = 'connected';
-    statusEl.className = 'connected';
+    status.textContent = 'connected';
+    status.className = 'connected';
 });
 
 client.on('disconnected', ({ reason }) => {
-    statusEl.textContent = `disconnected (${reason})`;
-    statusEl.className = 'disconnected';
+    status.textContent = `disconnected (${reason})`;
+    status.className = 'disconnected';
 });
 
 client.on('error', ({ error, context }) => {
@@ -226,10 +208,10 @@ function createSystems({
             // Read WASD into a 2D direction.
             let dx = 0;
             let dz = 0;
-            if (input.keys['KeyW']?.down || mobileForward) dz -= 1;
-            if (input.keys['KeyS']?.down || mobileBack)    dz += 1;
-            if (input.keys['KeyA']?.down || mobileLeft)    dx -= 1;
-            if (input.keys['KeyD']?.down || mobileRight)   dx += 1;
+            if (input.keys['KeyW']?.down || mobile.forward) dz -= 1;
+            if (input.keys['KeyS']?.down || mobile.back)    dz += 1;
+            if (input.keys['KeyA']?.down || mobile.left)    dx -= 1;
+            if (input.keys['KeyD']?.down || mobile.right)   dx += 1;
         
             // Rotate the WASD vector by the camera yaw so "W" always moves away
             // from the camera, "A" always strafes left, etc.
@@ -302,4 +284,37 @@ function createCameraCtl() {
         mouseLook,
         zoom,
     }
+}
+
+function setup() {
+    const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
+    const status = document.getElementById('status')!;
+    const playerCount = document.getElementById('playerCount')!;
+    
+    const buttons = {
+        forward: document.getElementById('mobileForward'),
+        right: document.getElementById('mobileRight'),
+        back: document.getElementById('mobileBack'),
+        left: document.getElementById('mobileLeft'),
+    };
+
+    const mobile = {
+        forward: false,
+        back: false,
+        right: false,
+        left: false,
+    };
+
+    function wire(btn: HTMLElement, set: (v: boolean) => void) {
+        btn.onpointerdown  = (e) => { e.preventDefault(); set(true); };
+        btn.onpointerup    = () => set(false);
+        btn.onpointerleave = () => set(false);
+    }
+
+    wire(buttons.forward, (v) => { mobile.forward = v; });
+    wire(buttons.back,    (v) => { mobile.back    = v; });
+    wire(buttons.left,    (v) => { mobile.left   = v; });
+    wire(buttons.right,   (v) => { mobile.right   = v; });
+
+    return { canvas, status, playerCount, mobile };
 }
