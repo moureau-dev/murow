@@ -201,7 +201,7 @@ Keep the golden small (a hash, not full state). `Timeline.record(tick, receivedA
 
 ### Lag compensation in a test
 
-`LagCompensation` keeps a ring of binary frames per tick. Mount it, feed it ticks, then `rewind(tick, fn)` to read historical state inside the callback. In a server handler, `ctx.lagCompensated(fn)` does the same rewind.
+`LagCompensation` keeps a ring of binary records per tick. Mount it, feed it ticks, then `rewind(tick, fn)` to read historical state inside the callback. In a server handler, `ctx.lagCompensated(fn)` does the same rewind.
 
 ```ts
 import { LagCompensation } from 'murow/netcode';

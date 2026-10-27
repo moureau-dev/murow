@@ -79,7 +79,7 @@ Building a simple browser game?
 Building multiplayer?
 → `GameServer` / `GameClient` + `murow/netcode`
 → ECS + `networked()` components
-→ `defineIntents` / `definePredictions` / `defineHandlers`
+→ `defineProtocol` + `definePredictions` / `defineHandlers`
 → Add `LagCompensation` for hitscan, `AoiGrid` for large worlds
 
 ### IMPORTANT: Browser input
@@ -111,12 +111,12 @@ Do NOT:
 - omit `storePreviousState()` when you want GPU interpolation
 - forget to RETURN the bucket from `prefabs()` / `textures()` callbacks
 
-The engine has **two layers of networking** stacked on each other. Pick the one that matches your needs:
+Networking is split into an agnostic base and an opinionated ECS backend:
 
-1. **Low-level (`murow/net` + `murow/protocol`)** — `ServerNetwork` / `ClientNetwork` + `IntentRegistry` / `SnapshotRegistry` / `RpcRegistry`. You wire your own game loop, prediction, interpolation. Use when the netcode opinions don't fit.
-2. **High-level (`murow/netcode`)** — `GameServer` / `GameClient` + `defineIntents` / `definePredictions` / `defineHandlers` + `networked()` component sync + `AoiGrid` / `LagCompensation` plugins. The common case. A handler may return `{ accepted, reason? }` (an `IntentOutcome`) to tell the client the action was accepted or rejected; the client gets it via `client.on('outcome', { sequence, accepted, reason })`.
+1. **Agnostic (`murow/net` + `murow/net/wire` + `murow/protocol`)** — transport adapters, packet helpers, session identity, and typed intent/snapshot/RPC codecs. No ECS, no game authority. Use when you are building a custom backend or your own state model.
+2. **ECS backend (`murow/netcode`)** — `GameServer` / `GameClient` + `defineProtocol` / `definePredictions` / `defineHandlers` + `networked()` component sync + `AoiGrid` / `LagCompensation` plugins. The common case. A handler may return `{ accepted, reason? }` (an `IntentOutcome`) to tell the client the action was accepted or rejected; the client gets it via `client.on('outcome', { sequence, accepted, reason })`.
 
-When in doubt, use `murow/netcode`. Drop to the lower layer only if you need a custom snapshot pipeline.
+When in doubt, use `murow/netcode`. Use `murow/net` only when you are implementing a custom backend or wire protocol.
 
 ---
 
@@ -139,7 +139,7 @@ Many entities / want systems & SoA speed?
 └── Yes ──> ECS World + components + systems (see ECS section; default to the Fields API).
 ```
 
-**ECS is not required for single-player.** A loop that owns a few hundred instance handles and moves them each tick is perfectly idiomatic — `new GameLoop(...)`, `instances.add(...)`, mutate handles in the `tick` event, `render(alpha)` in `render`. No `World`, no `defineComponent`. Reach for ECS when entity count, query patterns, or system organization make hand-rolled state painful, or when you want SoA cache performance. (In **multiplayer**, ECS is effectively required — `networked()` components and the snapshot codec are built on the World.)
+**ECS is not required for single-player.** A loop that owns a few hundred instance handles and moves them each tick is perfectly idiomatic — `new GameLoop(...)`, `instances.add(...)`, mutate handles in the `tick` event, `render(alpha)` in `render`. No `World`, no `defineComponent`. Reach for ECS when entity count, query patterns, or system organization make hand-rolled state painful, or when you want SoA cache performance. (In **`murow/netcode`**, ECS is required — `networked()` components and the snapshot codec are built on the World. `murow/net` is the non-ECS transport/wire base.)
 
 Minimal single-player skeleton (no ECS, no netcode):
 
@@ -270,10 +270,9 @@ import {
   defineIntent, IntentRegistry,
   defineRPC, RpcRegistry,
   SnapshotCodec, SnapshotRegistry, applySnapshot, type Snapshot,
-  // Transport-agnostic networking
-  ServerNetwork, ClientNetwork,
+  // Transport and wire primitives (no ECS)
   type TransportAdapter, type ServerTransportAdapter,
-  BunWebSocketServerTransport,
+  BunWebSocketServerTransport, MemoryServerTransport,
   // Renderer abstractions + asset pipeline (pure CPU — no GPU)
   AssetBucket, PrefabBucket, type GltfPrefab,
   parseGltf, parseSpritesheet, SkeletalAnimation,
@@ -288,6 +287,9 @@ import { HTMLDom } from 'murow/dom';
 
 // Browser WebSocket transport (separate adapter)
 import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-websocket';
+
+// Wire helpers and session identity
+import { ServerMessage, ClientMessage, packet, packetType, packetPayload, SessionRegistry } from 'murow/net/wire';
 
 // WebGPU renderer
 import {
@@ -305,10 +307,10 @@ import {
 // Netcode (high-level multiplayer)
 import {
   GameServer, GameClient,
+  defineProtocol,
   defineIntents, defineRpcs, definePredictions, defineHandlers,
   networked,
   AoiGrid, LagCompensation,
-  MemoryServerTransport,
   type ServerPlugin, type PredictionContext, type ServerHandlerContext,
   type ComponentFields,
 } from 'murow/netcode';
@@ -327,7 +329,7 @@ All binary primitives: `u8`, `u16`, `u32`, `i8`, `i16`, `i32`, `f16`, `f32`, `f6
 | `SlotAllocator` | `SlotMap` / `SlotStore` from `murow/core/slot-map` — typed slot allocator |
 | `IntentTracker` / `Reconciliator` | These exist — exported from `murow` directly. Docs above. |
 | `SmoothTimer` / `IntervalLoop` / `TimeoutLoop` | `loop.every(N).seconds(...)` / `loop.in(N).seconds(...)` on GameLoop — docs above. |
-| `validateIntent` / `sanitizeInput` | `validateRange`, `combineValidators`, etc. from `murow/net/validators` |
+| `validateIntent` / `sanitizeInput` | Validation belongs in netcode handlers; there is no `murow/net/validators` export |
 | `VirtualNetwork` / `TestTransport` | `VirtualNetwork` / `VirtualServerTransport` from `murow/net/adapters/virtual-network` — test-only |
 
 ```ts
@@ -354,6 +356,7 @@ Do not invent these — they will not type-check or will silently do nothing:
 - `SmoothClock` / `NetworkClock` — doesn't exist; use `SlewClock` from `murow/core/clock`
 - `ReplayLog` / `EventLog` — doesn't exist; use `Timeline` from `murow/core/timeline`
 - `SlotAllocator` — doesn't exist; use `SlotMap` from `murow/core/slot-map`
+- `ServerNetwork` / `ClientNetwork` — removed; use `GameServer` / `GameClient` from `murow/netcode`, or build a backend on `murow/net/wire`
 
 If you find yourself reaching for one of these, the real API for that job is documented in the matching section above.
 
@@ -1088,7 +1091,24 @@ const SnapshotSchema = {
 
 ## Protocol Layer
 
-Lower-level codec primitives for networked messages. `murow/netcode` wraps these with type inference — use these directly only when you need custom message flows.
+Lower-level codec primitives for networked messages.
+
+**Defined protocol (recommended for netcode).** `defineProtocol` bundles intents, RPCs, and custom messages with a version and one schema fingerprint:
+
+```ts
+import { defineProtocol } from 'murow/protocol';
+import { f32, u16 } from 'murow';
+
+const protocol = defineProtocol({
+  version: 1,
+  intents: { move: { dx: f32, dz: f32 } },
+  rpcs: { buy: { item: u16 } },
+});
+
+protocol.fingerprint; // version + every schema
+```
+
+Pass the same object to `GameServer` and `GameClient`. `defineIntents` / `defineRpcs` / `defineSnapshots` remain for raw registries. `murow/netcode` wraps these with type inference — use these directly only when you need custom message flows.
 
 ### Intents — client → server
 
@@ -1171,104 +1191,24 @@ server.onRpc(BuyItem, (peerId, rpc) => { /* ... */ });
 
 ---
 
-## Networking Layer (Low-Level)
+## Transport and Wire Layer (Agnostic)
 
-`ServerNetwork` and `ClientNetwork` are transport-agnostic — they accept any `TransportAdapter`. Use these only if `murow/netcode`'s opinions don't fit; otherwise prefer `GameServer` / `GameClient`.
+`murow/net` is the agnostic base. Its transport and wire entries have no ECS, no snapshots, no prediction, and no entity assignment. Optional ECS helpers, if any, live under `murow/net/ecs` and are not re-exported by default.
 
-### Shared `NetworkConfig` (used by both `ServerNetwork` and `ClientNetwork`)
+- `TransportAdapter` / `ServerTransportAdapter` — implement these for a custom transport.
+- Bundled: Bun WebSocket, browser WebSocket, memory, and virtual network.
+- `murow/net/wire` — message kinds, packet helpers, and `SessionRegistry`.
 
-```ts
-type LagSimulation = number | { min: number; max: number };
+There is no `ServerNetwork` / `ClientNetwork`. Use `GameServer` / `GameClient` from `murow/netcode`, or build a custom backend on the wire primitives.
 
-interface NetworkConfig {
-  maxMessageSize?: number;          // bytes. Default 64 KB
-  debug?: boolean;                  // log every send/recv. Default false
-  maxMessagesPerSecond?: number;    // per peer, server only. Default 100. 0 disables rate limiting
-  maxSendQueueSize?: number;        // per peer. Default 100. Overflow drops oldest
-  enableBufferPooling?: boolean;    // Default true. Custom queueing transports MUST copy buffers in send()
-  heartbeatInterval?: number;       // ms. Default 30000. 0 disables heartbeats
-  heartbeatTimeout?: number;        // ms. Default 60000. Connection is killed if no msg received within this window
-  lagSimulation?: LagSimulation;    // CLIENT only. Fixed delay (number) or random window. Default off
-}
-```
-
-### Server
+### Transports
 
 ```ts
-import { ServerNetwork, BunWebSocketServerTransport, IntentRegistry, SnapshotRegistry } from 'murow';
+import type { TransportAdapter, ServerTransportAdapter } from 'murow/net';
 
-const transport = BunWebSocketServerTransport.create(3000, {
-  path: '/ws',
-  async fetch(req) { /* static fallback so HTTP + WS share one port */ },
-});
-
-const intentRegistry = new IntentRegistry();
-intentRegistry.register(MoveIntent.kind, MoveIntent.codec);
-
-const server = new ServerNetwork({
-  transport,
-  intentRegistry,
-  createPeerSnapshotRegistry: () => {
-    // Factory — runs once per new peer. Each peer gets its own registry,
-    // enabling fog-of-war and per-peer encoding.
-    const reg = new SnapshotRegistry();
-    reg.register('GameState', GameStateCodec);
-    return reg;
-  },
-  config: { debug: true, maxMessagesPerSecond: 100 },
-});
-
-server.onConnection((peerId)               => { /* ... */ });
-server.onDisconnection((peerId)            => { /* ... */ });
-server.onIntent(IntentKind.Move, (peerId, intent) => { /* ... */ });
-
-// Broadcast to all (optional filter)
-server.broadcastSnapshot('GameState', { tick, updates });
-
-// Send to one
-server.sendSnapshotToPeer(peerId, 'GameState', { tick, updates });
-
-// Broadcast with per-peer customization (fog of war)
-server.broadcastSnapshotWithCustomization('GameState', baseSnapshot, (peerId, snap) => {
-  const visible = entities.filter((e) => distance(player[peerId], e) < RADIUS);
-  return { tick: snap.tick, updates: { ...snap.updates, entities: visible } };
-});
-
-server.setPeerMetadata(peerId, 'platform', 'mobile');
-server.getPeerIds();
-server.getPeerState(peerId);
-server.close();
-```
-
-### Client
-
-```ts
-import { ClientNetwork, BunWebSocketClientTransport } from 'murow';
-
-const transport = await BunWebSocketClientTransport.connect('ws://localhost:3000');
-
-const client = new ClientNetwork({
-  transport,
-  intentRegistry,
-  snapshotRegistry,
-});
-
-client.sendIntent({ kind: IntentKind.Move, tick, dx: 1, dy: 0 });
-client.onSnapshot('GameState', (snap) => applySnapshot(state, snap));
-client.onAnySnapshot((type, snap) => { /* receive any snapshot type */ });
-client.onClose(() => { /* ... */ });
-client.getLastReceivedTick();
-client.isConnected();
-client.close();
-```
-
-### Custom transports
-
-```ts
 class MyTransport implements TransportAdapter {
-  send(data: Uint8Array): void { /* ... */ }
+  send(data: Uint8Array): void { /* copy if you queue it */ }
   onMessage(handler: (data: Uint8Array) => void): void { /* ... */ }
-  onOpen?(handler: () => void): void { /* optional — assumes connected if omitted */ }
   onClose(handler: () => void): void { /* ... */ }
   close(): void { /* ... */ }
 }
@@ -1282,7 +1222,32 @@ class MyServerTransport implements ServerTransportAdapter<MyTransport> {
 }
 ```
 
-**Important:** if your transport queues internally, you MUST copy the buffer in `send()` — `ServerNetwork`/`ClientNetwork` may reuse the underlying memory.
+If a transport queues or retains the buffer after `send()` returns, it MUST copy it. The caller may reuse the memory immediately.
+
+### Wire
+
+```ts
+import {
+  ClientMessage, ServerMessage,
+  packet, packetType, packetPayload,
+  SessionRegistry,
+} from 'murow/net/wire';
+
+const pkt = packet(ServerMessage.Snapshot, payload);
+packetType(pkt);         // ServerMessage.Snapshot
+packetPayload(pkt);      // payload view
+
+const sessions = new SessionRegistry<{ entity: number }>();
+const token = sessions.createToken();
+sessions.hold({ token, data: { entity: 7 }, graceMs: 5000, onExpire: () => { /* expired */ } });
+sessions.resume(token);  // { entity: 7 } or undefined
+```
+
+- `ServerMessage` and `ClientMessage` are the only wire kind tables.
+- `packet` / `packetU32` build a packet; `packetType` / `packetPayload` read one.
+- `SessionRegistry` uses `generateId()` for unpredictable tokens, keeps held sessions in a `SlotMap`, and resumes them by scanning that small set.
+
+There is no UDP adapter yet. Fragmentation, channels, acknowledgements, MTU limits, and pacing belong in the wire layer when they land.
 
 ---
 
@@ -1315,9 +1280,13 @@ function onServerSnapshot(snapshot: { tick: number; state: PositionSnapshot }) {
 
 `murow/netcode` builds authoritative multiplayer over `murow`'s protocol + net primitives: intents, RPCs, snapshot sync, client prediction with rollback, jitter interpolation, interest plugins, and lag compensation. `GameServer`/`GameClient` extend `EventSystem`.
 
+**Protocol.** Define intents, RPCs, and custom messages once with `defineProtocol({ version, intents, rpcs, messages })` and pass the same object to `GameServer` and `GameClient`. Its fingerprint covers the version and every schema; the handshake combines it with the ECS component fingerprint. `defineIntents`/`defineRpcs`/`defineSnapshots` remain for raw registries.
+
 The full design + API reference — networked components and `networked()` options, `defineIntents`/`defineRpcs`/`definePredictions`/`defineHandlers` and the `ctx` surface, server/client constructor options and events, plugins (`AoiGrid`, `LagCompensation`), transports, wire formats, and the "not wired up yet" caveats — is in the [netcode guide](./docs/netcode.md).
 
-**Custom (non-entity) messages — `defineSnapshots`.** Entity snapshots carry scalar components only. Declare `defineSnapshots({ tiles: { cells: arrayOf({ index: u32, owner: u16 }) } })` and pass it as `protocol.snapshots` for typed named messages (arrays included); send via `server.sendMessageToPeer`/`broadcastMessage`/`client.sendMessage`, receive via `on('message')` (a discriminated union over the schema map). `arrayOf` is not available in intents or RPCs. Details: [netcode guide](./docs/netcode.md).
+`DirtyStateChecker` (from `murow/netcode`) reads the ECS dirty flags that drive snapshots: `count()`, `isDirty()`, `assertDirty()`, `assertClean()`, and `report()`. Use it in tests to prove a snapshot tick clears dirty state and a prediction marks its networked component dirty.
+
+**Custom (non-entity) messages — `defineSnapshots`.** Entity snapshots carry scalar components only. Declare `defineSnapshots({ tiles: { cells: arrayOf({ index: u32, owner: u16 }) } })` and pass it as `protocol.messages` for typed named messages (arrays included); send via `server.sendMessageToPeer`/`broadcastMessage`/`client.sendMessage`, receive via `on('message')` (a discriminated union over the schema map). `arrayOf` is not available in intents or RPCs. Details: [netcode guide](./docs/netcode.md).
 
 ## Renderer Abstractions (in `murow`)
 
@@ -1438,7 +1407,7 @@ renderer.cameras.remove(minimap);
 - View fields: `rect` (normalized, top-left origin), `mask`, `enabled`, `priority`, `clearColor`, `clearDepth`, `name`.
 - Views draw in ascending `priority`. The first enabled view clears the color target; later views load unless `clearColor` is set. A clear affects the whole attachment, not the viewport.
 - Camera effects require a full-screen `rect`; partial views skip them.
-- Occlusion culling is enabled only with a single camera view. LOD and directional shadows follow the primary camera.
+- Occlusion culling is enabled only with a single camera view. LOD follows the current primary; directional shadow focus and the stateful raycast stay on the camera that was primary at renderer construction when `setPrimary` is called later.
 - `raycast`, `worldToScreen`, and `storePreviousState` defaults use the primary camera. For a partial rect, screen coordinates for that camera are local to the view.
 - Camera handles have `destroy()`, which refuses to remove the last camera. `get`/`primary` return `undefined` when absent.
 - `cameras.each` is zero-alloc; `all()` and `ordered()` return reused arrays. Events: `add`, `remove`, `primary`.
@@ -1531,7 +1500,7 @@ my-game/
   shared/
     constants.ts     // TICK_RATE, WS_PATH, MOVE_SPEED, world bounds — one source of truth
     components.ts     // defineComponent(...) for every networked + local component
-    protocol.ts       // defineIntents({...}) and defineRpcs({...})
+    protocol.ts       // defineProtocol({ version, intents, rpcs, messages? })
     predictions.ts    // definePredictions(intents, {...}) — runs on BOTH sides
     handlers.ts       // defineHandlers(intents, {...}) — server-only (imported only by server)
     index.ts          // re-exports the above
@@ -1594,7 +1563,7 @@ const transport = BunWebSocketServerTransport.create(PORT, {
     return new Response('Not Found', { status: 404 });
   },
 });
-const server = new GameServer({ world: arena.world, loop: arena.loop, transport, protocol: { intents, rpcs }, snapshot: { rate: TICK_RATE } });
+const server = new GameServer({ world: arena.world, loop: arena.loop, transport, protocol, snapshot: { rate: TICK_RATE } });
 server.use(predictions);
 server.on('connection', ({ peer }) => {
   const e = arena.world.spawn();
@@ -1654,12 +1623,16 @@ export namespace Components {
 
 // shared/protocol.ts
 import { f32 } from 'murow';
-import { defineIntents, defineRpcs } from 'murow/netcode';
+import { defineProtocol } from 'murow/netcode';
 
-export const intents = defineIntents({
-  move: { dx: f32, dz: f32 },        // normalized direction in [-1, 1]
+export const protocol = defineProtocol({
+  version: 1,
+  intents: {
+    move: { dx: f32, dz: f32 },      // normalized direction in [-1, 1]
+  },
+  rpcs: {},                          // none needed: spawn flows through snapshots
 });
-export const rpcs = defineRpcs({});  // none needed: spawn flows through snapshots
+export const intents = protocol.intents;
 
 // shared/predictions.ts — runs on the server (authoritative) AND the client (predicted)
 import { definePredictions } from 'murow/netcode';
@@ -1705,7 +1678,7 @@ export * from './arena';
 ```ts
 import { BunWebSocketServerTransport, SimpleRNG } from 'murow';
 import { GameServer } from 'murow/netcode';
-import { TICK_RATE, WS_PATH, Arena, intents, predictions, Components, rpcs } from '../shared';
+import { TICK_RATE, WS_PATH, Arena, protocol, predictions, Components } from '../shared';
 
 const PORT  = Number(process.env.PORT) || 3010;
 const arena = new Arena('server-timeout');           // fixed-step server loop, no renderer
@@ -1727,7 +1700,7 @@ const transport = BunWebSocketServerTransport.create(PORT, {
 
 const server = new GameServer({
   world: arena.world, loop: arena.loop, transport,
-  protocol: { intents, rpcs },
+  protocol,
   snapshot: { rate: TICK_RATE },
 });
 server.use(predictions);                              // same bundle the client uses; here it's authoritative
@@ -1760,7 +1733,7 @@ import { AssetBucket, World, GameLoop, type Entity } from 'murow';
 import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-websocket';
 import { GameClient } from 'murow/netcode';
 import { WebGPU3DRenderer, type InstanceHandle } from 'murow/webgpu';
-import { Components, intents, rpcs, predictions } from './shared';
+import { Components, protocol, predictions, TICK_RATE } from './shared';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const assets = new AssetBucket('3d')
@@ -1771,12 +1744,12 @@ const renderer = new WebGPU3DRenderer(canvas, { assets, maxInstances: 64, autoRe
 await renderer.init();
 
 const world = new World({ maxEntities: 64, components: Object.values(Components) });
-const loop  = new GameLoop({ tickRate: 20, type: 'client' });
+const loop  = new GameLoop({ tickRate: TICK_RATE, type: 'client' });
 
 const client = new GameClient({
   world, loop,
   transport: new BrowserWebSocketClientTransport(`ws://${location.host}/ws`),
-  protocol:  { intents, rpcs },
+  protocol,
   strategy:  { kind: 'snapshot-interpolation', delay: 200, staleWindow: 500 },
 });
 client.use(predictions);

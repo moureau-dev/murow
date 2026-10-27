@@ -348,7 +348,7 @@ renderer.cameras.setPrimary(main);
 renderer.cameras.remove(minimap);
 ```
 
-`create` throws when `maxCameras` (default 2) is reached. Views draw in ascending `priority`; the first enabled view clears the color target and later views load unless `clearColor` is set. Camera effects require a full-screen rect. Occlusion culling runs only with one view, and LOD plus directional shadows follow the primary camera. `raycast` and `worldToScreen` default to the primary; for a partial rect, screen coordinates are local to the view.
+`create` throws when `maxCameras` (default 2) is reached. Views draw in ascending `priority`; the first enabled view clears the color target and later views load unless `clearColor` is set. Camera effects require a full-screen rect. Occlusion culling runs only with one view. LOD follows the current primary; directional shadow focus and the stateful raycast stay on the camera that was primary at construction when `setPrimary` is called later. `raycast` and `worldToScreen` default to the primary; for a partial rect, screen coordinates are local to the view.
 
 ### 2D — `WebGPU2DRenderer`
 

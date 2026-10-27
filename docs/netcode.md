@@ -76,7 +76,7 @@ The server is the single authority. The client predicts, but the server's snapsh
 Ownership is a server-side binding, not a component. On connect the server spawns the player entity and calls `assignEntity`. That call:
 
 - fills `ctx.entity` for that peer's intents (predictions and handlers),
-- sends the client an assignment frame,
+- sends the client an assignment packet,
 - makes the client auto-mark that entity as predicted, so reconciliation only rolls back what the peer owns.
 
 Server-spawned entities (projectiles, NPCs, pickups) are **not** assigned to anyone. They replicate to clients purely by being dirty and networked. Clients tell "mine vs theirs" apart with `client.assignedEntity`.
@@ -145,7 +145,7 @@ Register the plugin once at server setup; without it `lagCompensated` is a no-op
 server.use(new LagCompensation({ tickRate: 20, historyMs: 500, components: [Position] }));
 ```
 
-`LagCompensation` only rewinds the components you register with it. Anything not listed is read at the current tick. The history is a preallocated ring of binary frames, so steady-state ticks and rewinds allocate nothing, but its memory scales with `maxEntities × ringSize × bytesPerEntity`. Register one instance per server, not per match or per peer.
+`LagCompensation` only rewinds the components you register with it. Anything not listed is read at the current tick. The history is a preallocated ring of binary records, so steady-state ticks and rewinds allocate nothing, but its memory scales with `maxEntities × ringSize × bytesPerEntity`. Register one instance per server, not per match or per peer.
 
 ### Area of interest — filtering what each peer receives
 
@@ -153,7 +153,7 @@ Full snapshots of a thousand entities do not scale. `AoiGrid` filters each peer'
 
 Interest plugins are consulted against the candidate set on their own, and a component's `sync.interest` selects which govern it. A rule is a single source (`'global'` or a plugin name, as before) or a **combination**: `{ all: ['aoi', 'team'] }` ships the component only when every named source admits the entity, `{ any: ['aoi', 'team'] }` when at least one does; `'global'` inside a list always admits. So one entity can ship different components to different peers (e.g. `Position` under an `AoiGrid`, a team-only component under a visibility plugin), and a single component can require several sources at once. A `'global'` component is never filtered and forces its entity into the snapshot — mark spatially-filtered components with the AOI plugin's name, not `'global'`, or they leak.
 
-On connect the server sends a **schema fingerprint** (derived from the synced components, or the `schemaFingerprint` option); a client whose schema differs fires an `'error'` with context `'schema-fingerprint'` — a cheap guard against client/server layout drift.
+On connect the server sends a **schema fingerprint** derived from the synced components plus the `defineProtocol` fingerprint (or the `schemaFingerprint` option); a client whose schema or protocol version differs fires an `'error'` with context `'schema-fingerprint'` — a cheap guard against client/server drift.
 
 Two bandwidth levers: `networked({ quantize: { x: { min, max, bits } } })` sends a field as an 8/16-bit integer over a range (store stays `f32`; e.g. a position `f32` → 2 bytes), and the server's `snapshot.maxBytesPerPeer` caps each peer's entity body, sending highest-`priority` entities first and deferring the rest to the next tick (they stay dirty).
 
@@ -239,7 +239,7 @@ loop.events.on('tick', ({ tick }) => {
 
 ## Entity assignment and reconnection
 
-Assignment is explicit and one-directional: the server calls `assignEntity`, the client receives `'assigned'`. `client.sendIntent` returns `false` until that frame arrives (and emits an `error` with `context: 'sendIntent'`), so a client can safely call it before it knows its entity — the engine drops the call instead of mis-firing the prediction.
+Assignment is explicit and one-directional: the server calls `assignEntity`, the client receives `'assigned'`. `client.sendIntent` returns `false` until that packet arrives (and emits an `error` with `context: 'sendIntent'`), so a client can safely call it before it knows its entity — the engine drops the call instead of mis-firing the prediction.
 
 ```ts
 server.on('connection', ({ peer }) => {
@@ -253,7 +253,7 @@ server.on('disconnection', ({ peer }) => {
 });
 ```
 
-If the assignment frame lands before the matching spawn, the client buffers it and resolves on the spawn.
+If the assignment packet lands before the matching spawn, the client buffers it and resolves on the spawn.
 
 ### Reconnection
 
@@ -380,6 +380,30 @@ Every field is honored at runtime:
 | `interp` | `'lerp'`, `'step'`, `'none'` | yes | per-component dispatch on the client interpolation buffer |
 | `interp` | `'slerp'` | yes | treats the component as a quaternion and slerps along the shortest arc (other shapes fall back to `'lerp'`) |
 | `snapThreshold` | number | yes | the client snaps instead of smoothing once the desync exceeds it |
+
+### Protocol — `defineProtocol`
+
+Define the wire contract once and pass it to both sides:
+
+```ts
+import { defineProtocol } from 'murow/protocol';
+import { f32, u16 } from 'murow';
+
+export const protocol = defineProtocol({
+  version: 1,
+  intents: { move: { dx: f32, dz: f32 } },
+  rpcs: { buy: { item: u16 } },
+});
+
+new GameServer({ world, loop, transport, protocol });
+new GameClient({ world, loop, transport, protocol });
+```
+
+`defineProtocol` assigns intent kinds, builds the registries, and computes a
+fingerprint over the version and every schema. The handshake combines that with
+the ECS component fingerprint; a mismatch fires `'error'` with context
+`'schema-fingerprint'`. `defineIntents`, `defineRpcs`, and `defineSnapshots`
+still work for raw registries.
 
 ### Message schemas — `defineIntents`, `defineRpcs`, `defineSnapshots`
 
@@ -539,7 +563,7 @@ interface GameServerOptions<I, R> {
   kick?: {
     ackTimeout?: number;        // ms with no ack before forcing transport close. Default: 2000
   };
-  schemaFingerprint?: string;   // override the derived synced-schema fingerprint; a client mismatch fires 'error' (context 'schema-fingerprint')
+  schemaFingerprint?: string;   // override the derived component + protocol fingerprint; mismatch fires 'error' (context 'schema-fingerprint')
 }
 ```
 
@@ -553,7 +577,7 @@ class GameServer<I, R> {
   sendRpc<K extends keyof R & string>(peer: Peer, name: K, payload: RpcPayload<R, K>): void;
   broadcastRpc<K extends keyof R & string>(name: K, payload: RpcPayload<R, K>): void;
 
-  // Soft-kick: send a KICK frame, wait kick.ackTimeout (default 2000ms) for the
+  // Soft-kick: send a KICK packet, wait kick.ackTimeout (default 2000ms) for the
   // client's ack, then force-close the transport. The client gets 'kicked'.
   kick(peer: Peer, reason: string): void;
 }
@@ -601,7 +625,7 @@ interface GameClientOptions<I, R> {
 
 ```ts
 class GameClient<I, R> {
-  // Local entity the server assigned to this peer, or null before the assignment frame.
+  // Local entity the server assigned to this peer, or null before the assignment packet.
   readonly assignedEntity: Entity | null;
 
   // true when sent + predicted locally; false when the name isn't in the schema
@@ -650,7 +674,7 @@ client.on('pong',         ({ rtt })                             => {});  // roun
 client.on('error',        ({ error, context })                  => {});
 ```
 
-`rewindTick` carries the server's contiguous-applied intent sequence (not the game tick) — the cut-off the reconciler used to drop history. Every networked entity reaches the client through `'spawn'` — your own player, other players, and server-spawned NPCs/projectiles alike. Tell yours apart with `client.assignedEntity` (or the id from the `'assigned'` event). If the `assigned` frame lands before the matching spawn, the client buffers it and resolves on the spawn.
+`rewindTick` carries the server's contiguous-applied intent sequence (not the game tick) — the cut-off the reconciler used to drop history. Every networked entity reaches the client through `'spawn'` — your own player, other players, and server-spawned NPCs/projectiles alike. Tell yours apart with `client.assignedEntity` (or the id from the `'assigned'` event). If the `assigned` packet lands before the matching spawn, the client buffers it and resolves on the spawn.
 
 Event payload shapes are exported as `ServerEventPayloads` and `ClientEventPayloads`; both `GameServer` and `GameClient` extend `EventSystem<...>` with them, so `on()` is fully typed. Import the payload types to type a handler outside the class:
 
@@ -726,7 +750,7 @@ class LagCompensation {
 }
 ```
 
-History is a ring of preallocated binary frames sized from `maxEntities × ((historyMs / 1000 × tickRate) + 1)`; steady-state ticks and rewinds allocate nothing. Register one instance per server at setup, never per match or per peer.
+History is a ring of preallocated binary records sized from `maxEntities × ((historyMs / 1000 × tickRate) + 1)`; steady-state ticks and rewinds allocate nothing. Register one instance per server at setup, never per match or per peer.
 
 Writing your own plugin:
 
@@ -796,11 +820,11 @@ assignment       : [type=0x84][serverEid u32]
 
 `clientAckTick` is the highest **contiguous-applied intent sequence** the server has applied for the receiving peer (the field name is historical — it carries a per-send sequence, not a game tick). The reconciler uses it to drop confirmed predictions; server and client tick counters are independent.
 
-Each `sendIntent` increments a per-client monotonic sequence (never reused, never skipped). The server applies intents in sequence order and only advances `clientAckTick` once every prior sequence has been applied, so the client's prediction-history cut-off is safe under reorder, packet loss, or skipped game ticks. On an unreliable transport, set `retransmitMs` to recover a dropped intent without waiting for the client to time it out: once the oldest unacked frame has been in flight that long, it is resent verbatim. The server dedups by sequence, so a resend of an already-applied intent is a no-op. The client emits `'intent-retransmit'`.
+Each `sendIntent` increments a per-client monotonic sequence (never reused, never skipped). The server applies intents in sequence order and only advances `clientAckTick` once every prior sequence has been applied, so the client's prediction-history cut-off is safe under reorder, packet loss, or skipped game ticks. On an unreliable transport, set `retransmitMs` to recover a dropped intent without waiting for the client to time it out: once the oldest unacked packet has been in flight that long, it is resent verbatim. The server dedups by sequence, so a resend of an already-applied intent is a no-op. The client emits `'intent-retransmit'`.
 
 ### Transports
 
-Implement `TransportAdapter` from `murow`. Test transports live in `murow/net`:
+Implement `TransportAdapter` from `murow/net`. Test transports live in the same package:
 
 - `MemoryServerTransport` — in-process server/client pair over microtasks, no clock. `connectClient()` returns `{ client, peerId }`. Good for fast integration tests of assignment, intents, and reconciliation.
 - `VirtualServerTransport` — simulated latency, jitter, loss, and reorder; seeded and deterministic. You drive a `VirtualNetwork` clock with `vnet.advance(ms)`.
