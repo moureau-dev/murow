@@ -88,7 +88,6 @@ client.use(predictions);
 // ──────────────────────────────────────────────────────────────────────
 
 const handles = new SlotStore<Entity, Handles.MeshInstanceHandle>(100);
-let localEntity: Entity | null = null;
 
 client.on('spawn', ({ entity }) => {
     const c = arena.world.has(entity, Components.Color) ? arena.world.get(entity, Components.Color) : { r: 200, g: 200, b: 200 };
@@ -103,20 +102,13 @@ client.on('spawn', ({ entity }) => {
     playerCount.textContent = String(handles.size);
 });
 
-// The server tells us which entity is ours via `assignEntity`. The
-// client auto-marks it predicted; we just need to remember which one
-// it is so the WASD intent targets the right entity.
-client.on('assigned', ({ entity }) => {
-    localEntity = entity;
-});
-
 client.on('despawn', ({ entity }) => {
     const handle = handles.get(entity);
     if (handle !== undefined) {
         handle.destroy();
         handles.remove(entity);
     }
-    if (localEntity === entity) localEntity = null;
+
     playerCount.textContent = String(handles.size);
 });
 
@@ -158,7 +150,7 @@ arena.loop.events.on('render', ({ alpha }) => {
 
 arena.loop.events.on('tick', ({ input }) => {
     systems.move(input);
-    systems.orbit(input, localEntity);
+    systems.orbit(input);
     systems.sync()
 });
 
@@ -233,7 +225,8 @@ function createSystems({
         /**
          * Camera orbit
          */
-        orbit: (input: InputSnapshot, eid: number) => {
+        orbit: (input: InputSnapshot) => {
+            const eid = client.assignedEntity;
             if (!eid) return;
 
             mouseLook.update(input);
