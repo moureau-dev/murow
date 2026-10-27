@@ -58,6 +58,8 @@ export interface WebGPU2DRendererOptions<A extends AssetBucket<'2d', any, any> =
     maxLayers?: number;
     /** Max registered cameras. Defaults to 4. */
     maxCameras?: number;
+    /** Options for the auto-created primary camera. */
+    camera?: Camera2DCreateOptions | false;
 }
 
 export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucket<'2d', any, any>> extends BaseRenderer<Renderer2DOptions> {
@@ -115,7 +117,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
             },
             this.logger,
         );
-        this.core.camera = this.cameras.create({});
+        if (options.camera !== false) this.core.camera = this.cameras.create(options.camera ?? {});
         this.core.width = canvas.width || 1;
         this.core.height = canvas.height || 1;
         this._prefabs = (options.assets?.prefabs as unknown as PrefabBucket2D | undefined) ?? null;
@@ -125,7 +127,11 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     get format(): RawTextureFormat { return this.core.format; }
 
     /** The primary 2D camera. */
-    get camera(): CameraManager2D { return this.cameras.primary ?? this.core.camera; }
+    get camera(): CameraManager2D {
+        const primary = this.cameras.primary ?? this.core.camera;
+        if (primary === undefined) throw new Error('WebGPU2DRenderer: no primary camera');
+        return primary;
+    }
 
     /**
      * Project a 2D world point to canvas CSS pixels (for HTML overlays via
@@ -144,6 +150,12 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
     }
 
     async init(): Promise<void> {
+        const primary = this.cameras.primary;
+        if (primary === undefined) {
+            throw new Error('WebGPU2DRenderer: no camera. Create one with renderer.cameras.create() before init(), or leave the camera option enabled.');
+        }
+        this.core.camera = primary;
+
         this.runtime = runtime();
         const presentation = await this.runtime.createPresentation(this.canvas);
         this.core.root = { device: presentation.device } as never;

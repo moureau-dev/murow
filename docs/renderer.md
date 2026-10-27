@@ -348,6 +348,23 @@ renderer.cameras.setPrimary(main);
 renderer.cameras.remove(minimap);
 ```
 
+`renderer.camera` is created automatically. Configure it with the renderer's `camera` option instead of creating a second camera:
+
+```ts
+const renderer = new WebGPU3DRenderer(canvas, {
+  camera: { fov: 65, near: 0.05, far: 100 },
+});
+const camera = renderer.camera;
+```
+
+Set `camera: false` to disable auto-creation. Then create the primary before `init()`:
+
+```ts
+const renderer = new WebGPU3DRenderer(canvas, { camera: false });
+const camera = renderer.cameras.create({ fov: 65, near: 0.05, far: 100 });
+await renderer.init();
+```
+
 `create` throws when `maxCameras` (default 2) is reached. Views draw in ascending `priority`; the first enabled view clears the color target and later views load unless `clearColor` is set. Camera effects require a full-screen rect. Occlusion culling runs only with one view. LOD follows the current primary; directional shadow focus and the stateful raycast stay on the camera that was primary at construction when `setPrimary` is called later. `raycast` and `worldToScreen` default to the primary; for a partial rect, screen coordinates are local to the view.
 
 ### 2D — `WebGPU2DRenderer`
@@ -361,6 +378,7 @@ interface WebGPU2DRendererOptions {
   autoResize?: boolean;
   maxEffects?: number;            // camera-effect chain capacity (default 20)
   maxCameras?: number;            // registered camera capacity (default 2)
+  camera?: Camera2DCreateOptions | false; // options for the primary; false disables auto-create
   maxLayers?: number;             // default layer registry capacity (1-32, default 32)
   debug?: boolean | Logger;
 }
@@ -431,6 +449,7 @@ interface WebGPU3DRendererOptions {
   maxDecals?: number;                      // max decal layers (default 16)
   maxCameraEffects?: number;               // camera-effect chain capacity (default 20)
   maxCameras?: number;                     // registered camera capacity (default 2)
+  camera?: Camera3DCreateOptions | false;  // options for the primary; false disables auto-create
   maxLayers?: number;                      // default layer registry capacity (1-32, default 32)
   maxParticles?: number;                   // max live 3D particles, rounded to a power of two (default 4096)
   maxParticleMaterials?: number;           // max distinct particle materials (default 16)

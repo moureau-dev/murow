@@ -41,6 +41,7 @@ const renderer = new WebGPU3DRenderer(canvas, {
     autoResize: true,
     assets,
     maxInstances: 64,
+    camera: false, // no default camera
 });
 await renderer.init();
 

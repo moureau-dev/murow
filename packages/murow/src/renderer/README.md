@@ -64,7 +64,7 @@ renderer.instances.add({ prefab: rock, renderLayer: world });
 
 ## Cameras
 
-A renderer exposes `cameras` (a `CameraRegistry`) and keeps `camera` as an alias for the primary. Views carry a normalized `rect`, `mask`, `priority`, and clear flags; the renderer draws enabled cameras in priority order.
+A renderer exposes `cameras` (a `CameraRegistry`) and keeps `camera` as an alias for the primary. The primary is created automatically; configure it with the renderer's `camera` option rather than creating a second camera. Pass `camera: false` to disable auto-creation, then create the primary before `init()`. Views carry a normalized `rect`, `mask`, `priority`, and clear flags; the renderer draws enabled cameras in priority order.
 
 ```typescript
 const main = renderer.cameras.create({ position: [0, 5, -10], target: [0, 0, 0] });

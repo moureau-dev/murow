@@ -15,6 +15,7 @@ import type {
 } from 'murow/renderer';
 import type { Logger } from 'murow/core';
 import type { LayerRegistry } from '../../../layers';
+import type { Camera3DCreateOptions } from '../cameras/camera-3d';
 import type { Handles } from '../handles';
 import type { MaterialHandle } from '../materials';
 
@@ -115,6 +116,8 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
     layers?: LayerRegistry;
     /** Layer capacity for the default registry. Default 32, maximum 32. */
     maxLayers?: number;
+    /** Options for the auto-created primary camera. */
+    camera?: Camera3DCreateOptions | false;
     /**
      * Occlusion culling. Only active when the backend runtime provides the port.
      * `interval` is how many ticks between tracked-handle refreshes (default 15);

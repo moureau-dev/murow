@@ -1387,7 +1387,20 @@ const gun = renderer.instances.add({ prefab: gunPrefab, renderLayer: 'viewmodel'
 
 ## Cameras
 
-Every renderer exposes `cameras`, a registry. `renderer.camera` is the primary camera, so single-camera code keeps working.
+Every renderer exposes `cameras`, a registry. `renderer.camera` is the auto-created primary camera, so single-camera code keeps working. Configure it through the renderer's `camera` option instead of creating a second camera:
+
+```ts
+const renderer = new WebGPU3DRenderer(canvas, { camera: { fov: 65, near: 0.05, far: 100 } });
+const camera = renderer.camera;
+```
+
+`camera: false` disables auto-creation. Then create the primary before `init()`:
+
+```ts
+const renderer = new WebGPU3DRenderer(canvas, { camera: false });
+const camera = renderer.cameras.create({ fov: 65, near: 0.05, far: 100 });
+await renderer.init();
+```
 
 ```ts
 const main = renderer.cameras.create({ position: [0, 5, -10], target: [0, 0, 0] });

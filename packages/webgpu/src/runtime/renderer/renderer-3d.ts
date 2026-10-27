@@ -132,7 +132,13 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     readonly layers: LayerRegistry;
     raycast!: Raycast3D;
     /** The primary camera. */
-    get camera(): CameraManager { return this.cameras.primary!; }
+    get camera(): CameraManager {
+        const primary = this.cameras.primary;
+        if (primary === undefined) {
+            throw new Error('WebGPU3DRenderer: no camera. Create one with renderer.cameras.create() before init(), or leave the camera option enabled.');
+        }
+        return primary;
+    }
     /** Names auto-assigned to internal (decal) materials that have none. */
     private decalMaterialSeq = 0;
     private lastRenderTime = 0;
@@ -229,7 +235,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             },
             this.logger,
         );
-        this.cameras.create({});
+        if (options.camera !== false) this.cameras.create(options.camera ?? {});
 
         this._assets = options.assets ?? null;
         this._prefabs = options.assets?.prefabs as unknown as PrefabBucket3D ?? null;
@@ -273,6 +279,10 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     }
 
     async init(): Promise<void> {
+        if (this.cameras.primary === undefined) {
+            throw new Error('WebGPU3DRenderer: no camera. Create one with renderer.cameras.create() before init(), or leave the camera option enabled.');
+        }
+
         // Request the adapter ourselves so we can read its limits and forward
         // them as `requiredLimits` to the device. The defaults are very low
         // (128 MB max storage buffer); for skinned scenes the bone-matrix
