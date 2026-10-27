@@ -376,6 +376,7 @@ export class BeamItem implements BeamHandle {
     private readonly segments: number;
     private readonly noise: number;
     private readonly noiseFrequency: number;
+    private readonly noiseSpeed: number;
     private readonly scratch: Float32Array;
     private time = 0;
 
@@ -410,6 +411,7 @@ export class BeamItem implements BeamHandle {
         this.segments = Math.max(1, Math.floor(options.segments ?? 1));
         this.noise = Math.max(0, options.noise ?? 0);
         this.noiseFrequency = Math.max(0, options.noiseFrequency ?? 2);
+        this.noiseSpeed = Math.max(0, options.noiseSpeed ?? 1);
         this.scratch = new Float32Array((this.segments + 1) * 3);
     }
 
@@ -475,10 +477,13 @@ export class BeamItem implements BeamHandle {
         for (let i = 0; i < count; i++) {
             const t = i / this.segments;
             const envelope = Math.sin(Math.PI * t);
-            // Smooth travelling wave: no per-segment phase jumps.
-            const wobble = this.noise * envelope * (
-                Math.sin(t * Math.PI * 2 * this.noiseFrequency - this.time * 1.6) * 0.75 +
-                Math.sin(t * Math.PI * 2 * this.noiseFrequency * 2.0 + this.time * 0.9) * 0.25
+            // Smooth wave. `noiseSpeed = 0` stands still and breathes instead of
+            // crawling from one endpoint to the other.
+            const phase = this.time * this.noiseSpeed;
+            const breathe = 0.85 + 0.15 * Math.sin(this.time * 1.7);
+            const wobble = this.noise * envelope * breathe * (
+                Math.sin(t * Math.PI * 2 * this.noiseFrequency - phase * 1.6) * 0.75 +
+                Math.sin(t * Math.PI * 2 * this.noiseFrequency * 2.0 + phase * 0.9) * 0.25
             );
             this.scratch[i * 3] = fromX + dx * t + px * wobble;
             this.scratch[i * 3 + 1] = fromY + dy * t + py * wobble;

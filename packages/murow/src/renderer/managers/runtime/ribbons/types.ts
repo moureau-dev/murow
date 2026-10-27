@@ -99,6 +99,8 @@ export interface BeamOptions {
     readonly segments?: number;
     readonly noise?: number;
     readonly noiseFrequency?: number;
+    /** How fast the wave pattern travels, in pattern-lengths per second. Default 1. Set 0 for a standing tether. */
+    readonly noiseSpeed?: number;
 }
 
 /** A raw line or ribbon strip. */

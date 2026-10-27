@@ -231,6 +231,7 @@ export class RibbonBatch {
         this.sampler = this.device.createSampler({
             magFilter: 'linear',
             minFilter: 'linear',
+            mipmapFilter: 'linear',
             addressModeU: 'repeat',
             addressModeV: 'repeat',
         });
