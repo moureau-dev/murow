@@ -11,6 +11,34 @@ Minimalist primitives for networked multiplayer games. Intents, snapshots, and R
 
 That's it. No loops, no queues, no storage - just the codec layer.
 
+## Defined protocol
+
+Bundle intents, RPCs, and custom messages into one versioned object:
+
+```ts
+import { defineProtocol } from 'murow/protocol';
+import { f32, u16, u32 } from 'murow';
+
+const protocol = defineProtocol({
+  version: 1,
+  intents: { move: { dx: f32, dz: f32 } },
+  rpcs: { buy: { item: u16 } },
+  messages: { chat: { text: string(64) } },
+});
+
+protocol.fingerprint; // stable over version + every schema
+protocol.intents;     // DefinedIntents
+protocol.rpcs;        // DefinedRpcs
+protocol.messages;    // DefinedSnapshots | undefined
+```
+
+Pass the same object to `GameServer` and `GameClient`. The handshake combines
+this fingerprint with the ECS component fingerprint, so a version or schema
+drift is caught before the first snapshot.
+
+`defineIntents`, `defineRpcs`, and `defineSnapshots` remain available when you
+only need one registry or are migrating incrementally.
+
 ## Quick Start
 
 ### 1. Define Your Intent Kinds

@@ -1,12 +1,12 @@
 import type { TransportAdapter } from "../types";
 
 /**
- * Browser WebSocket transport adapter for ClientNetwork
+ * Browser WebSocket transport adapter
  *
  * @example
  * ```ts
  * const transport = new BrowserWebSocketClientTransport("ws://localhost:3007");
- * const client = new ClientNetwork({ transport, ... });
+ * const transport = new BrowserWebSocketClientTransport(url);
  * ```
  */
 export class BrowserWebSocketClientTransport implements TransportAdapter {

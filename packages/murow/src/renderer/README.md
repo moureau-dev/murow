@@ -78,7 +78,7 @@ const minimap = renderer.cameras.create({
 renderer.cameras.setPrimary(main);
 ```
 
-`create` throws at `maxCameras` (default 2). The first view clears the color target; later views load unless `clearColor` is set. Camera effects need a full-screen rect. Occlusion culling is limited to one view, and LOD, directional shadows, raycasts, and `worldToScreen` default to the primary camera.
+`create` throws at `maxCameras` (default 2). The first view clears the color target; later views load unless `clearColor` is set. Camera effects need a full-screen rect. Occlusion culling is limited to one view. LOD follows the current primary; directional shadow focus and the stateful raycast stay on the camera that was primary at construction when `setPrimary` is called later. `worldToScreen` defaults to the primary camera.
 
 ## Assets
 

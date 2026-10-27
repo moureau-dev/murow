@@ -1,63 +1,25 @@
 /**
  * @module net
  *
- * Transport-agnostic networking layer for multiplayer games
+ * Transport and wire primitives for multiplayer games.
  *
- * This module provides generic client/server abstractions that work with any transport layer
- * (WebSocket, WebRTC, UDP, Socket.io, etc.)
- *
- * Key features:
- * - Per-peer snapshot registry tracking (fog of war, interest management)
- * - Type-safe intent/snapshot encoding
- * - Pluggable transport adapters
- * - Connection lifecycle management
+ * This module is the agnostic base: transport adapters, packet helpers, and
+ * session identity. It does not know about ECS, snapshots, prediction, or game
+ * authority. The opinionated ECS backend is `murow/netcode`.
  *
  * @example
  * ```typescript
- * import { ServerNetwork, ClientNetwork } from 'murow/net';
- * import { BunWebSocketServerTransport } from 'murow/net/transports/bun-websocket';
- * import { IntentRegistry, SnapshotRegistry } from '@mococa/protocol';
+ * import { BunWebSocketServerTransport } from 'murow/net';
+ * import { ServerMessage, packet } from 'murow/net/wire';
  *
- * // Server setup
  * const transport = BunWebSocketServerTransport.create(3000);
- * const server = new ServerNetwork({
- *   transport,
- *   intentRegistry: new IntentRegistry(),
- * });
- *
- * // Per-peer snapshot registry factory
- * const server = new ServerNetwork({
- *   transport,
- *   intentRegistry: new IntentRegistry(),
- *   createPeerSnapshotRegistry: () => {
- *     const registry = new SnapshotRegistry();
- *     registry.register('GameState', gameStateCodec);
- *     return registry;
- *   }
- * });
- *
- * // Handle intents
- * server.onIntent(IntentKind.Move, (peerId, intent) => {
- *   console.log(`Player ${peerId} moved:`, intent);
- * });
- *
- * // Broadcast snapshots (each peer uses their own registry)
- * server.broadcastSnapshot('GameState', {
- *   tick: 100,
- *   updates: { players: [...] }
- * });
+ * peer.send(packet(ServerMessage.Snapshot, payload));
  * ```
  */
 
 export * from "./types";
-export * from "./server";
-export * from "./client";
 export * from "./adapters/bun-websocket";
 export * from "./adapters/virtual-network";
 export * from "./adapters/memory-transport";
 export * as Transports from "./adapters";
-export * from "./buffer-pool";
-export * from "./validators";
-
-// Re-export commonly used enums for convenience
-export { MessageType, MessagePriority } from "./types";
+export * from "./wire";

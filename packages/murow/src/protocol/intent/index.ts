@@ -92,3 +92,4 @@ export type { Intent } from "./intent";
 export { IntentRegistry } from "./intent-registry";
 export { defineIntent } from "./define-intent";
 export type { DefinedIntent, InferIntentType, IntentDataOnly } from "./define-intent";
+export * from './define-intents';

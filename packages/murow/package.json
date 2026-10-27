@@ -92,6 +92,17 @@
       "require": "./dist/cjs/net/index.js",
       "default": "./dist/esm/net/index.js"
     },
+    "./net/wire": {
+      "types": "./dist/types/net/wire/index.d.ts",
+      "import": "./dist/esm/net/wire/index.js",
+      "require": "./dist/cjs/net/wire/index.js",
+      "default": "./dist/esm/net/wire/index.js"
+    },
+    "./net/wire/*": {
+      "types": "./dist/types/net/wire/*.d.ts",
+      "import": "./dist/esm/net/wire/*.js",
+      "require": "./dist/cjs/net/wire/*.js"
+    },
     "./net/*": {
       "types": "./dist/types/net/*.d.ts",
       "import": "./dist/esm/net/*.js",

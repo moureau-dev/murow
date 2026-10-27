@@ -56,60 +56,13 @@ Minimalist networking primitives:
 - [`applySnapshot()`](./src/protocol/snapshot) — Deep merge snapshots into state
 - [`RpcRegistry` & `defineRpc()`](./src/protocol/rpc) — Type-safe RPC definitions
 
-### [Network](./src/net) — Transport-agnostic networking
-Transport-agnostic client/server abstractions:
-- `ServerNetwork` — Multiplayer game server with per-peer snapshot registries
-- `ClientNetwork` — Game client with intent/snapshot handling
-- `TransportAdapter` — Pluggable transport interface
-- `BunWebSocketTransport` — Bun WebSocket implementation (reference)
+### [Network](./src/net) — Transport and wire primitives
+Agnostic transport adapters, frame helpers, and session identity. No ECS.
 
-Key features:
-- **Per-peer snapshot registries** for fog of war and interest management
-- **Transport agnostic** — works with WebSocket, WebRTC, UDP, etc.
-- **Type-safe** protocol integration with `IntentRegistry` and `SnapshotRegistry`
+- `TransportAdapter` / `ServerTransportAdapter` — pluggable transport interfaces
+- `BunWebSocketServerTransport`, browser WebSocket, memory, virtual network
+- `murow/net/wire` — message kinds, frame helpers, `SessionRegistry`
 
-### [Renderer](./src/renderer) — Abstract renderer interfaces + asset pipeline
-Renderer-agnostic primitives consumed by any backend (`@murow/webgpu`, future PixiJS, Three.js, …).
-- `BaseRenderer` / `Base2DRenderer` / `Base3DRenderer` — abstract contracts
-- [`AssetBucket`](./src/renderer/buckets/asset) — typed registry for textures + spawnable assets. Declare → load → typed lookup; the renderer self-sizes from the bucket (`PrefabBucket` is the underlying prefab registry, exposed as `assets.prefabs`)
-- `parseGltf` / `parseSpritesheet` — pure CPU parsers (no GPU, no canvas)
-- `SkeletalAnimation` — CPU-side bone evaluation for skinned meshes
+Netcode (`GameServer` / `GameClient`) is the opinionated ECS backend on top of
+these primitives.
 
-### [DOM](./src/dom) — World-anchored HTML overlays
-`HTMLDom` ties DOM elements to world points via a renderer's `worldToScreen`, for nameplates, health bars and damage numbers. Renderer-agnostic (2D or 3D), pooled with a global budget.
-
-### [WebGPU](../webgpu) — WebGPU rendering backend
-The WebGPU renderer is bundled with murow and accessible via `murow/webgpu`:
-
-```typescript
-import { WebGPU2DRenderer, WebGPU3DRenderer } from 'murow/webgpu';
-```
-
-See [WebGPU README](../webgpu/README.md) for full documentation.
-
-Shader bodies are parsed from their source at link time, so **identifier minification is safe but syntax minification is not** (statement folding corrupts the parsed bodies). Keep syntax folding off in bundles containing shaders — esbuild `minifySyntax: false`. Vite's default `build.minify: 'esbuild'` includes it.
-
-### [Netcode](../netcode) — Multiplayer layer
-Opinionated multiplayer layer built on the `Protocol` and `Network`
-primitives above. Adds snapshot-based state sync, client-side prediction
-with rollback, jitter interpolation, server-pushed entity assignment,
-and spatial-interest plugins.
-
-```typescript
-import { GameServer, GameClient, defineIntents, definePredictions } from 'murow/netcode';
-```
-
-See [Netcode README](../netcode/README.md) for full documentation. If
-its opinions don't fit, drop down to the `Protocol` and `Network`
-primitives directly.
-
-## Building
-
-```bash
-npm install
-npm run build
-```
-
-## License
-
-MIT
