@@ -78,6 +78,13 @@ const renderer = new WebGPU3DRenderer(canvas, {
     maxInstances: 64,
     camera: false, // no default camera
 });
+
+const camera = renderer.cameras.create({
+    fov: 65,
+    near: 0.05,
+    far: 100,
+});
+
 await renderer.init();
 
 // Static grid floor — never moves, no per-tick update needed.
@@ -130,12 +137,6 @@ client.on('error', ({ error, context }) => {
 // ──────────────────────────────────────────────────────────────────────
 // Game loop wiring.
 // ──────────────────────────────────────────────────────────────────────
-
-const camera = renderer.cameras.create({
-    fov: 65,
-    near: 0.05,
-    far: 100,
-});
 
 const systems = createSystems({ client, camera });
 
