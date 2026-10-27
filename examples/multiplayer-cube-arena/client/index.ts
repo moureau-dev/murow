@@ -1,9 +1,10 @@
-import { InputSnapshot, SlotMap, SlotStore, Transports, World, type Entity } from 'murow';
+import { InputSnapshot, SlotStore, Transports, type Entity } from 'murow';
 import { MouseLook, ScrollZoom } from 'murow/core/input';
 import { GameClient } from 'murow/netcode';
 import { WebGPU3DRenderer } from 'murow/webgpu';
 import { AssetBucket } from 'murow/renderer';
 import type { Handles } from 'murow/renderer/managers/handles';
+import type { CameraManager } from 'murow/renderer/managers/runtime';
 import {
     ARENA_HALF,
     Arena,
@@ -14,7 +15,6 @@ import {
     predictions,
     clamp,
 } from '../shared';
-import { CameraManager } from 'murow/renderer/managers/runtime/index';
 
 // ──────────────────────────────────────────────────────────────────────
 // Renderer + prefabs
