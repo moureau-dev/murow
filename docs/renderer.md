@@ -683,14 +683,17 @@ const beam = renderer.ribbons.createBeam({
 ```
 
 - `addLine` and `add` return a `RibbonHandle` (`setPoints`, `setColor`,
-  `setWidth`, `enabled`, `destroy`). `add` accepts `closed` and `facing`.
+  `setWidth`, `setOpacity`, `setTexture`, `setBlend`, `enabled`, `destroy`).
+  `add` accepts `closed` and `facing`.
 - `createTrail` returns a `TrailHandle`. Call `setHead(x, y, z)` in `tick`;
   points are committed by `minDistance`, and `lifetime` is in seconds.
-  `setLifetime`, `setWidth`, `setColor`, and `clear()` are live.
+  `setLifetime`, `setMinDistance`, `teleport`, `setWidth`, `setColor`,
+  `setOpacity`, `setTexture`, `setBlend`, and `clear()` are live.
 - `createBeam` returns a `BeamHandle`. Call `set(from, to)` in `tick`.
   `segments` subdivides for `noise`; `noiseSpeed` moves the wave pattern
   (`0` = standing tether), and `uvScroll` moves the texture along the beam.
-  `setWidth`, `setColor`, and `setNoise` are live.
+  `setWidth`, `setColor`, `setNoise`, `setUvScroll`, `setNoiseSpeed`,
+  `setNoiseFrequency`, `setOpacity`, `setTexture`, and `setBlend` are live.
 - Width is in world units (`number` or `[start, end]`). Color is RGBA or a
   `[start, end]` gradient.
 - `facing: 'camera'` billboards the strip toward the current view;

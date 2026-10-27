@@ -1445,9 +1445,9 @@ trail.setHead(x, y, z); // tick
 beam.set(fromX, fromY, fromZ, toX, toY, toZ); // tick
 ```
 
-- `addLine`/`add` handles have `setPoints`, `setColor`, `setWidth`, `enabled`, `destroy`.
-- `createTrail` handles have `setHead`, `setLifetime`, `setColor`, `setWidth`, `clear`, `enabled`.
-- `createBeam` handles have `set`, `setColor`, `setWidth`, `setNoise`, `enabled`.
+- `addLine`/`add` handles have `setPoints`, `setColor`, `setWidth`, `setOpacity`, `setTexture`, `setBlend`, `enabled`, `destroy`.
+- `createTrail` handles have `setHead`, `setLifetime`, `setMinDistance`, `teleport`, `setColor`, `setWidth`, `setOpacity`, `setTexture`, `setBlend`, `clear`, `enabled`.
+- `createBeam` handles have `set`, `setColor`, `setWidth`, `setNoise`, `setUvScroll`, `setNoiseSpeed`, `setNoiseFrequency`, `setOpacity`, `setTexture`, `setBlend`, `enabled`.
 - `renderer.render()` calls `ribbons.simulate(frameDelta)` and draws at `alpha`. Lines/ribbons interpolate point lists when the count is unchanged; trails interpolate the live head; beams interpolate both endpoints. Do not add points in `render`.
 - `facing` is `'camera'` (default) or `'up'`. Alpha ranges are sorted far-to-near inside the batch; additive is order-independent.
 - `layer` resolves through `renderer.layers`; each camera draws only layers in `camera.mask`.
