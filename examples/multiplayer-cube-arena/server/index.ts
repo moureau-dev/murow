@@ -4,11 +4,9 @@ import {
     TICK_RATE,
     WS_PATH,
     Arena,
-    intents,
     protocol,
     predictions,
     Components,
-    rpcs,
 } from '../shared';
 
 /**
