@@ -94,7 +94,7 @@ renderer.instances.add({
     position: [0, 0, 0],
 });
 
-const handles = new SlotStore<Entity, Handles.MeshInstanceHandle>(100);
+const handles = new SlotStore<Entity, Handles.MeshInstanceHandle>(renderer.maxInstances);
 
 client.on('spawn', ({ entity }) => {
     const c = arena.world.has(entity, Components.Color) ? arena.world.get(entity, Components.Color) : { r: 200, g: 200, b: 200 };
