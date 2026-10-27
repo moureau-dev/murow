@@ -193,8 +193,8 @@ arena.loop.events.on('render', ({ alpha }) => {
 
 const pingEl = document.getElementById('ping')!;
 
-// Ping twice every second so the delay estimate tracks RTT swings.
-arena.loop.every(500).milliseconds(() => {
+// Ping once every 2 seconds so the delay estimate tracks RTT swings.
+arena.loop.every(2).seconds(() => {
     client.ping();
 });
 
