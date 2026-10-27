@@ -17,7 +17,7 @@ export interface RendererManagers2DDeps {
     runtime: RendererRuntime;
     canvas: HTMLCanvasElement;
     logger: Logger;
-    camera: CameraManager2D;
+    camera?: CameraManager2D;
     maxSprites: number;
     prefabs: PrefabBucket2D | null;
     layers: LayerRegistry;
@@ -26,7 +26,7 @@ export interface RendererManagers2DDeps {
 
 /** The 2D renderer's managers, all bound to one core. */
 export class RendererManagers2D {
-    readonly camera: CameraManager2D;
+    readonly camera: CameraManager2D | undefined;
     readonly sheets: SpritesheetManager;
     readonly sprites: SpriteManager;
     readonly geometry: GeometryManager;

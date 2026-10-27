@@ -12,7 +12,7 @@ function makeTarget(screenRay: Ray3D, far = 100): RaycastTarget {
     camera.far = far;
     camera.screenToRay = () => screenRay;
     return {
-        camera,
+        camera: () => camera,
         eachInstance: (visit) => visit(handle, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0),
         resolveHitbox: () => null,
         layerOf: () => 1,
@@ -49,7 +49,7 @@ describe('RaycastController', () => {
             camera.near = 0;
             camera.far = 100;
             return {
-                camera,
+                camera: () => camera,
                 // origin at y=0 (feet), bbox center y=centerY, half-height 0.5
                 eachInstance: (visit) => visit(handle, 0, 0, 0, 1, 1, 1, 1, 0.5, 1, 0, centerY, 0),
                 resolveHitbox: () => null,
@@ -58,7 +58,8 @@ describe('RaycastController', () => {
         };
         const cast = (ray: Ray3D, centerY: number) => {
             const t = target(centerY);
-            (t.camera as unknown as { screenToRay: () => Ray3D }).screenToRay = () => ray;
+            const cam = t.camera();
+            (cam as unknown as { screenToRay: () => Ray3D }).screenToRay = () => ray;
             const { sink, hits } = makeSink();
             new RaycastController(t).collect(0, 0, sink);
             return hits.length;

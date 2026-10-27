@@ -138,23 +138,22 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
      * `murow/dom`). Writes `[x, y, depth]` into `out` (`z` is ignored in 2D).
      */
     worldToScreen(x: number, y: number, _z: number, out: Float32Array): boolean {
-        const m = this.camera.getMatrix();
+        const cam = this.cameras.primary;
+        if (cam === undefined) return false;
+        const m = cam.getMatrix();
         const ndcX = m[0]! * x + m[4]! * y + m[8]!;
         const ndcY = m[1]! * x + m[5]! * y + m[9]!;
         const w = this.canvas.clientWidth || this._width;
         const h = this.canvas.clientHeight || this._height;
         out[0] = (ndcX * 0.5 + 0.5) * w;
         out[1] = (0.5 - ndcY * 0.5) * h;
-        out[2] = 1 / Math.max(this.camera.zoom, 1e-4);
+        out[2] = 1 / Math.max(cam.zoom, 1e-4);
         return true;
     }
 
     async init(): Promise<void> {
         const primary = this.cameras.primary;
-        if (primary === undefined) {
-            throw new Error('WebGPU2DRenderer: no camera. Create one with renderer.cameras.create() before init(), or leave the camera option enabled.');
-        }
-        this.core.camera = primary;
+        if (primary !== undefined) this.core.camera = primary;
 
         this.runtime = runtime();
         const presentation = await this.runtime.createPresentation(this.canvas);
@@ -174,7 +173,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         this._height = this.canvas.height;
         this.core.width = this._width;
         this.core.height = this._height;
-        this.camera.setViewport(this._width, this._height);
+        this.cameras.primary?.setViewport(this._width, this._height);
 
         // TypeGPU layouts
         this.core.spriteLayout = createSpriteLayout(this.maxSprites);
@@ -229,7 +228,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
             runtime: this.runtime,
             canvas: this.canvas,
             logger: this.logger,
-            camera: this.core.camera,
+            camera: this.cameras.primary,
             maxSprites: this.maxSprites,
             prefabs: this._prefabs,
             layers: this.layers,
@@ -250,7 +249,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
         }
 
         this.raycast = new Raycast2D(new RaycastController2D({
-            camera: this.camera,
+            camera: () => this.cameras.primary,
             eachSprite: this.sprites.eachSprite.bind(this.sprites),
             resolveHitbox: this.sprites.resolveHitbox.bind(this.sprites),
             layerOf: this.sprites.layerOf.bind(this.sprites),
@@ -315,7 +314,7 @@ export class WebGPU2DRenderer<A extends AssetBucket<'2d', any, any> = AssetBucke
                     });
                 }
 
-                this.camera.setViewport(w, h);
+                this.cameras.primary?.setViewport(w, h);
 
                 for (const cb of this.resizeCallbacks) {
                     cb(w, h);

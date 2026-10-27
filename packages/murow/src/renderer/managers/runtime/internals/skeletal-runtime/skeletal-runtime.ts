@@ -25,7 +25,7 @@ export interface SkeletalRuntimeDeps {
     device: RawDevice;
     pipelines: MeshPipelines;
     skinned: SkinnedInstanceStore;
-    camera: Camera3D;
+    camera: () => Camera3D | undefined;
     skinCull: SkinCull;
     maxSkinnedInstances: number;
     maxTotalBones: number;
@@ -149,7 +149,7 @@ export class SkeletalRuntime {
         this.updatedBoneOffsets.fill(0);
         let count = 0;
         const dv = this.gpuInstDV;
-        const camPos = this.deps.camera.position;
+        const camPos = this.deps.camera()?.position ?? [0, 0, 0];
         const camX = camPos[0], camY = camPos[1], camZ = camPos[2];
 
         const liveSlots = skinned.slots;

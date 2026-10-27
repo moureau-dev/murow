@@ -1394,12 +1394,12 @@ const renderer = new WebGPU3DRenderer(canvas, { camera: { fov: 65, near: 0.05, f
 const camera = renderer.camera;
 ```
 
-`camera: false` disables auto-creation. Then create the primary before `init()`:
+`camera: false` disables auto-creation. The primary is resolved lazily, so create it whenever you are ready, including after `init()`:
 
 ```ts
 const renderer = new WebGPU3DRenderer(canvas, { camera: false });
-const camera = renderer.cameras.create({ fov: 65, near: 0.05, far: 100 });
 await renderer.init();
+const camera = renderer.cameras.create({ fov: 65, near: 0.05, far: 100 });
 ```
 
 ```ts

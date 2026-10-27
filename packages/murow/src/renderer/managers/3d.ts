@@ -37,7 +37,7 @@ export interface RendererManagersDeps {
     runtime: import('./runtime/backend').RendererRuntime;
     logger: Logger;
     options: any;
-    camera: CameraManager;
+    camera: () => CameraManager | undefined;
     skinCull: SkinCull;
     layers: LayerRegistry;
     maxInstances: number;
@@ -52,7 +52,7 @@ export interface RendererManagersDeps {
 
 /** The renderer's managers, all bound to one core. */
 export class RendererManagers {
-    readonly camera!: CameraManager;
+    readonly camera!: () => CameraManager | undefined;
     readonly animation!: InstanceType<typeof SkeletalRuntime>;
     readonly materials!: MaterialManager;
     readonly ibl!: IblManager;

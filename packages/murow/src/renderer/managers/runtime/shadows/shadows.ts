@@ -41,7 +41,7 @@ export interface ShadowCasterDeps {
     instances: InstanceManager;
     materials: MaterialManager;
     lights: LightManager;
-    camera: CameraManager;
+    camera: () => CameraManager | undefined;
     core: RendererCore;
     /** Monotonic counter bumped when an instance or skinned pose changes. */
     motionVersion(): number;
@@ -109,7 +109,9 @@ export class DirectionalShadowManager {
      */
     render(encoder: RawCommandEncoder): void {
         const { instances, materials, core, camera, lights } = this.deps;
-        const boxChanged = this.system.update(lights.sunDirection, camera.position);
+        const cam = camera();
+        if (cam === undefined) return;
+        const boxChanged = this.system.update(lights.sunDirection, cam.position);
         if (!this.system.enabled) return;
         const motion = this.deps.motionVersion();
         if (!boxChanged && motion === this.lastMotion) return;

@@ -18,7 +18,7 @@ export interface RaycastSink2D {
 
 /** What the controller needs from the sprite manager: iteration + hitboxes. */
 export interface RaycastTarget2D {
-    readonly camera: Camera2D;
+    readonly camera: () => Camera2D | undefined;
     /** Visit every live sprite. */
     eachSprite(visit: (handle: SpriteHandle) => void): void;
     /** The sprite's declared hitbox, or `null` to use its rendered quad. */
@@ -37,11 +37,13 @@ type Point = [number, number];
 export class RaycastController2D {
     constructor(private readonly target: RaycastTarget2D) {}
 
-    collect(screenX: number, screenY: number, sink: RaycastSink2D, camera: Camera2D = this.target.camera): void {
-        const [wx, wy] = camera.screenToWorld(screenX, screenY);
+    collect(screenX: number, screenY: number, sink: RaycastSink2D, camera?: Camera2D): void {
+        const cam = camera ?? this.target.camera();
+        if (cam === undefined) return;
+        const [wx, wy] = cam.screenToWorld(screenX, screenY);
 
         this.target.eachSprite((handle) => {
-            if (!visibleTo(this.target.layerOf(handle), camera.mask)) return;
+            if (!visibleTo(this.target.layerOf(handle), cam.mask)) return;
             const hb = this.target.resolveHitbox(handle);
             let part: string | null = null;
             if (hb) {

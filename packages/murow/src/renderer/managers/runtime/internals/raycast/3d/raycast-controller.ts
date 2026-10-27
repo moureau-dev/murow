@@ -18,7 +18,7 @@ export interface RaycastSink {
 
 /** What the controller needs from the renderer: instance iteration + hitboxes. */
 export interface RaycastTarget {
-    readonly camera: Camera3D;
+    readonly camera: () => Camera3D | undefined;
     /**
      * Visit every live instance (non-skinned and skinned) with its world
      * position, scale, and model half-extents.
@@ -43,15 +43,17 @@ export interface RaycastTarget {
 export class RaycastController {
     constructor(private readonly target: RaycastTarget) {}
 
-    collect(screenX: number, screenY: number, sink: RaycastSink, camera: Camera3D = this.target.camera): void {
-        const ray = camera.screenToRay(screenX, screenY);
+    collect(screenX: number, screenY: number, sink: RaycastSink, camera?: Camera3D): void {
+        const cam = camera ?? this.target.camera();
+        if (cam === undefined) return;
+        const ray = cam.screenToRay(screenX, screenY);
         const ox = ray.origin[0], oy = ray.origin[1], oz = ray.origin[2];
         const dx = ray.direction[0], dy = ray.direction[1], dz = ray.direction[2];
-        const minDistance = camera.near;
-        const maxDistance = camera.far;
+        const minDistance = cam.near;
+        const maxDistance = cam.far;
 
         this.target.eachInstance((handle, cx, cy, cz, sx, sy, sz, halfX, halfY, halfZ, centerX, centerY, centerZ) => {
-            if (!visibleTo(this.target.layerOf(handle), camera.mask)) return;
+            if (!visibleTo(this.target.layerOf(handle), cam.mask)) return;
             const hit = this.test(ray, handle, cx, cy, cz, sx, sy, sz, halfX, halfY, halfZ, centerX, centerY, centerZ);
             if (hit === null) return;
             const t = hit.distance;

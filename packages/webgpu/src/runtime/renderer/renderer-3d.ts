@@ -135,7 +135,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     get camera(): CameraManager {
         const primary = this.cameras.primary;
         if (primary === undefined) {
-            throw new Error('WebGPU3DRenderer: no camera. Create one with renderer.cameras.create() before init(), or leave the camera option enabled.');
+            throw new Error('WebGPU3DRenderer: no primary camera. Create one with renderer.cameras.create().');
         }
         return primary;
     }
@@ -279,10 +279,6 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     }
 
     async init(): Promise<void> {
-        if (this.cameras.primary === undefined) {
-            throw new Error('WebGPU3DRenderer: no camera. Create one with renderer.cameras.create() before init(), or leave the camera option enabled.');
-        }
-
         // Request the adapter ourselves so we can read its limits and forward
         // them as `requiredLimits` to the device. The defaults are very low
         // (128 MB max storage buffer); for skinned scenes the bone-matrix
@@ -303,7 +299,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         this._width = this.canvas.width;
         this._height = this.canvas.height;
-        this.camera.setAspect(this.canvas.clientWidth || this._width, this.canvas.clientHeight || this._height);
+        this.cameras.primary?.setAspect(this.canvas.clientWidth || this._width, this.canvas.clientHeight || this._height);
 
         this.core.pipelines = new MeshPipelines();
         const rendererOptions = this.options as WebGPU3DRendererOptions;
@@ -325,11 +321,12 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         this.cameraEffects = new CameraEffectStack({ root: this.core.root, format: this.core.format, maxEffects: this.maxCameraEffects, runtime: this.runtime });
         this.runtime.occlusion?.setDepth(this.core.pipelines.depthTexture);
-        this.cameraEffects.setDepth(this.core.pipelines.depthTexture.createView(), this.core.pipelines.depthSampler, this.camera.near, this.camera.far);
+        const initCamera = this.cameras.primary;
+        if (initCamera) this.cameraEffects.setDepth(this.core.pipelines.depthTexture.createView(), this.core.pipelines.depthSampler, initCamera.near, initCamera.far);
 
         const managers = new RendererManagers({
             runtime: this.runtime, core: this.core, logger: this.logger, options: this.options,
-            camera: this.camera, skinCull: this.skinCull, layers: this.layers, maxInstances: this.maxInstances,
+            camera: () => this.cameras.primary, skinCull: this.skinCull, layers: this.layers, maxInstances: this.maxInstances,
             maxSkinnedInstances: this.maxSkinnedInstances, maxTotalBones: this.maxTotalBones,
             canvas: this.canvas, assets: this._assets, prefabs: this._prefabs,
             elapsed: () => this.elapsed, nextDecalSeq: () => this.decalMaterialSeq++,
@@ -403,12 +400,13 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
             });
         }
 
-        this.camera.setAspect(cssW, cssH);
+        this.cameras.primary?.setAspect(cssW, cssH);
 
         this.core.pipelines.resizeDepth(w, h);
         if (this.cameraEffects) {
             this.runtime.occlusion?.setDepth(this.core.pipelines.depthTexture);
-        this.cameraEffects.setDepth(this.core.pipelines.depthTexture.createView(), this.core.pipelines.depthSampler, this.camera.near, this.camera.far);
+        const initCamera = this.cameras.primary;
+        if (initCamera) this.cameraEffects.setDepth(this.core.pipelines.depthTexture.createView(), this.core.pipelines.depthSampler, initCamera.near, initCamera.far);
         }
     }
 
@@ -450,7 +448,9 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
      * w) and returns `false` when the point is behind the camera. Zero-alloc.
      */
     worldToScreen(x: number, y: number, z: number, out: Float32Array): boolean {
-        const m = this.camera.getViewProjectionMatrix();
+        const cam = this.cameras.primary;
+        if (cam === undefined) return false;
+        const m = cam.getViewProjectionMatrix();
         const cx = m[0]! * x + m[4]! * y + m[8]! * z + m[12]!;
         const cy = m[1]! * x + m[5]! * y + m[9]! * z + m[13]!;
         const cw = m[3]! * x + m[7]! * y + m[11]! * z + m[15]!;
@@ -486,11 +486,14 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         }
         // LOD is a per-tick decision (stable, runs once per tick not per frame);
         // the render path only draws whatever level was selected.
-        const cam = this.camera.position;
-        this.instances.selectLod(
-            cam[0], cam[1], cam[2],
-            this.camera.lodBias, this.instances.lodHysteresis, this.camera.lodEnabled,
-        );
+        const primary = this.cameras.primary;
+        if (primary) {
+            const cam = primary.position;
+            this.instances.selectLod(
+                cam[0], cam[1], cam[2],
+                primary.lodBias, this.instances.lodHysteresis, primary.lodEnabled,
+            );
+        }
         // Refresh tracked occlusion on a tick counter, like LOD. The readback is
         // fire-and-forget: the flags land on the microtask queue, never blocking
         // the tick, and it is skipped while a previous readback is still in flight.
@@ -520,11 +523,14 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         const frameDelta = this.advanceFrame();
         this.cameras.interpolate(alpha);
 
+        const primary = this.cameras.primary;
+        if (primary === undefined) return;
+
         this.updateModelBounds();
         this.uploadInstanceData();
 
         // Particle emission culling uses the primary view this frame.
-        this.core.frustum.setFromViewProjection(this.camera.getViewProjectionMatrix());
+        this.core.frustum.setFromViewProjection(primary.getViewProjectionMatrix());
         this.particles.setCullFrustum(this.core.frustum);
         // Flush queued particle spawns and advance the pool once per frame.
         this.particles.simulate(frameDelta);

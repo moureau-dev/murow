@@ -357,12 +357,12 @@ const renderer = new WebGPU3DRenderer(canvas, {
 const camera = renderer.camera;
 ```
 
-Set `camera: false` to disable auto-creation. Then create the primary before `init()`:
+Set `camera: false` to disable auto-creation, then create the primary whenever you are ready. The renderer resolves the primary lazily, so `init()` does not need it:
 
 ```ts
 const renderer = new WebGPU3DRenderer(canvas, { camera: false });
-const camera = renderer.cameras.create({ fov: 65, near: 0.05, far: 100 });
 await renderer.init();
+const camera = renderer.cameras.create({ fov: 65, near: 0.05, far: 100 });
 ```
 
 `create` throws when `maxCameras` (default 2) is reached. Views draw in ascending `priority`; the first enabled view clears the color target and later views load unless `clearColor` is set. Camera effects require a full-screen rect. Occlusion culling runs only with one view. LOD follows the current primary; directional shadow focus and the stateful raycast stay on the camera that was primary at construction when `setPrimary` is called later. `raycast` and `worldToScreen` default to the primary; for a partial rect, screen coordinates are local to the view.
