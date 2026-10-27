@@ -147,6 +147,18 @@ export interface WebGPU3DRendererOptions<A extends AssetBucket<'3d', any, any> =
     maxParticleMaterials?: number;
     /** Max live particle emitters. Defaults to 64. */
     maxParticleEmitters?: number;
+    /** Max live raw lines/ribbons. Defaults to 256. */
+    maxRibbons?: number;
+    /** Max live trails. Defaults to 128. */
+    maxTrails?: number;
+    /** Max live beams. Defaults to 256. */
+    maxBeams?: number;
+    /** Shared vertex budget for lines, ribbons, trails, and beams. Defaults to 65536. */
+    maxRibbonVertices?: number;
+    /** Default max points per trail. Defaults to 64. */
+    maxTrailPoints?: number;
+    /** Total point budget across all trails. Defaults to 8192. */
+    maxTotalTrailPoints?: number;
     /** Directional shadow map resolution (square). Defaults to 2048. */
     shadowResolution?: number;
     /** Max casting spot lights per frame. Defaults to 4. */

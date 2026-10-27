@@ -14,6 +14,9 @@ export type LightId = SlotId<'light'>;
 export type LayerId = SlotId<'decal-layer'>;
 export type DecalId = SlotId<'decal'>;
 export type EmitterId = SlotId<'emitter'>;
+export type RibbonId = SlotId<'ribbon'>;
+export type TrailId = SlotId<'trail'>;
+export type BeamId = SlotId<'beam'>;
 
 // 2D
 export type SpriteId = SlotId<'sprite'>;

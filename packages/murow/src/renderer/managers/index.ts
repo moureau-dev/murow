@@ -5,3 +5,4 @@ export * from './handle-base';
 export * from './handles';
 export * from './runtime/backend';
 export * from './2d';
+export * from './runtime/ribbons';

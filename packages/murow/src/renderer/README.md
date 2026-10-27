@@ -32,7 +32,8 @@ renderer/
 │   └── layers.ts          (LayerRegistry, visibleTo)
 ├── managers/          — the agnostic renderer
 │   ├── runtime/           (managers, core, internals, cameras, feature ports)
-│   │   └── backend.ts         (RendererRuntime, Skinning, Particles3D, Presentation)
+│   │   ├── backend.ts         (RendererRuntime, Skinning, Particles3D, Presentation)
+│   │   └── ribbons/           (lines, ribbons, trails, beams)
 │   ├── managers.ts        (RendererManagers — 3D composition root)
 │   ├── managers-2d.ts     (RendererManagers2D — 2D composition root)
 │   ├── types.ts           (ids, options, interpolator)
@@ -79,6 +80,20 @@ renderer.cameras.setPrimary(main);
 ```
 
 `create` throws at `maxCameras` (default 2). The first view clears the color target; later views load unless `clearColor` is set. Camera effects need a full-screen rect. Occlusion culling is limited to one view. LOD, directional shadow focus, and the stateful raycast follow the current primary; `setPrimary` takes effect on the next frame. `worldToScreen` defaults to the primary camera.
+
+## Lines, ribbons, trails, beams
+
+`renderer.ribbons` owns one dynamic strip batch and three pools: raw
+lines/ribbons, trails, and beams. `addLine`/`add` take point lists;
+`createTrail` takes a moving head and keeps a time history; `createBeam` takes
+two endpoints with optional UV scroll and noise. Width is world-space, color is
+RGBA or a gradient, and `layer` filters against `camera.mask`.
+
+Tick calls `trail.setHead(...)` and `beam.set(...)`. The renderer calls
+`ribbons.simulate(frameDelta)` and draws at `alpha`, so the live trail head and
+both beam endpoints interpolate while committed history stays fixed. Capacity
+is split across `maxRibbons`, `maxTrails`, `maxBeams`, `maxRibbonVertices`,
+`maxTrailPoints`, and `maxTotalTrailPoints`.
 
 ## Assets
 

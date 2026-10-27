@@ -6,6 +6,7 @@ export * from './lights';
 export * from './shadows';
 export * from './decals';
 export * from './particles/3d';
+export * from './ribbons';
 export * from './camera/3d';
 export * from './models';
 export * from './core';

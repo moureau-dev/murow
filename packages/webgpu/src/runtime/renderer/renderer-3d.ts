@@ -30,6 +30,7 @@ import {
     ShadowManager,
     DecalManager,
     ParticleManager,
+    RibbonManager,
     CameraManager,
     CameraRegistry,
     applyCamera3DCreateOptions,
@@ -169,6 +170,8 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
     decals!: DecalManager;
     /** GPU particle facade. */
     particles!: ParticleManager;
+    /** Lines, ribbons, trails, and beams. */
+    ribbons!: RibbonManager;
     /** Mesh creation and loading facade. */
     models!: ModelsManager;
 
@@ -333,6 +336,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         });
         this.animation = managers.animation; this.materials = managers.materials; this.ibl = managers.ibl; this.skybox = managers.skybox; this.lights = managers.lights;
         this.particles = managers.particles; this.models = managers.models; this.instances = managers.instances;
+        this.ribbons = managers.ribbons;
         // GPU geomorph: blend adjacent LOD levels over ~8 ticks (set 0 to hard-switch).
         this.instances.lodFadeTicks = 8;
 
@@ -534,6 +538,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.particles.setCullFrustum(this.core.frustum);
         // Flush queued particle spawns and advance the pool once per frame.
         this.particles.simulate(frameDelta);
+        this.ribbons.simulate(frameDelta);
 
         const swapchainView = this.core.context.getCurrentTexture().createView();
 
@@ -677,6 +682,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
 
         this.skybox.render(pass, camera, alpha);
         this.renderMainPass(pass, vpMatrix);
+        this.renderRibbons(pass, vpMatrix, camera, alpha);
         this.renderParticles(pass, vpMatrix, camera);
         pass.end();
 
@@ -803,6 +809,12 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         }
     }
 
+    /** Draw lines, ribbons, trails, and beams into the current pass. */
+    private renderRibbons(pass: RawRenderPassEncoder, vpMatrix: Float32Array, camera: CameraManager, alpha: number): void {
+        cameraBasis(camera.position, camera.target, camera.up, this._camRight, this._camUp);
+        this.ribbons.draw(pass, vpMatrix, camera.position, this._camRight, this._camUp, alpha, camera.mask);
+    }
+
     /** Draw the particle systems into the current pass. */
     private renderParticles(pass: RawRenderPassEncoder, vpMatrix: Float32Array, camera: CameraManager): void {
         cameraBasis(camera.position, camera.target, camera.up, this._camRight, this._camUp);
@@ -819,6 +831,7 @@ export class WebGPU3DRenderer<A extends AssetBucket<'3d', any, any> = AssetBucke
         this.cameraEffects?.destroy();
         this.particles?.destroy();
         this.particles?.system.destroy();
+        this.ribbons?.destroy();
         this.core.pipelines?.destroy();
         this.core.models?.destroy();
     }

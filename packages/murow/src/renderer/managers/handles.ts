@@ -206,3 +206,20 @@ export declare namespace Handles {
 // Top-level aliases so every handle sub-type is reachable without the namespace.
 export type MaterialRef = Handles.MaterialRef;
 export type InstanceMaterials = Handles.InstanceMaterials;
+
+
+// Ribbon family contracts. Implemented by the ribbon manager runtime.
+export type {
+    BeamHandle,
+    BeamOptions,
+    LineHandle,
+    LineOptions,
+    RibbonColor,
+    RibbonGradient,
+    RibbonHandle,
+    RibbonManagerCapacity,
+    RibbonOptions,
+    RibbonWidth,
+    TrailHandle,
+    TrailOptions,
+} from './runtime/ribbons/types';

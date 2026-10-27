@@ -22,6 +22,7 @@ import {
     PointShadowSystem,
     DecalManager,
     ParticleManager,
+    RibbonManager,
     ParticleSystem3D,
     CameraManager,
     ModelsManager,
@@ -63,6 +64,7 @@ export class RendererManagers {
     readonly instances!: InstanceManager;
     readonly shadows!: ShadowManager;
     readonly decals!: DecalManager;
+    readonly ribbons!: RibbonManager;
     readonly mainPass!: MainPass;
     readonly raycast!: Raycast3D;
     readonly interpolators!: unknown[];
@@ -253,6 +255,22 @@ export class RendererManagers {
                 material,
             }) as never,
             elapsedSeconds: () => deps.elapsed(),
+        });
+        this.ribbons = new RibbonManager({
+            runtime: deps.runtime,
+            device: deps.core.device,
+            format: deps.core.format,
+            logger: deps.logger,
+            capacity: {
+                maxRibbons: rendererOptions.maxRibbons ?? 256,
+                maxTrails: rendererOptions.maxTrails ?? 128,
+                maxBeams: rendererOptions.maxBeams ?? 256,
+                maxVertices: rendererOptions.maxRibbonVertices ?? 65536,
+                maxTrailPoints: rendererOptions.maxTrailPoints ?? 64,
+                maxTotalTrailPoints: rendererOptions.maxTotalTrailPoints ?? 8192,
+            },
+            resolveTexture: (id) => deps.core.textures.get(id)?.view,
+            layers: deps.layers,
         });
 
         // Snapshot order is irrelevant; the three snapshots are independent.
