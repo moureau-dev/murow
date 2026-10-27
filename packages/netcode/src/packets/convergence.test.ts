@@ -79,10 +79,10 @@ describe('convergence under jitter, no loss', () => {
             expect(local.x).toBeCloseTo(server.x, 5);
             expect(local.z).toBeCloseTo(server.z, 5);
 
-            // Snapshot reordering: jitter can swap consecutive snapshots,
-            // and the netcode currently does NOT filter them by tick. This
-            // bounds the rate but doesn't claim zero - that would be a
-            // separate fix.
+            // Snapshot reordering: jitter can swap consecutive snapshots.
+            // staleSnapshots measures arrival order only; the timeline
+            // orders/dedups by tick and reconcile is forward-only. This
+            // bounds the rate but does not claim zero.
             const staleRate = sim.staleSnapshots / Math.max(1, sim.snapshotsReceived);
             expect(staleRate).toBeLessThan(0.1);
 

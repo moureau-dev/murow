@@ -10,16 +10,16 @@ import {
 
 /**
  * Probe: high jitter + explicit reorder can flip the relative arrival of
- * snapshots. The netcode currently does not filter stale snapshots by
- * tick, so this scenario exercises:
+ * snapshots. `staleSnapshots` measures arrival order only, not corruption:
+ * the interpolation buffer orders and deduplicates by tick, and reconcile
+ * only moves forward. This scenario exercises:
  *
  * - server intent ordering ratchet (lastAckedClientTick should ratchet up,
  *   never down, even if an older-tick intent arrives later)
- * - whether out-of-order snapshots produce visible jitter in the local
- *   predicted entity
+ * - whether out-of-order arrivals stay bounded and do not corrupt the
+ *   local predicted entity
  *
- * It does NOT claim zero stale snapshots: that's a known engine gap.
- * What it claims is that reordering does not corrupt convergence.
+ * It bounds the out-of-order arrival rate; it does not claim zero.
  */
 describe('packet reordering', () => {
     test('out-of-order arrival does not break server-side convergence', () => {

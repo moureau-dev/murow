@@ -746,10 +746,10 @@ class MyPeerTransport implements TransportAdapter {
 }
 ```
 
-The multiplayer layer assumes ordered delivery. WebSocket over TCP
-satisfies that; UDP would need its own ordering/reliability layer
-(`retransmitMs` recovers dropped intents but does not reorder or
-acknowledge snapshots).
+Snapshots assume ordered delivery. WebSocket over TCP satisfies that;
+UDP or WebTransport needs its own ordering/reliability layer. Client
+intents are buffered and ratcheted by sequence, and `retransmitMs`
+recovers dropped intents. Snapshots are not acknowledged or re-sent.
 </details>
 
 ## File layout

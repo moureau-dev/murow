@@ -1420,7 +1420,7 @@ renderer.cameras.remove(minimap);
 - View fields: `rect` (normalized, top-left origin), `mask`, `enabled`, `priority`, `clearColor`, `clearDepth`, `name`.
 - Views draw in ascending `priority`. The first enabled view clears the color target; later views load unless `clearColor` is set. A clear affects the whole attachment, not the viewport.
 - Camera effects require a full-screen `rect`; partial views skip them.
-- Occlusion culling is enabled only with a single camera view. LOD follows the current primary; directional shadow focus and the stateful raycast stay on the camera that was primary at renderer construction when `setPrimary` is called later.
+- Occlusion culling is enabled only with a single camera view. LOD, directional shadow focus, and the stateful raycast follow the current primary; `setPrimary` takes effect on the next frame.
 - `raycast`, `worldToScreen`, and `storePreviousState` defaults use the primary camera. For a partial rect, screen coordinates for that camera are local to the view.
 - Camera handles have `destroy()`, which refuses to remove the last camera. `get`/`primary` return `undefined` when absent.
 - `cameras.each` is zero-alloc; `all()` and `ordered()` return reused arrays. Events: `add`, `remove`, `primary`.
