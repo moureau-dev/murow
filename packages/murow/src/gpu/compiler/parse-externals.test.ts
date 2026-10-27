@@ -66,4 +66,12 @@ describe('parseShaderBody externals', () => {
         ).code;
         expect(code).toContain('sin');
     });
+
+    test('resolves std intrinsics when a bundler renames std to d', () => {
+        const code = emitEntry(
+            parseShaderBody('(_v,_m) => d.sin(0.5)', { stage: 'fragment' }),
+            createTestBackend(),
+        ).code;
+        expect(code).toContain('sin');
+    });
 });

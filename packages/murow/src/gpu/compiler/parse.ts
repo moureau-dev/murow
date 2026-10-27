@@ -870,6 +870,12 @@ class Parser {
                 const dns = (this.options.externals?.d ?? dLib) as Record<string, unknown>;
                 const constructor = dns[name];
                 if (typeof constructor === 'function') return constructor;
+                // A bundler may rename the `std` import to `d` (or `d2`) when a
+                // module does not already use the data namespace. Prefer a std
+                // intrinsic over treating the member as a scalar cast.
+                const stdNs = (this.options.externals?.std ?? stdLib) as Record<string, unknown>;
+                const standard = stdNs[name];
+                if (typeof standard === 'function') return standard;
                 return { __cast: name };
             }
             // std namespace: prefer the backend's own namespace so its overrides
