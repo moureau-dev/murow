@@ -8,13 +8,8 @@
 import type { PlayOptions } from '../gltf/skeletal-animation';
 import type { TexturePrefab } from '../buckets';
 import type { HandleBase } from './handle-base';
-import type { DecalId, EmitterId, InstanceId, LayerId, LightId } from './types';
-import type {
-    BeamHandle as BeamHandleContract,
-    LineHandle as LineHandleContract,
-    RibbonHandle as RibbonHandleContract,
-    TrailHandle as TrailHandleContract,
-} from './runtime/ribbons/types';
+import type { BeamId, DecalId, EmitterId, InstanceId, LayerId, LightId, RibbonId, TrailId } from './types';
+import type { RibbonBlend, RibbonColor, RibbonGradient, RibbonWidth } from './runtime/ribbons/types';
 
 export declare namespace Handles {
     /** A live reference to one material attached to an instance. */
@@ -209,13 +204,51 @@ export declare namespace Handles {
     }
 
     /** A raw line or ribbon strip. */
-    export type RibbonHandle = RibbonHandleContract;
+    export interface RibbonHandle extends HandleBase<RibbonId> {
+        setPoints(points: ArrayLike<number>): void;
+        setColor(r: number, g: number, b: number, a: number): void;
+        setWidth(width: RibbonWidth): void;
+        setOpacity(alpha: number): void;
+        setTexture(id: string | null): void;
+        setBlend(blend: RibbonBlend): void;
+        enabled: boolean;
+    }
+
     /** A line is the same handle type as a raw ribbon. */
-    export type LineHandle = LineHandleContract;
+    export type LineHandle = RibbonHandle;
+
     /** A time-history ribbon attached to a moving head. */
-    export type TrailHandle = TrailHandleContract;
+    export interface TrailHandle extends HandleBase<TrailId> {
+        readonly maxPoints: number;
+        readonly pointCount: number;
+        readonly lifetime: number;
+        setHead(x: number, y: number, z: number): void;
+        setLifetime(seconds: number): void;
+        setMinDistance(distance: number): void;
+        teleport(x: number, y: number, z: number): void;
+        setWidth(width: RibbonWidth): void;
+        setColor(start: RibbonColor, end: RibbonColor): void;
+        setOpacity(alpha: number): void;
+        setTexture(id: string | null): void;
+        setBlend(blend: RibbonBlend): void;
+        clear(): void;
+        enabled: boolean;
+    }
+
     /** A two-endpoint ribbon with optional UV scroll and noise. */
-    export type BeamHandle = BeamHandleContract;
+    export interface BeamHandle extends HandleBase<BeamId> {
+        set(fromX: number, fromY: number, fromZ: number, toX: number, toY: number, toZ: number): void;
+        setWidth(width: number): void;
+        setNoise(amount: number): void;
+        setUvScroll(speed: number): void;
+        setNoiseSpeed(speed: number): void;
+        setNoiseFrequency(frequency: number): void;
+        setColor(r: number, g: number, b: number, a: number): void;
+        setOpacity(alpha: number): void;
+        setTexture(id: string | null): void;
+        setBlend(blend: RibbonBlend): void;
+        enabled: boolean;
+    }
 }
 
 // Top-level aliases so every handle sub-type is reachable without the namespace.

@@ -1,19 +1,16 @@
 import type { CollectionEvents } from 'murow/core/collection';
+import type { Handles } from '../../handles';
 import { PooledCollection } from 'murow/core/collection';
 import type { RawRenderPassEncoder } from 'murow/gpu';
 import type { BeamId, RibbonId, TrailId } from '../../types';
 import { RibbonBatch } from './ribbon-batch';
 import { BeamItem, RibbonItem, TrailItem } from './items';
 import type {
-    BeamHandle,
     BeamOptions,
-    LineHandle,
     LineOptions,
-    RibbonHandle,
     RibbonManagerCapacity,
     RibbonManagerDeps,
     RibbonOptions,
-    TrailHandle,
     TrailOptions,
 } from './types';
 
@@ -168,9 +165,9 @@ export class RibbonManager {
         this.beams = new BeamPool({ ...poolDeps, capacity: deps.capacity.maxBeams });
     }
 
-    get ribbonEvents(): CollectionEvents<RibbonHandle> { return this.ribbons.events as unknown as CollectionEvents<RibbonHandle>; }
-    get trailEvents(): CollectionEvents<TrailHandle> { return this.trails.events as unknown as CollectionEvents<TrailHandle>; }
-    get beamEvents(): CollectionEvents<BeamHandle> { return this.beams.events as unknown as CollectionEvents<BeamHandle>; }
+    get ribbonEvents(): CollectionEvents<Handles.RibbonHandle> { return this.ribbons.events as unknown as CollectionEvents<Handles.RibbonHandle>; }
+    get trailEvents(): CollectionEvents<Handles.TrailHandle> { return this.trails.events as unknown as CollectionEvents<Handles.TrailHandle>; }
+    get beamEvents(): CollectionEvents<Handles.BeamHandle> { return this.beams.events as unknown as CollectionEvents<Handles.BeamHandle>; }
 
     get ribbonCount(): number { return this.ribbons.count; }
     get trailCount(): number { return this.trails.count; }
@@ -186,22 +183,22 @@ export class RibbonManager {
     get droppedStrips(): number { return this.batch.dropped; }
 
     /** Add a raw line. */
-    addLine(options: LineOptions): LineHandle {
+    addLine(options: LineOptions): Handles.LineHandle {
         return this.ribbons.create({ ...options, layer: this.resolveLayer(options.layer) });
     }
 
     /** Add a raw ribbon. */
-    add(options: RibbonOptions): RibbonHandle {
+    add(options: RibbonOptions): Handles.RibbonHandle {
         return this.ribbons.create({ ...options, layer: this.resolveLayer(options.layer) });
     }
 
     /** Create a time-history trail. */
-    createTrail(options: TrailOptions = {}): TrailHandle {
+    createTrail(options: TrailOptions = {}): Handles.TrailHandle {
         return this.trails.create({ ...options, layer: this.resolveLayer(options.layer) });
     }
 
     /** Create a two-endpoint beam. */
-    createBeam(options: BeamOptions = {}): BeamHandle {
+    createBeam(options: BeamOptions = {}): Handles.BeamHandle {
         return this.beams.create({ ...options, layer: this.resolveLayer(options.layer) });
     }
 

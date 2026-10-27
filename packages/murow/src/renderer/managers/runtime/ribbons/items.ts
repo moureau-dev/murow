@@ -1,16 +1,14 @@
 import type { BeamId, RibbonId, TrailId } from '../../types';
 import type { AppendStripOptions, RibbonBatch } from './ribbon-batch';
+import type { Handles } from '../../handles';
 import type {
-    BeamHandle,
     BeamOptions,
     LineOptions,
     RibbonBlend,
     RibbonColor,
     RibbonGradient,
-    RibbonHandle,
     RibbonOptions,
     RibbonWidth,
-    TrailHandle,
     TrailOptions,
 } from './types';
 
@@ -40,7 +38,7 @@ function lerp(a: number, b: number, t: number): number {
 }
 
 /** A raw line or ribbon strip. */
-export class RibbonItem implements RibbonHandle {
+export class RibbonItem implements Handles.RibbonHandle {
     readonly id: RibbonId;
     readonly maxPoints: number;
     enabled = true;
@@ -171,7 +169,7 @@ export class RibbonItem implements RibbonHandle {
 }
 
 /** A time-history ribbon attached to a moving head. */
-export class TrailItem implements TrailHandle {
+export class TrailItem implements Handles.TrailHandle {
     readonly id: TrailId;
     readonly maxPoints: number;
     lifetime: number;
@@ -403,7 +401,7 @@ export class TrailItem implements TrailHandle {
 }
 
 /** A two-endpoint ribbon with optional UV scroll and noise. */
-export class BeamItem implements BeamHandle {
+export class BeamItem implements Handles.BeamHandle {
     readonly id: BeamId;
     enabled = true;
     private readonly pool: RibbonPoolHost<BeamId>;

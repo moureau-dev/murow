@@ -1,7 +1,5 @@
 import type { Logger } from 'murow/core';
 import type { RawDevice, RawTextureFormat, RawTextureView } from 'murow/gpu';
-import type { HandleBase } from '../../handle-base';
-import type { BeamId, RibbonId, TrailId } from '../../types';
 import type { RendererRuntime } from '../backend';
 import type { LayerRegistry } from 'murow/renderer';
 
@@ -101,51 +99,4 @@ export interface BeamOptions {
     readonly noiseFrequency?: number;
     /** How fast the wave pattern travels, in pattern-lengths per second. Default 1. Set 0 for a standing tether. */
     readonly noiseSpeed?: number;
-}
-
-/** A raw line or ribbon strip. */
-export interface RibbonHandle extends HandleBase<RibbonId> {
-    setPoints(points: ArrayLike<number>): void;
-    setColor(r: number, g: number, b: number, a: number): void;
-    setWidth(width: RibbonWidth): void;
-    setOpacity(alpha: number): void;
-    setTexture(id: string | null): void;
-    setBlend(blend: RibbonBlend): void;
-    enabled: boolean;
-}
-
-/** Line is the same handle type as a raw ribbon. */
-export type LineHandle = RibbonHandle;
-
-/** A time-history ribbon attached to a moving head. */
-export interface TrailHandle extends HandleBase<TrailId> {
-    readonly maxPoints: number;
-    readonly pointCount: number;
-    readonly lifetime: number;
-    setHead(x: number, y: number, z: number): void;
-    setLifetime(seconds: number): void;
-    setMinDistance(distance: number): void;
-    teleport(x: number, y: number, z: number): void;
-    setWidth(width: RibbonWidth): void;
-    setColor(start: RibbonColor, end: RibbonColor): void;
-    setOpacity(alpha: number): void;
-    setTexture(id: string | null): void;
-    setBlend(blend: RibbonBlend): void;
-    clear(): void;
-    enabled: boolean;
-}
-
-/** A two-endpoint ribbon with optional UV scroll and noise. */
-export interface BeamHandle extends HandleBase<BeamId> {
-    set(fromX: number, fromY: number, fromZ: number, toX: number, toY: number, toZ: number): void;
-    setWidth(width: number): void;
-    setNoise(amount: number): void;
-    setUvScroll(speed: number): void;
-    setNoiseSpeed(speed: number): void;
-    setNoiseFrequency(frequency: number): void;
-    setColor(r: number, g: number, b: number, a: number): void;
-    setOpacity(alpha: number): void;
-    setTexture(id: string | null): void;
-    setBlend(blend: RibbonBlend): void;
-    enabled: boolean;
 }
