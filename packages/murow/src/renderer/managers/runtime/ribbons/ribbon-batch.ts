@@ -68,6 +68,7 @@ export interface AppendStripOptions {
     uvScale?: number;
     uvOffset?: number;
     alphas?: ArrayLike<number> | null;
+    opacity?: number;
     layer?: number;
 }
 
@@ -291,6 +292,7 @@ export class RibbonBatch {
         const start = isGradient(color) ? color[0] : color;
         const end = isGradient(color) ? color[1] : color;
         const alphas = opts.alphas ?? null;
+        const opacity = opts.opacity ?? 1;
         const verts = this.vertices;
         const idx = this.indices;
 
@@ -351,7 +353,7 @@ export class RibbonBatch {
             const cr = start[0] + (end[0] - start[0]) * t;
             const cg = start[1] + (end[1] - start[1]) * t;
             const cb = start[2] + (end[2] - start[2]) * t;
-            const ca = (start[3] + (end[3] - start[3]) * t) * (alphas?.[src] ?? 1);
+            const ca = (start[3] + (end[3] - start[3]) * t) * (alphas?.[src] ?? 1) * opacity;
             const u = t * uvScale + uvOffset;
             const v0 = 0;
             const v1 = 1;

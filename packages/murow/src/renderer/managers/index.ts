@@ -5,4 +5,5 @@ export * from './handle-base';
 export * from './handles';
 export * from './runtime/backend';
 export * from './2d';
-export * from './runtime/ribbons';
+export { RibbonManager } from './runtime/ribbons';
+export type { RibbonBlend, RibbonFacing, RibbonManagerDeps } from './runtime/ribbons';

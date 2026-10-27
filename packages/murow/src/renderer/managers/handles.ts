@@ -9,6 +9,12 @@ import type { PlayOptions } from '../gltf/skeletal-animation';
 import type { TexturePrefab } from '../buckets';
 import type { HandleBase } from './handle-base';
 import type { DecalId, EmitterId, InstanceId, LayerId, LightId } from './types';
+import type {
+    BeamHandle as BeamHandleContract,
+    LineHandle as LineHandleContract,
+    RibbonHandle as RibbonHandleContract,
+    TrailHandle as TrailHandleContract,
+} from './runtime/ribbons/types';
 
 export declare namespace Handles {
     /** A live reference to one material attached to an instance. */
@@ -201,25 +207,34 @@ export declare namespace Handles {
         setPosition(x: number, y: number, z: number): void;
         setRotation(x: number, y: number, z: number): void;
     }
+
+    /** A raw line or ribbon strip. */
+    export type RibbonHandle = RibbonHandleContract;
+    /** A line is the same handle type as a raw ribbon. */
+    export type LineHandle = LineHandleContract;
+    /** A time-history ribbon attached to a moving head. */
+    export type TrailHandle = TrailHandleContract;
+    /** A two-endpoint ribbon with optional UV scroll and noise. */
+    export type BeamHandle = BeamHandleContract;
 }
 
 // Top-level aliases so every handle sub-type is reachable without the namespace.
 export type MaterialRef = Handles.MaterialRef;
 export type InstanceMaterials = Handles.InstanceMaterials;
+export type RibbonHandle = Handles.RibbonHandle;
+export type LineHandle = Handles.LineHandle;
+export type TrailHandle = Handles.TrailHandle;
+export type BeamHandle = Handles.BeamHandle;
 
 
 // Ribbon family contracts. Implemented by the ribbon manager runtime.
 export type {
-    BeamHandle,
     BeamOptions,
-    LineHandle,
     LineOptions,
     RibbonColor,
     RibbonGradient,
-    RibbonHandle,
     RibbonManagerCapacity,
     RibbonOptions,
     RibbonWidth,
-    TrailHandle,
     TrailOptions,
 } from './runtime/ribbons/types';

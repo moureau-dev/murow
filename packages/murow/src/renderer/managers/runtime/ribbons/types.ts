@@ -108,6 +108,9 @@ export interface RibbonHandle extends HandleBase<RibbonId> {
     setPoints(points: ArrayLike<number>): void;
     setColor(r: number, g: number, b: number, a: number): void;
     setWidth(width: RibbonWidth): void;
+    setOpacity(alpha: number): void;
+    setTexture(id: string | null): void;
+    setBlend(blend: RibbonBlend): void;
     enabled: boolean;
 }
 
@@ -121,8 +124,13 @@ export interface TrailHandle extends HandleBase<TrailId> {
     readonly lifetime: number;
     setHead(x: number, y: number, z: number): void;
     setLifetime(seconds: number): void;
+    setMinDistance(distance: number): void;
+    teleport(x: number, y: number, z: number): void;
     setWidth(width: RibbonWidth): void;
     setColor(start: RibbonColor, end: RibbonColor): void;
+    setOpacity(alpha: number): void;
+    setTexture(id: string | null): void;
+    setBlend(blend: RibbonBlend): void;
     clear(): void;
     enabled: boolean;
 }
@@ -132,6 +140,12 @@ export interface BeamHandle extends HandleBase<BeamId> {
     set(fromX: number, fromY: number, fromZ: number, toX: number, toY: number, toZ: number): void;
     setWidth(width: number): void;
     setNoise(amount: number): void;
+    setUvScroll(speed: number): void;
+    setNoiseSpeed(speed: number): void;
+    setNoiseFrequency(frequency: number): void;
     setColor(r: number, g: number, b: number, a: number): void;
+    setOpacity(alpha: number): void;
+    setTexture(id: string | null): void;
+    setBlend(blend: RibbonBlend): void;
     enabled: boolean;
 }

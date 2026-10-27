@@ -4,6 +4,7 @@ import type {
     BeamHandle,
     BeamOptions,
     LineOptions,
+    RibbonBlend,
     RibbonColor,
     RibbonGradient,
     RibbonHandle,
@@ -52,8 +53,9 @@ export class RibbonItem implements RibbonHandle {
     private prevPointCount = 0;
     private width: RibbonWidth;
     private color: RibbonColor | RibbonGradient;
-    private readonly texture: string | null;
-    private readonly blend: 'alpha' | 'additive';
+    private texture: string | null;
+    private blend: RibbonBlend;
+    private opacity = 1;
     private readonly depthTest: boolean;
     private readonly facing: 'camera' | 'up';
     private readonly uvScale: number;
@@ -128,6 +130,18 @@ export class RibbonItem implements RibbonHandle {
         this.width = width;
     }
 
+    setOpacity(alpha: number): void {
+        this.opacity = Math.max(0, Math.min(1, alpha));
+    }
+
+    setTexture(id: string | null): void {
+        this.texture = id;
+    }
+
+    setBlend(blend: RibbonBlend): void {
+        this.blend = blend;
+    }
+
     /** @internal */
     write(alpha: number): void {
         if (!this.enabled || this.pointCount < 2) return;
@@ -145,6 +159,9 @@ export class RibbonItem implements RibbonHandle {
         const d = this.drawOptions;
         d.width = this.width;
         d.color = this.color;
+        d.texture = this.texture;
+        d.blend = this.blend;
+        d.opacity = this.opacity;
         this.batch.appendStrip(source, this.pointCount, d);
     }
 
@@ -161,11 +178,12 @@ export class TrailItem implements TrailHandle {
     enabled = true;
     private readonly pool: RibbonPoolHost<TrailId>;
     private readonly batch: RibbonBatch;
-    private readonly minDistance: number;
+    private minDistance: number;
     private width: RibbonWidth;
     private color: RibbonGradient;
-    private readonly texture: string | null;
-    private readonly blend: 'alpha' | 'additive';
+    private texture: string | null;
+    private blend: RibbonBlend;
+    private opacity = 1;
     private readonly depthTest: boolean;
     private readonly facing: 'camera' | 'up';
     private readonly uvScale: number;
@@ -275,6 +293,31 @@ export class TrailItem implements TrailHandle {
         this.lifetime = Math.max(1e-3, seconds);
     }
 
+    setMinDistance(distance: number): void {
+        this.minDistance = Math.max(0, distance);
+    }
+
+    teleport(x: number, y: number, z: number): void {
+        this.count = 0;
+        this.hasCommit = false;
+        this.hasHead = true;
+        this.prevX = this.currX = x;
+        this.prevY = this.currY = y;
+        this.prevZ = this.currZ = z;
+    }
+
+    setOpacity(alpha: number): void {
+        this.opacity = Math.max(0, Math.min(1, alpha));
+    }
+
+    setTexture(id: string | null): void {
+        this.texture = id;
+    }
+
+    setBlend(blend: RibbonBlend): void {
+        this.blend = blend;
+    }
+
     setColor(start: RibbonColor, end: RibbonColor): void {
         this.color = [copyColor(start), copyColor(end)];
     }
@@ -334,6 +377,9 @@ export class TrailItem implements TrailHandle {
         const d = this.drawOptions;
         d.width = this.width;
         d.color = this.color;
+        d.texture = this.texture;
+        d.blend = this.blend;
+        d.opacity = this.opacity;
         this.batch.appendStrip(this.scratch, total, d);
     }
 
@@ -369,18 +415,19 @@ export class BeamItem implements BeamHandle {
     private hasEndpoints = false;
     private width: number;
     private color: RibbonColor;
-    private readonly texture: string | null;
-    private readonly blend: 'alpha' | 'additive';
+    private texture: string | null;
+    private blend: RibbonBlend;
+    private opacity = 1;
     private readonly depthTest: boolean;
     private readonly facing: 'camera' | 'up';
     private readonly uvScale: number;
     private readonly layer: number;
     private readonly drawOptions: AppendStripOptions;
-    private readonly uvScroll: number;
+    private uvScroll: number;
     private readonly segments: number;
     private noise: number;
-    private readonly noiseFrequency: number;
-    private readonly noiseSpeed: number;
+    private noiseFrequency: number;
+    private noiseSpeed: number;
     private readonly scratch: Float32Array;
     private time = 0;
 
@@ -444,6 +491,30 @@ export class BeamItem implements BeamHandle {
         this.noise = Math.max(0, amount);
     }
 
+    setUvScroll(speed: number): void {
+        this.uvScroll = speed;
+    }
+
+    setNoiseSpeed(speed: number): void {
+        this.noiseSpeed = Math.max(0, speed);
+    }
+
+    setNoiseFrequency(frequency: number): void {
+        this.noiseFrequency = Math.max(0, frequency);
+    }
+
+    setOpacity(alpha: number): void {
+        this.opacity = Math.max(0, Math.min(1, alpha));
+    }
+
+    setTexture(id: string | null): void {
+        this.texture = id;
+    }
+
+    setBlend(blend: RibbonBlend): void {
+        this.blend = blend;
+    }
+
     setColor(r: number, g: number, b: number, a: number): void {
         this.color = [r, g, b, a];
     }
@@ -501,6 +572,9 @@ export class BeamItem implements BeamHandle {
         const d = this.drawOptions;
         d.width = this.width;
         d.color = this.color;
+        d.texture = this.texture;
+        d.blend = this.blend;
+        d.opacity = this.opacity;
         d.uvOffset = this.time * this.uvScroll;
         this.batch.appendStrip(this.scratch, count, d);
     }

@@ -53,6 +53,18 @@ describe('RibbonItem', () => {
         expect(b.fake.calls[0]!.points).toEqual([1, 0, 0, 2, 0, 0]);
     });
 
+    test('live opacity, texture, and blend', () => {
+        const b = batch();
+        const item = new RibbonItem(1 as RibbonId, host, b.value, { points: [0, 0, 0, 1, 0, 0] });
+        item.setOpacity(0.4);
+        item.setTexture('spark');
+        item.setBlend('additive');
+        item.write(1);
+        expect(b.fake.calls[0]!.opts.opacity).toBe(0.4);
+        expect(b.fake.calls[0]!.opts.texture).toBe('spark');
+        expect(b.fake.calls[0]!.opts.blend).toBe('additive');
+    });
+
     test('rejects points over maxPoints', () => {
         const b = batch();
         const item = new RibbonItem(1 as RibbonId, host, b.value, { maxPoints: 2 });
@@ -102,6 +114,17 @@ describe('TrailItem', () => {
         expect(trail.pointCount).toBe(0);
     });
 
+    test('teleport clears history without a streak', () => {
+        const b = batch();
+        const trail = new TrailItem(1 as TrailId, host, b.value, { lifetime: 1, minDistance: 0 }, 64);
+        trail.setHead(0, 0, 0);
+        trail.setHead(1, 0, 0);
+        trail.teleport(5, 0, 0);
+        expect(trail.pointCount).toBe(1);
+        trail.write(0.5);
+        expect(b.fake.calls.length).toBe(0);
+    });
+
     test('lifetime and beam noise are live', () => {
         const b = batch();
         const trail = new TrailItem(1 as TrailId, host, b.value, { lifetime: 1 }, 64);
@@ -109,9 +132,20 @@ describe('TrailItem', () => {
         expect(trail.lifetime).toBe(0.25);
         const beam = new BeamItem(2 as BeamId, host, b.value, { noise: 0.5 });
         beam.setNoise(0.1);
+        beam.setUvScroll(2);
+        beam.setNoiseSpeed(0.5);
+        beam.setNoiseFrequency(3);
+        beam.setOpacity(0.6);
+        beam.setTexture('spark');
+        beam.setBlend('alpha');
         beam.set(0, 0, 0, 1, 0, 0);
+        beam.advance(0.5);
         beam.write(1);
         expect(b.fake.calls.length).toBe(1);
+        expect(b.fake.calls[0]!.opts.uvOffset).toBe(1);
+        expect(b.fake.calls[0]!.opts.opacity).toBe(0.6);
+        expect(b.fake.calls[0]!.opts.texture).toBe('spark');
+        expect(b.fake.calls[0]!.opts.blend).toBe('alpha');
     });
 });
 
