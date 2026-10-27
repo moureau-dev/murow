@@ -41,7 +41,7 @@ In-depth guides (served at https://murow.moureau.dev/docs/, also in the repo und
 - [Zero-allocation](./docs/zero-allocation.md) — the container toolkit (`SlotMap`/`SlotStore`/`SlotSet`/`Ring`/`FreeList`/`PooledCollection`/`SparseBatcher`) and ECS-first patterns.
 - [Determinism](./docs/determinism.md) — prediction/rollback rules, sources of non-determinism, fixed timestep, tick scheduling.
 - [Shaders](./docs/shaders.md) — the `d`/`std` DSL, custom materials/effects, compute, `GeometryBuilder`.
-- [Renderer](./docs/renderer.md) — the WebGPU renderer: managers, materials, lights, shadows, decals, particles, cameras, animation, 2D/3D.
+- [Renderer](./docs/renderer.md) — the WebGPU renderer: managers, materials, lights, shadows, decals, particles, ribbons, cameras, animation, 2D/3D.
 - [Performance](./docs/performance.md) — what the renderer does automatically, frame-budget levers, known gaps.
 - [Netcode](./docs/netcode.md) — designing multiplayer: intents/RPCs/components, predictions/handlers, interest, lag compensation, transports.
 - [Assets](./docs/assets.md) — the asset pipeline: `AssetBucket`, prefab specs, glTF, spritesheets, CDN.
@@ -1428,11 +1428,38 @@ renderer.cameras.remove(minimap);
 
 **Renderer manager capacity and counts.** Creation throws and logs at capacity; it never returns `null`. Counts and capacities live on the manager: `instances.count` / `instances.capacity` / `instances.skinnedCount` / `instances.skinnedCapacity` / `instances.totalCount` / `instances.totalCapacity`, `lights.count`, `cameras.count`, `layers.count`. The renderer no longer exposes `lightCount` or `maxSkinned`.
 
+## Lines, Ribbons, Trails, Beams
+
+`renderer.ribbons` is one manager over one dynamic strip batch. It exposes
+`addLine`, `add`, `createTrail`, and `createBeam`. All use world-space width
+(`number` or `[start, end]`), RGBA or gradient color, optional `texture`,
+`blend: 'alpha' | 'additive'`, `depthTest`, and `layer`.
+
+```ts
+const line = renderer.ribbons.addLine({ points, width: 0.03, color: [0.2, 1, 0.4, 1] });
+const ribbon = renderer.ribbons.add({ points, width: [0.2, 0], color: [start, end], texture: 'slash' });
+const trail = renderer.ribbons.createTrail({ maxPoints: 64, lifetime: 0.35, minDistance: 0.05, width: [0.25, 0] });
+const beam = renderer.ribbons.createBeam({ width: 0.2, segments: 8, noise: 0.05, uvScroll: 1.5 });
+
+trail.setHead(x, y, z); // tick
+beam.set(fromX, fromY, fromZ, toX, toY, toZ); // tick
+```
+
+- `addLine`/`add` handles have `setPoints`, `setColor`, `setWidth`, `enabled`, `destroy`.
+- `createTrail` handles have `setHead`, `clear`, `setColor`, `setWidth`, `enabled`.
+- `createBeam` handles have `set`, `setColor`, `setWidth`, `enabled`.
+- `renderer.render()` calls `ribbons.simulate(frameDelta)` and draws at `alpha`. Lines/ribbons interpolate point lists when the count is unchanged; trails interpolate the live head; beams interpolate both endpoints. Do not add points in `render`.
+- `facing` is `'camera'` (default) or `'up'`. Alpha ranges are sorted far-to-near inside the batch; additive is order-independent.
+- `layer` resolves through `renderer.layers`; each camera draws only layers in `camera.mask`.
+- Capacity options: `maxRibbons` (256), `maxTrails` (128), `maxBeams` (256), `maxRibbonVertices` (65536), `maxTrailPoints` (64), `maxTotalTrailPoints` (8192). Handles throw at capacity; vertex overflow drops strips and warns.
+- Stats: `ribbonCount`, `trailCount`, `beamCount`, `vertexUsage`, `vertexCapacity`, `stripCount`, `droppedStrips`. Events: `ribbonEvents`, `trailEvents`, `beamEvents`.
+- Textures are AssetBucket ids; missing ids use white.
+
 ## WebGPU Renderer (`murow/webgpu`)
 
-`WebGPU3DRenderer` / `WebGPU2DRenderer` are manager-based (3D: instances, materials, lights, shadows, decals, particles, models, camera; 2D: sprites, sheets, geometry, camera), with glTF + skeletal/morph animation, GPU frame interpolation, frustum and animation culling, and a full-screen effect chain (fxaa, bloom, grade, fog, motionBlur, vignette, chromatic, scanlines, posterize, custom). Materials support `standard`, `pbr` (metallic-roughness with direct lights and optional IBL), `unlit`, `emissive`, and custom `shader`. `renderer.ibl.load({ equirect })` adds CPU-prefiltered image-based lighting, and `renderer.skybox` draws the same environment as a background (`enabled`, `tint`, `resolution`; default equirect 512x256).
+`WebGPU3DRenderer` / `WebGPU2DRenderer` are manager-based (3D: instances, materials, lights, shadows, decals, particles, ribbons, models, camera; 2D: sprites, sheets, geometry, camera), with glTF + skeletal/morph animation, GPU frame interpolation, frustum and animation culling, and a full-screen effect chain (fxaa, bloom, grade, fog, motionBlur, vignette, chromatic, scanlines, posterize, custom). Materials support `standard`, `pbr` (metallic-roughness with direct lights and optional IBL), `unlit`, `emissive`, and custom `shader`. `renderer.ibl.load({ equirect })` adds CPU-prefiltered image-based lighting, and `renderer.skybox` draws the same environment as a background (`enabled`, `tint`, `resolution`; default equirect 512x256).
 
-The full guide — managers and handles, materials, lighting, shadows, decals, particles, cameras, animation, and 2D/3D usage — is in the [renderer guide](./docs/renderer.md), with [shader authoring](./docs/shaders.md) and [performance](./docs/performance.md) alongside.
+The full guide — managers and handles, materials, lighting, shadows, decals, particles, ribbons, cameras, animation, and 2D/3D usage — is in the [renderer guide](./docs/renderer.md), with [shader authoring](./docs/shaders.md) and [performance](./docs/performance.md) alongside.
 
 **Level of detail (LOD).** Declare a chain on the prefab (`lods: [{ prefabId, distance }]`) and every `instances.add({ prefab })` inherits it; a per-instance `lod: [{ prefabId, distance }]` overrides. Levels are ordered near to far; `distance` is where a level takes over (omit on the last for the far plane). The renderer picks a level per LOD instance on the **tick** (in `storePreviousState`, before the frame's culling), from the camera distance, with a bias and hysteresis. Bias/enable are per-camera (`camera.lodBias`, `camera.lodEnabled`) falling back to `renderer.instances.lodBias` / `lodEnabled` / `lodHysteresis`; read the current level via `handle.lodLevel`. Skinned instances LOD too, but every level must share one skeleton. Multi-part / composite prefabs LOD too: each part gets its own chain built from the corresponding part of each level, recursively through nested composites, so every level must share the base's part structure (a mismatched part count throws when the level is added) and skinned levels must share the base's skeleton. Adjacent levels **geomorph on the GPU**: the vertex shader blends `position` -> the paired next level's `positionB` by a per-instance `morph` over `renderer.instances.lodFadeTicks` ticks (0 = instant hard switch; the renderer sets a default). Vertex correspondence between the two levels is the asset author's responsibility (the engine does not check it); the blend reads the same vertex index from both. Skinned instances hard-switch. Each level is a distinct model id, so a chain spends one of the `SparseBatcher`'s 64 slots per material layer (enforced by `ModelLibrary`).
 
@@ -1465,6 +1492,8 @@ To ask "is this instance hidden?" from gameplay, **track** the handles: `const t
 | Treating `sprite.layer` as camera visibility | `sprite.layer` is sort order; use `renderLayer` + `camera.mask` for visibility |
 | Using render layers for authority or interest | Layers are presentation-only; use netcode interest plugins |
 | Expecting occlusion or camera effects on every view | Occlusion runs with one view; effects need a full-screen rect |
+| Calling `renderer.ribbons.simulate(...)` every frame | `render()` already calls it; only call it yourself when driving rendering manually |
+| Adding trail points or moving beam endpoints in `render` | Do it in `tick`; `render` only interpolates the live head/endpoints at `alpha` |
 | `renderer.camera.fov = Math.PI / 3` (radians) | `fov` is DEGREES in 0.1.8 (default 60): `renderer.camera.fov = 60`. Radians give a ~1° view — effectively black |
 | `import { WebGPU3DRenderer } from "https://esm.sh/murow/webgpu"` (browser) | Not a supported browser entry point. Use the documented pair: jsDelivr `+esm` for core + `murow/dist/webgpu/esm/murow.webgpu.bundle.js` for the renderer |
 | `instances.add({ prefab: 'hero' })` relying on the string id | Pass the prefab object: `instances.add({ prefab: assets.prefabs.get('hero') })` — type-safe and avoids a runtime bucket lookup |

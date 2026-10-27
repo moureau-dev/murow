@@ -636,6 +636,82 @@ The list API is `add(spec | effect)`, `set(specs)` (replace the whole chain in o
 - Chain capacity = `maxCameraEffects` (3D) / `maxEffects` (2D), default 20; `add` throws past it.
 - Both renderers support this: `renderer.camera.effects` on `WebGPU3DRenderer` and `WebGPU2DRenderer` alike. The 2D renderer enables the off-screen path the same way; it has no scene depth, so depth-based effects (`fog`) use a 1x1 fallback depth target (effectively a no-op).
 
+### Lines, ribbons, trails, beams — `renderer.ribbons`
+
+One manager and one dynamic strip batch cover all four. Lines are raw segments;
+ribbons are textured strips through a polyline; trails keep a time history from
+a moving head; beams are two-endpoint strips with optional UV scroll and noise.
+
+```ts
+const line = renderer.ribbons.addLine({
+  points: [0, 0, 0, 0, 1, 0],
+  width: 0.03,
+  color: [0.2, 1, 0.4, 1],
+  depthTest: true,
+  layer: 'world',
+});
+
+const ribbon = renderer.ribbons.add({
+  maxPoints: 128,
+  points: wavePoints,
+  width: [0.2, 0],
+  color: [[1, 0.8, 0.2, 1], [0.2, 0.8, 1, 0.1]],
+  texture: 'slash',
+  facing: 'camera',
+  blend: 'additive',
+});
+
+const trail = renderer.ribbons.createTrail({
+  maxPoints: 64,
+  lifetime: 0.35,
+  minDistance: 0.05,
+  width: [0.25, 0],
+  color: [[1, 1, 1, 1], [1, 0.4, 0, 0]],
+  texture: 'spark',
+  blend: 'additive',
+});
+
+const beam = renderer.ribbons.createBeam({
+  width: 0.2,
+  color: [0.3, 0.8, 1, 1],
+  texture: 'beam',
+  uvScroll: 1.5,
+  segments: 8,
+  noise: 0.05,
+  blend: 'additive',
+});
+```
+
+- `addLine` and `add` return a `RibbonHandle` (`setPoints`, `setColor`,
+  `setWidth`, `enabled`, `destroy`). `add` accepts `closed` and `facing`.
+- `createTrail` returns a `TrailHandle`. Call `setHead(x, y, z)` in `tick`;
+  points are committed by `minDistance`, and `lifetime` is in seconds.
+  `clear()` resets the history.
+- `createBeam` returns a `BeamHandle`. Call `set(from, to)` in `tick`.
+  `segments` subdivides for `noise`; `noiseSpeed` moves the wave pattern
+  (`0` = standing tether), and `uvScroll` moves the texture along the beam.
+- Width is in world units (`number` or `[start, end]`). Color is RGBA or a
+  `[start, end]` gradient.
+- `facing: 'camera'` billboards the strip toward the current view;
+  `facing: 'up'` uses world up. Additive blending is order-independent; alpha
+  strips are sorted far-to-near inside the batch.
+- `layer` resolves through `renderer.layers`; each view only draws layers in
+  `camera.mask`.
+- Tick updates points, heads, and endpoints. `render()` automatically calls
+  `ribbons.simulate(frameDelta)` and draws at `alpha`; lines/ribbons interpolate
+  their point lists when the point count is unchanged, trails interpolate the
+  live head, and beams interpolate both endpoints. History points never move.
+- Capacities: `maxRibbons` (256), `maxTrails` (128), `maxBeams` (256),
+  `maxRibbonVertices` (65536), `maxTrailPoints` (64), and
+  `maxTotalTrailPoints` (8192). Handles throw at capacity. Vertex overflow
+  drops whole strips and logs a warning.
+- Manager stats: `ribbonCount`, `trailCount`, `beamCount`, `vertexUsage`,
+  `vertexCapacity`, `stripCount`, `droppedStrips`. Per-pool events:
+  `ribbonEvents`, `trailEvents`, `beamEvents`.
+- Textures use asset bucket ids. Missing textures fall back to white.
+- Ribbons draw in every enabled view that includes their layer. They are not
+  part of the mesh transparent-sorting pass; their own ranges are sorted.
+
 ### Particles (2D)
 
 CPU-driven particles, drawn as sprites through the 2D renderer.
