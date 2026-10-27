@@ -1,20 +1,20 @@
-import { Transports, type Entity } from 'murow';
+import { InputSnapshot, SlotMap, SlotStore, Transports, World, type Entity } from 'murow';
 import { MouseLook, ScrollZoom } from 'murow/core/input';
 import { GameClient } from 'murow/netcode';
-import { WebGPU3DRenderer, type InstanceHandle } from 'murow/webgpu';
+import { WebGPU3DRenderer } from 'murow/webgpu';
 import { AssetBucket } from 'murow/renderer';
+import type { Handles } from 'murow/renderer/managers/handles';
 import {
     ARENA_HALF,
     Arena,
     CELL_SIZE,
     Components,
     WS_PATH,
-    intents,
     protocol,
     predictions,
-    rpcs,
     clamp,
 } from '../shared';
+import { CameraManager } from 'murow/renderer/managers/runtime/index';
 
 // ──────────────────────────────────────────────────────────────────────
 // Renderer + prefabs
@@ -105,18 +105,19 @@ client.use(predictions);
 // Renderer ↔ World bridge: one handle per networked entity.
 // ──────────────────────────────────────────────────────────────────────
 
-const handles = new Map<Entity, InstanceHandle>();
+const handles = new SlotStore<Entity, Handles.MeshInstanceHandle>(100);
 let localEntity: Entity | null = null;
 
 client.on('spawn', ({ entity }) => {
     const c = arena.world.has(entity, Components.Color) ? arena.world.get(entity, Components.Color) : { r: 200, g: 200, b: 200 };
     const p = arena.world.has(entity, Components.Position) ? arena.world.get(entity, Components.Position) : { x: 0, z: 0 };
-    const handle = renderer.instances.add({
+
+    handles.add(entity, renderer.instances.add({
         prefab: assets.prefabs.get('player'),
         color: [c.r / 255, c.g / 255, c.b / 255],
         position: [p.x, 0.45, p.z],
-    });
-    handles.set(entity, handle);
+    }));
+
     playerCountEl.textContent = String(handles.size);
 });
 
@@ -131,7 +132,7 @@ client.on('despawn', ({ entity }) => {
     const handle = handles.get(entity);
     if (handle !== undefined) {
         handle.destroy();
-        handles.delete(entity);
+        handles.remove(entity);
     }
     if (localEntity === entity) localEntity = null;
     playerCountEl.textContent = String(handles.size);
@@ -153,34 +154,16 @@ client.on('error', ({ error, context }) => {
 
 
 // ──────────────────────────────────────────────────────────────────────
-// Third-person orbit camera (local state only — not networked).
-// ──────────────────────────────────────────────────────────────────────
-
-const mouseLook = new MouseLook({
-    sensitivity: 0.0035,
-    yaw: { initial: Math.PI * 0.25 },
-    pitch: { initial: 0.6, min: 0.15, max: Math.PI / 2 - 0.05 },
-    drag: true, // allows mobile
-});
-
-const zoom = new ScrollZoom({
-    initial: 8,
-    min: 3,
-    max: 20,
-    sensitivity: 0.005,
-});
-
-canvas.addEventListener('click', () => {
-    mouseLook.lock(canvas).catch(() => { /* iOS: drag-to-look takes over */ });
-});
-
-renderer.camera.fov = 65;
-renderer.camera.near = 0.05;
-renderer.camera.far = 100;
-
-// ──────────────────────────────────────────────────────────────────────
 // Game loop wiring.
 // ──────────────────────────────────────────────────────────────────────
+
+const camera = renderer.cameras.create({
+    fov: 65,
+    near: 0.05,
+    far: 100,
+});
+
+const systems = createSystems({ client, camera });
 
 // prepare gpu lerp
 arena.loop.events.on('pre-tick', () => {
@@ -191,6 +174,12 @@ arena.loop.events.on('render', ({ alpha }) => {
     renderer.render(alpha);
 });
 
+arena.loop.events.on('tick', ({ input }) => {
+    systems.move(input);
+    systems.orbit(input, localEntity);
+    systems.sync()
+});
+
 const pingEl = document.getElementById('ping')!;
 
 // Ping once every 2 seconds so the delay estimate tracks RTT swings.
@@ -199,62 +188,118 @@ arena.loop.every(2).seconds(() => {
 });
 
 client.on('pong', ({ rtt }) => {
-    const ping = rtt / 2 + arena.loop.ticker.intervalMs;
-    const target = clamp(ping, MIN_DELAY_MS, MAX_DELAY_MS);
-    client.setInterpolationDelay(target);
-    client.setMaxBridgeGap(target * 2); // optional, but good to scale together with delay
-    pingEl.textContent = `${Math.round(rtt)} ms (buffer ${Math.round(target)} ms)`;
-});
-
-// controls
-arena.loop.events.on('tick', ({ input }) => {
-    // Read WASD into a 2D direction.
-    let dx = 0;
-    let dz = 0;
-    if (input.keys['KeyW']?.down || mobileForward) dz -= 1;
-    if (input.keys['KeyS']?.down || mobileBack)    dz += 1;
-    if (input.keys['KeyA']?.down || mobileLeft)    dx -= 1;
-    if (input.keys['KeyD']?.down || mobileRight)   dx += 1;
-
-    // Rotate the WASD vector by the camera yaw so "W" always moves away
-    // from the camera, "A" always strafes left, etc.
-    const yawCos = Math.cos(mouseLook.yaw);
-    const yawSin = Math.sin(mouseLook.yaw);
-    const localDx = dx * yawCos + dz * yawSin;
-    const localDz = -dx * yawSin + dz * yawCos;
-
-    // Normalize (so diagonals don't move faster).
-    const mag = Math.hypot(localDx, localDz);
-    const ndx = mag > 0 ? localDx / mag : 0;
-    const ndz = mag > 0 ? localDz / mag : 0;
-
-    if (ndx !== 0 || ndz !== 0) {
-        client.sendIntent('move', { dx: ndx, dz: ndz });
-    }
-});
-
-// sync entities world -> renderer (automatically lerps)
-arena.loop.events.on('tick', () => {
-    for (const [entity, handle] of handles) {
-        if (!arena.world.has(entity, Components.Position)) continue;
-        const p = arena.world.get(entity, Components.Position);
-        handle.setPosition(p.x, 0.45, p.z);
-    }
-});
-
-// camera orbit
-arena.loop.events.on('tick', ({ input }) => {
-    mouseLook.update(input);
-    zoom.update(input);
-
-    let tx = 0, ty = 0.45, tz = 0;
-    if (localEntity !== null && arena.world.has(localEntity, Components.Position)) {
-      const lp = arena.world.get(localEntity, Components.Position);
-      tx = lp.x; tz = lp.z;
-    }
-    const [cx, cy, cz] = mouseLook.orbit([tx, ty, tz], zoom.value);
-    renderer.camera.setPosition(cx, cy, cz);
-    renderer.camera.setTarget(tx, ty, tz);
+    systems.pong(rtt);
 });
 
 arena.loop.start();
+
+function createSystems({
+    client, 
+    camera,
+}: { 
+    client: GameClient, 
+    camera: CameraManager,
+}) {
+    const world = client.world;
+    const position = world.fields(Components.Position);
+    const { mouseLook, zoom } = createCameraCtl();
+    
+    return {
+        /**
+         * Syncs renderer instances with world.
+         */
+        sync: () => {
+            for (const eid of world.query(Components.Position)) {
+                const handle = handles.get(eid);
+                if (!handle) continue;
+
+                const x = position.x[eid];
+                const z = position.z[eid];
+
+                handle.setPosition(x, 0.45, z);
+            }
+        },
+        /**
+         * Sends move intent from keyboard input
+         */
+        move: (input: InputSnapshot) => {
+            // Read WASD into a 2D direction.
+            let dx = 0;
+            let dz = 0;
+            if (input.keys['KeyW']?.down || mobileForward) dz -= 1;
+            if (input.keys['KeyS']?.down || mobileBack)    dz += 1;
+            if (input.keys['KeyA']?.down || mobileLeft)    dx -= 1;
+            if (input.keys['KeyD']?.down || mobileRight)   dx += 1;
+        
+            // Rotate the WASD vector by the camera yaw so "W" always moves away
+            // from the camera, "A" always strafes left, etc.
+            const yawCos = Math.cos(mouseLook.yaw);
+            const yawSin = Math.sin(mouseLook.yaw);
+            const localDx = dx * yawCos + dz * yawSin;
+            const localDz = -dx * yawSin + dz * yawCos;
+        
+            // Normalize (so diagonals don't move faster).
+            const mag = Math.hypot(localDx, localDz);
+            const ndx = mag > 0 ? localDx / mag : 0;
+            const ndz = mag > 0 ? localDz / mag : 0;
+        
+            if (ndx === 0 && ndz === 0) return;
+
+            // Send delta
+            client.sendIntent('move', { dx: ndx, dz: ndz });
+        },
+        /**
+         * Camera orbit
+         */
+        orbit: (input: InputSnapshot, eid: number) => {
+            if (!eid) return;
+
+            mouseLook.update(input);
+            zoom.update(input);
+
+            const ty = 0.45;
+            const tx = position.x[eid] ?? 0;
+            const tz = position.z[eid] ?? 0;
+
+            const [cx, cy, cz] = mouseLook.orbit([tx, ty, tz], zoom.value);
+            camera.setPosition(cx, cy, cz);
+            camera.setTarget(tx, ty, tz);
+        },
+        /**
+         * Calculates and sets interpolation delay from
+         * ping acks received.
+         */
+        pong: (rtt: number) => {
+            const ping = rtt / 2 + client.loop.ticker.intervalMs;
+            const target = clamp(ping, MIN_DELAY_MS, MAX_DELAY_MS);
+            client.setInterpolationDelay(target);
+            client.setMaxBridgeGap(target * 2); // optional, but good to scale together with delay
+            pingEl.textContent = `${Math.round(rtt)} ms (buffer ${Math.round(target)} ms)`;
+        }
+    }
+}
+
+function createCameraCtl() {
+    const mouseLook = new MouseLook({
+        sensitivity: 0.0035,
+        yaw: { initial: Math.PI * 0.25 },
+        pitch: { initial: 0.6, min: 0.15, max: Math.PI / 2 - 0.05 },
+        drag: true, // allows mobile
+    });
+
+    const zoom = new ScrollZoom({
+        initial: 8,
+        min: 3,
+        max: 20,
+        sensitivity: 0.005,
+    });
+    
+    canvas.addEventListener('click', () => {
+        mouseLook.lock(canvas).catch(() => { /* iOS: drag-to-look takes over */ });
+    });
+
+    return {
+        mouseLook,
+        zoom,
+    }
+}
