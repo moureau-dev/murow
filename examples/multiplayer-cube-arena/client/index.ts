@@ -17,42 +17,6 @@ import {
 } from '../shared';
 
 // ──────────────────────────────────────────────────────────────────────
-// Renderer + prefabs
-// ──────────────────────────────────────────────────────────────────────
-
-const { canvas, playerCount, status, mobile} = setup();
-
-const assets = new AssetBucket('3d')
-    .prefabs(({ bucket }) => bucket
-        .add({
-            type: 'grid',
-            id: 'floor',
-            size: ARENA_HALF * 2 + 2,
-            step: CELL_SIZE,
-            lineWidth: 0.01,
-        })
-        .add({ type: 'cube', id: 'player', size: 0.9 })
-    );
-
-await assets.load();
-
-const renderer = new WebGPU3DRenderer(canvas, {
-    clearColor: [0.05, 0.07, 0.13, 1],
-    autoResize: true,
-    assets,
-    maxInstances: 64,
-    camera: false, // no default camera
-});
-await renderer.init();
-
-// Static grid floor — never moves, no per-tick update needed.
-renderer.instances.add({
-    prefab: assets.prefabs.get('floor'),
-    color: [0.2, 0.25, 0.35],
-    position: [0, 0, 0],
-});
-
-// ──────────────────────────────────────────────────────────────────────
 // World + client
 // ──────────────────────────────────────────────────────────────────────
 
@@ -87,6 +51,41 @@ client.use(predictions);
 // ──────────────────────────────────────────────────────────────────────
 // Renderer ↔ World bridge: one handle per networked entity.
 // ──────────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────
+// Renderer + prefabs
+// ──────────────────────────────────────────────────────────────────────
+
+const { canvas, playerCount, status, mobile} = setup();
+
+const assets = new AssetBucket('3d')
+    .prefabs(({ bucket }) => bucket
+        .add({
+            type: 'grid',
+            id: 'floor',
+            size: ARENA_HALF * 2 + 2,
+            step: CELL_SIZE,
+            lineWidth: 0.01,
+        })
+        .add({ type: 'cube', id: 'player', size: 0.9 })
+    );
+
+await assets.load();
+
+const renderer = new WebGPU3DRenderer(canvas, {
+    clearColor: [0.05, 0.07, 0.13, 1],
+    autoResize: true,
+    assets,
+    maxInstances: 64,
+    camera: false, // no default camera
+});
+await renderer.init();
+
+// Static grid floor — never moves, no per-tick update needed.
+renderer.instances.add({
+    prefab: assets.prefabs.get('floor'),
+    color: [0.2, 0.25, 0.35],
+    position: [0, 0, 0],
+});
 
 const handles = new SlotStore<Entity, Handles.MeshInstanceHandle>(100);
 
@@ -155,8 +154,6 @@ arena.loop.events.on('tick', ({ input }) => {
     systems.sync()
 });
 
-const pingEl = document.getElementById('ping')!;
-
 // Ping once every 2 seconds so the delay estimate tracks RTT swings.
 arena.loop.every(2).seconds(() => {
     client.ping();
@@ -177,8 +174,9 @@ function createSystems({
 }) {
     const world = client.world;
     const position = world.fields(Components.Position);
-    const { mouseLook, zoom } = createCameraCtl();
-    
+    const { mouseLook, zoom } = createCameraCtrl();
+    const pingEl = document.getElementById('ping')!;
+
     return {
         /**
          * Syncs renderer instances with world.
@@ -255,7 +253,7 @@ function createSystems({
     }
 }
 
-function createCameraCtl() {
+function createCameraCtrl() {
     const mouseLook = new MouseLook({
         sensitivity: 0.0035,
         yaw: { initial: Math.PI * 0.25 },
