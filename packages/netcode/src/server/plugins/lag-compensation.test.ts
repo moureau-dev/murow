@@ -86,7 +86,7 @@ describe('LagCompensation', () => {
         expect(v.vx).toBe(12);
     });
 
-    test('picks the nearest frame when the exact tick is unavailable', () => {
+    test('picks the nearest record when the exact tick is unavailable', () => {
         const world = makeWorld();
         const e = world.spawn();
         world.add(e, Position, { x: 0, y: 0 });
@@ -105,7 +105,7 @@ describe('LagCompensation', () => {
         const exact = plugin.rewind(2, () => world.get(e, Position).x);
         expect(exact).toBe(200);
 
-        // Out-of-range tick clamps to the nearest retained frame rather than
+        // Out-of-range tick clamps to the nearest retained record rather than
         // throwing, and still restores afterwards.
         const nearest = plugin.rewind(999, () => world.get(e, Position).x);
         expect(nearest).toBe(500);

@@ -236,7 +236,7 @@ describe('multiplayer end-to-end', () => {
         expect(payload.dy).toBeCloseTo(-3);
     });
 
-    test('intent-failed fires when the server receives a malformed intent frame', async () => {
+    test('intent-failed fires when the server receives a malformed intent packet', async () => {
         const ctx = setupServer();
         const { peer } = connectClient(ctx);
         await flush();

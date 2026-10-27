@@ -9,3 +9,5 @@ export * from './codec';
 export * from './components';
 export * from './ctx';
 export * from './messages';
+export * from './dirty-state';
+export { defineProtocol, type Protocol, type ProtocolSpec } from 'murow/protocol';

@@ -13,10 +13,10 @@ export interface LagCompensationOptions {
     components: Component<any>[];
 }
 
-/** Frame header: tick u32 | entryCount u32, then packed entries. */
+/** Record header: tick u32 | entryCount u32, then packed entries. */
 const HEADER_BYTES = 8;
 
-/** Entities a freshly-allocated frame can hold before it has to grow. */
+/** Entities a freshly-allocated record can hold before it has to grow. */
 const INITIAL_ENTITIES = 64;
 
 /**
@@ -26,10 +26,10 @@ const INITIAL_ENTITIES = 64;
  *   for each entry: [ entityId u32 ][ presence mask + packed fields ]
  *
  * The per-entry body is exactly `world.writeEntity`'s layout, so recording a
- * tick and restoring one are a single zero-allocation pass each. Frames grow
+ * tick and restoring one are a single zero-allocation pass each. Records grow
  * on demand and are then reused across the ring forever.
  */
-interface Frame {
+interface HistoryRecord {
     tick: number;
     bytes: Uint8Array;
     dv: DataView;
@@ -41,14 +41,14 @@ function maskWords(count: number): number {
 
 /**
  * Records the configured components every tick for `historyMs` worth of
- * frames. `rewind(clientTick, fn)` overlays the historical state for the
+ * records. `rewind(clientTick, fn)` overlays the historical state for the
  * duration of `fn`, then restores.
  *
- * The history is stored as a ring of preallocated binary frames rather than
+ * The history is stored as a ring of preallocated binary records rather than
  * per-tick `Map`s of cloned objects. Recording uses `world.writeEntity` and
  * restoring writes straight into the world's SoA arrays, both into
  * caller-owned `DataView`s, so steady-state ticks and rewinds allocate
- * nothing. Frames only allocate when the recorded entity set outgrows them,
+ * nothing. Records only allocate when the recorded entity set outgrows them,
  * after which the same buffers are reused for the life of the plugin.
  */
 export class LagCompensation implements ServerPlugin {
@@ -60,8 +60,8 @@ export class LagCompensation implements ServerPlugin {
     private currentTick = 0;
     private world: World | null = null;
 
-    /** Preallocated frame ring; `push()` recycles the oldest on wrap. */
-    private ring!: RingStore<Frame>;
+    /** Preallocated record ring; `push()` recycles the oldest on wrap. */
+    private ring!: RingStore<HistoryRecord>;
     /** Bytes per entity entry, worst case (eid + full presence mask + all fields). */
     private entryStride = 4;
     private words = 1;
@@ -114,7 +114,7 @@ export class LagCompensation implements ServerPlugin {
         this.dirtyEids = new Uint32Array(maxEntities);
 
         const initial = HEADER_BYTES + Math.min(maxEntities, INITIAL_ENTITIES) * this.entryStride;
-        this.ring = new RingStore<Frame>({ capacity: this.ringSize, create: () => makeFrame(initial) });
+        this.ring = new RingStore<HistoryRecord>({ capacity: this.ringSize, create: () => makeRecord(initial) });
         this.ensureScratch(initial);
     }
 
@@ -130,10 +130,10 @@ export class LagCompensation implements ServerPlugin {
         if (this.dirtyCount === 0) this.collectAll(world);
 
         const count = this.dirtyCount;
-        const frame = this.ring.get(this.ring.push());
-        this.ensureFrame(frame, count);
-        frame.tick = this.currentTick;
-        const dv = frame.dv;
+        const record = this.ring.get(this.ring.push());
+        this.ensureRecord(record, count);
+        record.tick = this.currentTick;
+        const dv = record.dv;
         dv.setUint32(0, this.currentTick, true);
 
         let off = HEADER_BYTES;
@@ -152,11 +152,11 @@ export class LagCompensation implements ServerPlugin {
         const world = this.world;
         if (world === null) return fn();
 
-        const slot = this.findFrame(clientTick);
+        const slot = this.findRecord(clientTick);
         if (slot === -1) return fn();
 
-        const frame = this.ring.get(slot);
-        const count = frame.dv.getUint32(4, true);
+        const record = this.ring.get(slot);
+        const count = record.dv.getUint32(4, true);
         if (count === 0) return fn();
 
         this.ensureScratch(HEADER_BYTES + count * this.entryStride);
@@ -167,16 +167,16 @@ export class LagCompensation implements ServerPlugin {
         let soff = HEADER_BYTES;
         let saved = 0;
         for (let i = 0; i < count; i++) {
-            const e = frame.dv.getUint32(foff, true);
+            const e = record.dv.getUint32(foff, true);
             foff += 4;
             if (world.isAlive(e)) {
                 sdv.setUint32(soff, e, true);
                 soff += 4;
                 soff = world.writeEntity(e, this.components, sdv, soff);
                 saved++;
-                foff = this.readEntity(world, e, frame.dv, foff);
+                foff = this.readEntity(world, e, record.dv, foff);
             } else {
-                foff = this.skipEntity(frame.dv, foff);
+                foff = this.skipEntity(record.dv, foff);
             }
         }
         sdv.setUint32(4, saved, true);
@@ -222,14 +222,14 @@ export class LagCompensation implements ServerPlugin {
         this.dirtyEids[this.dirtyCount++] = eid;
     };
 
-    private findFrame(clientTick: number): number {
+    private findRecord(clientTick: number): number {
         const size = this.ring.size;
         const delta = this.currentTick - clientTick;
         if (delta >= 0 && delta < size) {
             const slot = this.ring.slotAt(size - 1 - delta);
             if (this.ring.get(slot).tick === clientTick) return slot;
         }
-        // Gap/out-of-range: nearest retained frame.
+        // Gap/out-of-range: nearest retained record.
         let best = -1;
         let bestDelta = Number.MAX_SAFE_INTEGER;
         for (let i = 0; i < size; i++) {
@@ -245,11 +245,11 @@ export class LagCompensation implements ServerPlugin {
         return best;
     }
 
-    private ensureFrame(frame: Frame, count: number): void {
+    private ensureRecord(record: HistoryRecord, count: number): void {
         const required = HEADER_BYTES + count * this.entryStride;
-        if (frame.bytes.length >= required) return;
-        frame.bytes = new Uint8Array(required);
-        frame.dv = new DataView(frame.bytes.buffer);
+        if (record.bytes.length >= required) return;
+        record.bytes = new Uint8Array(required);
+        record.dv = new DataView(record.bytes.buffer);
     }
 
     private ensureScratch(required: number): void {
@@ -310,7 +310,7 @@ export class LagCompensation implements ServerPlugin {
     }
 }
 
-function makeFrame(size: number): Frame {
+function makeRecord(size: number): HistoryRecord {
     const bytes = new Uint8Array(size);
     return { tick: -1, bytes, dv: new DataView(bytes.buffer) };
 }

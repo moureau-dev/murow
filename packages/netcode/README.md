@@ -12,12 +12,35 @@ import { GameServer, GameClient } from 'murow/netcode';
 ## What's in the box
 
 - **Game server / client** - `GameServer`, `GameClient`
+- **Protocol** - [`defineProtocol`](#protocol)
 - **Messages** - [`defineIntents`](#intents), [`defineRpcs`](#rpcs)
 - **Custom (non-entity) messages** - [`defineSnapshots`](#custom-messages)
 - **Game logic** - [`definePredictions`](#predictions), [`defineHandlers`](#handlers)
 - **Component sync** - [`networked()`](#networked-components)
 - **Server plugins** - [`AoiGrid`](#aoigrid), [`LagCompensation`](#lagcompensation)
 - **Test transports** - `MemoryServerTransport` / `VirtualServerTransport` (from `murow/net`)
+
+## Protocol
+
+Define intents, RPCs, and custom messages once with `defineProtocol`, and pass
+the same object to both sides. It carries a version and a fingerprint over every
+schema; the handshake combines that with the ECS component fingerprint.
+
+```ts
+import { defineProtocol } from 'murow/netcode';
+
+export const protocol = defineProtocol({
+  version: 1,
+  intents: { move: { dx: f32, dy: f32 } },
+  rpcs: {},
+});
+
+new GameServer({ world, loop, transport, protocol });
+new GameClient({ world, loop, transport, protocol });
+```
+
+`defineIntents` / `defineRpcs` / `defineSnapshots` remain available for raw
+registries and incremental adoption. `defineProtocol` composes them.
 
 ## Minimal example
 
@@ -29,18 +52,21 @@ shared between server and client.
 
 ```ts
 import { defineComponent, f32 } from 'murow';
-import { defineIntents, defineRpcs, networked } from 'murow/netcode';
+import { defineProtocol, networked } from 'murow/netcode';
 
 export const Position = defineComponent('Position', {
   schema: { x: f32, y: f32 },
   sync: networked({ rate: 'every-tick', interest: 'global', interp: 'lerp' }),
 });
 
-export const intents = defineIntents({
-  move: { dx: f32, dy: f32 },
+export const protocol = defineProtocol({
+  version: 1,
+  intents: { move: { dx: f32, dy: f32 } },
+  rpcs: {},
 });
 
-export const rpcs = defineRpcs({});
+export const intents = protocol.intents;
+export const rpcs = protocol.rpcs;
 ```
 </details>
 
@@ -67,7 +93,7 @@ export const predictions = definePredictions(intents, {
 ```ts
 import { BunWebSocketServerTransport, GameLoop, World } from 'murow';
 import { GameServer } from 'murow/netcode';
-import { intents, rpcs, Position } from './shared/protocol';
+import { protocol, intents, Position } from './shared/protocol';
 import { predictions } from './shared/predictions';
 
 const transport = BunWebSocketServerTransport.create(3000, { path: '/ws' });
@@ -76,7 +102,7 @@ const world = new World({ maxEntities: 64, components: [Position] });
 const loop = new GameLoop({ tickRate: 20, type: 'server-timeout' });
 const server = new GameServer({
   world, loop, transport,
-  protocol: { intents, rpcs },
+  protocol,
 });
 
 server.use(predictions);
@@ -98,7 +124,7 @@ loop.start();
 import { GameLoop, World } from 'murow';
 import { BrowserWebSocketClientTransport } from 'murow/net/adapters/browser-websocket';
 import { GameClient } from 'murow/netcode';
-import { intents, rpcs, Position } from './shared/protocol';
+import { protocol, intents, Position } from './shared/protocol';
 import { predictions } from './shared/predictions';
 
 const transport = new BrowserWebSocketClientTransport(`ws://${location.host}/ws`);
@@ -107,7 +133,7 @@ const world = new World({ maxEntities: 64, components: [Position] });
 const loop = new GameLoop({ tickRate: 20, type: 'client' });
 const client = new GameClient({
   world, loop, transport,
-  protocol: { intents, rpcs },
+  protocol,
 });
 
 client.use(predictions);
@@ -173,7 +199,7 @@ safe even under reorder or skipped game ticks.
 </details>
 
 <details>
-<summary><b>Entity assignment frame</b></summary>
+<summary><b>Entity assignment packet</b></summary>
 
 ```
 [type=0x84][serverEid: u32]
@@ -422,21 +448,21 @@ exposes the token for persisting across reloads.
 ```ts
 new GameServer({
   world, loop, transport,
-  protocol: { intents, rpcs },
+  protocol,
   snapshot: {
     rate: 20,                 // clamped to tickRate
     maxBytesPerPeer: 1400,    // optional: highest-priority entities first, rest next tick
     priority: (e, world) => 0,// optional: higher sends first
   },
   kick: { ackTimeout: 2000 }, // ms before forcing close
-  schemaFingerprint: 'v1',     // optional: defaults to a fingerprint of the synced schema
+  schemaFingerprint: 'v1',     // optional: defaults to component + protocol fingerprint
   debug: true,                 // optional: true | Logger (default: no logging)
 });
 ```
 
 Defaults: `snapshot.rate = min(20, tickRate)`, `kick.ackTimeout = 2000`.
 
-`schemaFingerprint` is sent to each client on connect; if it does not match the client's, the client fires an `'error'` with context `'schema-fingerprint'` (a guard against client/server layout drift). Defaults to a fingerprint derived from the synced components, so a real drift is caught without configuring anything.
+`schemaFingerprint` is sent to each client on connect; if it does not match the client's, the client fires an `'error'` with context `'schema-fingerprint'` (a guard against client/server drift). Defaults to the synced-component fingerprint plus the `defineProtocol` fingerprint, so a real drift is caught without configuring anything.
 
 `debug` accepts `true` (console `[net-server]` logger), a `murow/core/logger` `Logger`, or is omitted for no logging. It records connect/disconnect, kick, unknown-message, and AOI interest-leave events.
 </details>
@@ -447,7 +473,7 @@ Defaults: `snapshot.rate = min(20, tickRate)`, `kick.ackTimeout = 2000`.
 ```ts
 new GameClient({
   world, loop, transport,
-  protocol: { intents, rpcs },
+  protocol,
   strategy: { kind: 'snapshot-interpolation', delay: 100, staleWindow: 300, maxDesync: 500, maxBridgeGap: 250 },
   prediction: { bufferSize: 64 },
   retransmitMs: 0,             // optional: resend the oldest unacked intent after this many ms (0 = off)
@@ -471,7 +497,7 @@ Defaults: `strategy = { kind: 'snapshot-interpolation' }` (`delay = 100`,
 - `maxDesync`: desync past which the play-out clock hard-snaps instead of warping, ms.
 - `maxBridgeGap`: largest data gap held instead of bridged, ms.
 - `bufferSize`: max buffered unacked predictions kept for rollback.
-- `retransmitMs`: with a value > 0, resend the oldest unacked intent frame
+- `retransmitMs`: with a value > 0, resend the oldest unacked intent packet
   once it has been in flight this long (lost-intent recovery). The server
   dedups by sequence, so a resend of an applied intent is a no-op; the client
   emits `'intent-retransmit'`. Default `0` (off).
@@ -561,7 +587,7 @@ server.use(new LagCompensation({
 }));
 ```
 
-History is a ring of preallocated binary frames (one per tick), so
+History is a ring of preallocated binary records (one per tick), so
 steady-state ticks and rewinds allocate nothing. Memory scales with
 `maxEntities × ringSize × bytesPerEntity`, where
 `ringSize = ceil(historyMs / 1000 × tickRate) + 1`. Register one instance
@@ -696,7 +722,7 @@ in use. Predictions assume both sides advance at the same `deltaTime`.
 
 ## Transport
 
-Implement `TransportAdapter` from `murow`. Test transports live in `murow/net`:
+Implement `TransportAdapter` from `murow/net`. Test transports also live there:
 
 - `MemoryServerTransport`: in-process microtask pair, no clock.
 - `VirtualServerTransport`: simulated latency / jitter / loss / reorder, seedable; you drive a `VirtualNetwork` clock via `advance(ms)`.
@@ -709,7 +735,7 @@ Murow's WebSocket transports (`BunWebSocketServerTransport`, browser
 <summary><b>Writing your own transport</b></summary>
 
 ```ts
-import type { TransportAdapter, ServerTransportAdapter } from 'murow/netcode';
+import type { TransportAdapter, ServerTransportAdapter } from 'murow/net';
 
 class MyServerTransport implements ServerTransportAdapter<MyPeerTransport> {
   // onConnection, onDisconnection, getPeer, getPeerIds, close
@@ -748,6 +774,24 @@ src/
 ├── codec/delta-codec.ts
 └── ctx.ts
 ```
+
+## Dirty state checker
+
+`DirtyStateChecker` reads the ECS dirty flags that drive snapshots. Use it in
+tests and debug builds to catch leaked dirty state:
+
+```ts
+import { DirtyStateChecker } from 'murow/netcode';
+
+const dirty = new DirtyStateChecker(server.world, [Position]);
+dirty.count();                         // dirty (entity, component) entries
+dirty.assertDirty(entity, Position);   // throws when not dirty
+dirty.assertClean();                   // throws when anything is dirty
+dirty.report();                        // component -> entities, for failures
+```
+
+The netcode packet tests use it to assert that a server snapshot tick clears
+dirty state and that a prediction marks its networked component dirty.
 
 ## License
 

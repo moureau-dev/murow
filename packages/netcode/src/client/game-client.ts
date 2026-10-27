@@ -4,7 +4,8 @@ import { Reconciler } from 'murow/core/prediction';
 import type { Component, Entity, World } from 'murow/ecs';
 import type { GameLoop } from 'murow/game';
 import type { TransportAdapter } from 'murow/net';
-import { defineRPC } from 'murow/protocol';
+import { ClientMessage, ServerMessage, packet, packetType, packetPayload } from 'murow/net/wire';
+import { defineRPC, type Protocol } from 'murow/protocol';
 import { Network } from '../network/base';
 import { decodeDelta, type DecodedDelta } from '../codec/delta-codec';
 import { SnapshotInterpolationStrategy, PeerRenderStrategy, createStrategy } from './strategies';
@@ -21,21 +22,26 @@ import { SnapshotPool } from '../codec/snapshot-pool';
 import { makeFieldsAccessor, makeMarkDirty, type PredictionContext } from '../ctx';
 import type { DefinedSnapshots, SnapshotSchemaMap, MessagePayload } from '../messages';
 
-const MSG_SNAPSHOT = 0x80;
-const MSG_RPC = 0x81;
-const MSG_KICK = 0x82;
-const MSG_ASSIGN_ENTITY = 0x84;
-const MSG_SCHEMA = 0x85;
-const MSG_SESSION = 0x86;
-const MSG_CUSTOM = 0x87;
-const MSG_SYNC_COMPLETE = 0x88;
-const MSG_OUTCOME = 0x89;
-const CMSG_INTENT = 0x01;
-const CMSG_RPC = 0x02;
-const CMSG_KICK_ACK = 0x03;
-const CMSG_RESUME = 0x04;
-const CMSG_MESSAGE = 0x05;
-const CMSG_SYNC_ACK = 0x06;
+const {
+    Snapshot: MSG_SNAPSHOT,
+    Rpc: MSG_RPC,
+    Kick: MSG_KICK,
+    AssignEntity: MSG_ASSIGN_ENTITY,
+    Schema: MSG_SCHEMA,
+    Session: MSG_SESSION,
+    Custom: MSG_CUSTOM,
+    SyncComplete: MSG_SYNC_COMPLETE,
+    Outcome: MSG_OUTCOME,
+} = ServerMessage;
+
+const {
+    Intent: CMSG_INTENT,
+    Rpc: CMSG_RPC,
+    KickAck: CMSG_KICK_ACK,
+    Resume: CMSG_RESUME,
+    Message: CMSG_MESSAGE,
+    SyncAck: CMSG_SYNC_ACK,
+} = ClientMessage;
 
 const PING_RPC = defineRPC({ method: '__murow_ping', schema: { ts: u16 } });
 const PONG_RPC = defineRPC({ method: '__murow_pong', schema: { ts: u16 } });
@@ -64,12 +70,14 @@ export interface GameClientOptions<
     world: World;
     loop: GameLoop<any>;
     transport: TransportAdapter;
-    protocol: {
-        intents: DefinedIntents<I>;
-        rpcs: DefinedRpcs<R>;
-        /** Optional custom (non-entity) message types. */
-        snapshots?: DefinedSnapshots<S>;
-    };
+    protocol:
+        | Protocol<I, R, S>
+        | {
+              intents: DefinedIntents<I>;
+              rpcs: DefinedRpcs<R>;
+              /** Legacy name for custom message types. */
+              snapshots?: DefinedSnapshots<S>;
+          };
     /**
      * Peer-rendering strategy: a `{ kind, ...opts }` config (see
      * `PeerRenderStrategyConfig`) or a `PeerRenderStrategy` instance. Defaults
@@ -89,7 +97,7 @@ export interface GameClientOptions<
     reconnection?: boolean | { token?: string };
     now?: () => number;
     /**
-     * Retransmit an intent when its oldest unacked frame has been in flight for
+     * Retransmit an intent when its oldest unacked packet has been in flight for
      * at least this many milliseconds. `0` (default) disables retransmission.
      * The server dedups by sequence, so a resend of an already-applied intent
      * is a no-op.
@@ -144,7 +152,7 @@ export class GameClient<
     interpBuffer: PeerRenderStrategy;
     private _rttMs: number | null = null;
     private retransmitMs = 0;
-    private readonly unackedFrames = new Map<number, { frame: Uint8Array; sentAt: number }>();
+    private readonly unackedIntents = new Map<number, { packet: Uint8Array; sentAt: number }>();
     private _initialized = false;
     /** Baseline channels not yet received (order-independent completion). */
     private readonly pendingBaseline = new Set<string>();
@@ -206,9 +214,11 @@ export class GameClient<
             this.resumeEnabled = rc !== undefined && rc !== false;
             if (typeof rc === 'object' && rc.token !== undefined) this._sessionToken = rc.token;
         }
-        this.intents = opts.protocol.intents;
-        this.rpcs = opts.protocol.rpcs;
-        this.snapshots = opts.protocol.snapshots;
+        const protocol = opts.protocol;
+        this.intents = protocol.intents;
+        this.rpcs = protocol.rpcs;
+        this.snapshots = 'messages' in protocol ? protocol.messages : protocol.snapshots;
+        const protocolFingerprint = 'fingerprint' in protocol ? protocol.fingerprint : '';
         this.resetBaseline();
         const reg = this.rpcs.registry as any;
         if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
@@ -300,7 +310,9 @@ export class GameClient<
         });
 
         this.discoverSyncedComponents();
-        this.schemaFingerprint = opts.schemaFingerprint ?? computeSchemaFingerprint(this.syncedComponents);
+        const componentFingerprint = computeSchemaFingerprint(this.syncedComponents);
+        this.schemaFingerprint = opts.schemaFingerprint
+            ?? (protocolFingerprint === '' ? componentFingerprint : `${componentFingerprint}:${protocolFingerprint}`);
         this.wireTransport();
         this.wireLoop();
     }
@@ -349,10 +361,7 @@ export class GameClient<
 
     private sendResume(): void {
         const bytes = new TextEncoder().encode(this._sessionToken);
-        const frame = new Uint8Array(bytes.length + 1);
-        frame[0] = CMSG_RESUME;
-        frame.set(bytes, 1);
-        this.transport.send(frame);
+        this.transport.send(packet(CMSG_RESUME, bytes));
     }
 
     private handleSession(data: Uint8Array): void {
@@ -367,28 +376,27 @@ export class GameClient<
 
     private handleIncoming(data: Uint8Array): void {
         if (data.length === 0) return;
-        const type = data[0];
+        const type = packetType(data);
 
         if (type === MSG_SNAPSHOT) {
-            this.handleSnapshot(data.subarray(1));
+            this.handleSnapshot(packetPayload(data));
             return;
         }
         if (type === MSG_RPC) {
-            this.handleRpc(data.subarray(1));
+            this.handleRpc(packetPayload(data));
             return;
         }
         if (type === MSG_KICK) {
-            const reason = new TextDecoder().decode(data.subarray(1));
+            const reason = new TextDecoder().decode(packetPayload(data));
             this.log.warn('kicked', { reason });
             this.emit('kicked', { reason });
-            const ack = new Uint8Array([CMSG_KICK_ACK]);
-            this.transport.send(ack);
+            this.transport.send(packet(CMSG_KICK_ACK));
             return;
         }
         if (type === MSG_ASSIGN_ENTITY) {
             if (data.length < 5) {
                 this.emit('error', {
-                    error: new Error('MSG_ASSIGN_ENTITY frame too short'),
+                    error: new Error('MSG_ASSIGN_ENTITY packet too short'),
                     context: 'handleIncoming',
                 });
                 return;
@@ -402,7 +410,7 @@ export class GameClient<
             return;
         }
         if (type === MSG_CUSTOM) {
-            this.handleMessage(data.subarray(1));
+            this.handleMessage(packetPayload(data));
             return;
         }
         if (type === MSG_SYNC_COMPLETE) {
@@ -411,11 +419,11 @@ export class GameClient<
             return;
         }
         if (type === MSG_OUTCOME) {
-            this.handleOutcome(data.subarray(1));
+            this.handleOutcome(packetPayload(data));
             return;
         }
         if (type === MSG_SCHEMA) {
-            const fp = new TextDecoder().decode(data.subarray(1));
+            const fp = new TextDecoder().decode(packetPayload(data));
             if (fp !== this.schemaFingerprint) {
                 this.log.error('schema fingerprint mismatch', { server: fp, client: this.schemaFingerprint });
                 this.emit('error', {
@@ -588,13 +596,13 @@ export class GameClient<
 
         const encoded = this.intents.registry.encode(intentObj);
         const sequence = ++this.intentSequence;
-        const framed = new Uint8Array(encoded.length + 5);
-        framed[0] = CMSG_INTENT;
-        const dv = new DataView(framed.buffer, framed.byteOffset, framed.byteLength);
+        const packet = new Uint8Array(encoded.length + 5);
+        packet[0] = CMSG_INTENT;
+        const dv = new DataView(packet.buffer, packet.byteOffset, packet.byteLength);
         dv.setUint32(1, sequence >>> 0, true);
-        framed.set(encoded, 5);
-        this.transport.send(framed);
-        if (this.retransmitMs > 0) this.unackedFrames.set(sequence, { frame: framed, sentAt: this.now() });
+        packet.set(encoded, 5);
+        this.transport.send(packet);
+        if (this.retransmitMs > 0) this.unackedIntents.set(sequence, { packet, sentAt: this.now() });
 
         const predFn = this.predictionMap?.[name as keyof typeof this.predictionMap];
         if (predFn !== undefined) {
@@ -628,38 +636,35 @@ export class GameClient<
         const snapshots = this.snapshots;
         if (snapshots === undefined) return;
         const encoded = snapshots.registry.encode(name as string, { tick: 0, updates: payload as any });
-        const frame = new Uint8Array(encoded.length + 1);
-        frame[0] = CMSG_MESSAGE;
-        frame.set(encoded, 1);
-        this.transport.send(frame);
+        this.transport.send(packet(CMSG_MESSAGE, encoded));
     }
 
-    /** Drop unacked frames the server has acked. Sequences are inserted in order, so stop at the first survivor. */
+    /** Drop unacked intent packets the server has acked. Sequences are inserted in order, so stop at the first survivor. */
     private clearAcked(ack: number): void {
-        for (const sequence of this.unackedFrames.keys()) {
+        for (const sequence of this.unackedIntents.keys()) {
             if (sequence > ack) break;
-            this.unackedFrames.delete(sequence);
+            this.unackedIntents.delete(sequence);
         }
     }
 
-    /** Resend the oldest unacked intent frame when it has been in flight past `retransmitMs`. */
+    /** Resend the oldest unacked intent packet when it has been in flight past `retransmitMs`. */
     private retransmitOldest(): void {
-        if (this.retransmitMs <= 0 || this.unackedFrames.size === 0) return;
+        if (this.retransmitMs <= 0 || this.unackedIntents.size === 0) return;
         let oldest = Infinity;
-        for (const sequence of this.unackedFrames.keys()) {
+        for (const sequence of this.unackedIntents.keys()) {
             if (sequence < oldest) oldest = sequence;
         }
-        const entry = this.unackedFrames.get(oldest);
+        const entry = this.unackedIntents.get(oldest);
         if (entry === undefined) return;
         const now = this.now();
         if (now - entry.sentAt < this.retransmitMs) return;
         entry.sentAt = now;
-        this.transport.send(entry.frame);
+        this.transport.send(entry.packet);
         this.emit('intent-retransmit', { sequence: oldest });
     }
 
     private resetBaseline(): void {
-        this.unackedFrames.clear();
+        this.unackedIntents.clear();
         this.pendingBaseline.clear();
         const keys = this.snapshots?.baselineKeys ?? [];
         for (let i = 0; i < keys.length; i++) this.pendingBaseline.add(keys[i]!);
@@ -671,8 +676,7 @@ export class GameClient<
         if (this._initialized || !this.entityBaselineSeen || this.pendingBaseline.size > 0) return;
         this._initialized = true;
         this.emit('initialized', {});
-        const ack = new Uint8Array([CMSG_SYNC_ACK]);
-        this.transport.send(ack);
+        this.transport.send(packet(CMSG_SYNC_ACK));
     }
 
     private handleOutcome(bytes: Uint8Array): void {
@@ -709,19 +713,13 @@ export class GameClient<
             return;
         }
         const encoded = this.rpcs.registry.encode(def, payload as any);
-        const framed = new Uint8Array(encoded.length + 1);
-        framed[0] = CMSG_RPC;
-        framed.set(encoded, 1);
-        this.transport.send(framed);
+        this.transport.send(packet(CMSG_RPC, encoded));
     }
 
     ping(): void {
         const ts = Date.now() & 0xFFFF;
         const encoded = (this.rpcs.registry as any).encode(PING_RPC, { ts }) as Uint8Array;
-        const framed = new Uint8Array(encoded.length + 1);
-        framed[0] = CMSG_RPC;
-        framed.set(encoded, 1);
-        this.transport.send(framed);
+        this.transport.send(packet(CMSG_RPC, encoded));
     }
 
     getLocalTick(): number {

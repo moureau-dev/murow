@@ -75,7 +75,7 @@ export interface ClientEventPayloads<
     session: { token: string; resumed: boolean };
     /** A reconnect resumed a prior session; the server is re-baselining. */
     reconnected: {};
-    /** Server sent a kick frame; disconnect imminent. */
+    /** Server sent a kick packet; disconnect imminent. */
     kicked: { reason: string };
     /** A snapshot arrived. */
     snapshot: { tick: number; byteSize: number };
@@ -87,7 +87,7 @@ export interface ClientEventPayloads<
     initialized: {};
     /** An intent's server-side outcome (accepted or rejected, with a reason code). */
     outcome: { sequence: number; accepted: boolean; reason: number };
-    /** An unacked intent frame was resent (lost-intent recovery). */
+    /** An unacked intent packet was resent (lost-intent recovery). */
     'intent-retransmit': { sequence: number };
     /** A new networked entity appeared in the client's view. */
     spawn: { entity: number; components: Record<string, unknown> };

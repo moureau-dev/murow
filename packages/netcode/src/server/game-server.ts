@@ -4,8 +4,9 @@ import { Logger } from 'murow/core/logger';
 import type { Component, Entity, World } from 'murow/ecs';
 import type { GameLoop } from 'murow/game';
 import type { ServerTransportAdapter, TransportAdapter } from 'murow/net';
+import { ClientMessage, ServerMessage, SessionRegistry, packet, packetType, packetU32, packetPayload } from 'murow/net/wire';
 import { u16 } from 'murow/core/binary-codec';
-import { defineRPC } from 'murow/protocol';
+import { defineRPC, type Protocol } from 'murow/protocol';
 import { Network } from '../network/base';
 import { SnapshotEncoder, buildDeltaSchema } from '../codec/delta-codec';
 import { computeSchemaFingerprint } from '../codec/fingerprint';
@@ -23,26 +24,26 @@ import { makeFieldsAccessor, makeMarkDirty, type Peer, type ServerHandlerContext
 const PING_RPC = defineRPC({ method: '__murow_ping', schema: { ts: u16 } });
 const PONG_RPC = defineRPC({ method: '__murow_pong', schema: { ts: u16 } });
 
-// Server -> client frames. Reserved range to not collide with user
-// intent kinds (which start at 1 in `defineIntents`).
-const MSG_SNAPSHOT = 0x80;
-const MSG_RPC = 0x81;
-const MSG_KICK = 0x82;
-const MSG_KICK_ACK = 0x83;
-const MSG_ASSIGN_ENTITY = 0x84;
-const MSG_SCHEMA = 0x85;
-const MSG_SESSION = 0x86;
-const MSG_CUSTOM = 0x87;
-const MSG_SYNC_COMPLETE = 0x88;
-const MSG_OUTCOME = 0x89;
+const {
+    Snapshot: MSG_SNAPSHOT,
+    Rpc: MSG_RPC,
+    Kick: MSG_KICK,
+    AssignEntity: MSG_ASSIGN_ENTITY,
+    Schema: MSG_SCHEMA,
+    Session: MSG_SESSION,
+    Custom: MSG_CUSTOM,
+    SyncComplete: MSG_SYNC_COMPLETE,
+    Outcome: MSG_OUTCOME,
+} = ServerMessage;
 
-// Client -> server frames.
-const CMSG_INTENT = 0x01;
-const CMSG_RPC = 0x02;
-const CMSG_KICK_ACK = 0x03;
-const CMSG_RESUME = 0x04;
-const CMSG_MESSAGE = 0x05;
-const CMSG_SYNC_ACK = 0x06;
+const {
+    Intent: CMSG_INTENT,
+    Rpc: CMSG_RPC,
+    KickAck: CMSG_KICK_ACK,
+    Resume: CMSG_RESUME,
+    Message: CMSG_MESSAGE,
+    SyncAck: CMSG_SYNC_ACK,
+} = ClientMessage;
 
 export interface GameServerOptions<
     I extends IntentSchemaMap,
@@ -52,12 +53,14 @@ export interface GameServerOptions<
     world: World;
     loop: GameLoop<any>;
     transport: ServerTransportAdapter<TransportAdapter>;
-    protocol: {
-        intents: DefinedIntents<I>;
-        rpcs: DefinedRpcs<R>;
-        /** Optional custom (non-entity) message types. */
-        snapshots?: DefinedSnapshots<S>;
-    };
+    protocol:
+        | Protocol<I, R, S>
+        | {
+              intents: DefinedIntents<I>;
+              rpcs: DefinedRpcs<R>;
+              /** Legacy name for custom message types. */
+              snapshots?: DefinedSnapshots<S>;
+          };
     snapshot?: {
         /** Snapshots per second. Clamped to tickRate. Default 20. */
         rate?: number;
@@ -123,7 +126,7 @@ interface InternalPeer extends Peer {
     resolved: boolean;
     /** True when this connection resumed a held session. */
     resumed: boolean;
-    /** Timer that resolves the handshake when no resume frame arrives. */
+    /** Timer that resolves the handshake when no resume packet arrives. */
     handshakeTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -191,12 +194,7 @@ export class GameServer<
         if (this.dirtySeen.add(eid)) this.scratch.push(eid);
     };
     private reconnection: { graceMs: number } | null = null;
-    private nextSession = 0;
-    private readonly sessionSalt = Math.random().toString(36).slice(2, 10);
-    private readonly sessions = new Map<
-        string,
-        { entity: Entity | -1; lastAckedClientTick: number; timer: ReturnType<typeof setTimeout> }
-    >();
+    private readonly sessions = new SessionRegistry<{ entity: Entity | -1; lastAckedClientTick: number }>();
 
     constructor(opts: GameServerOptions<I, R, S>) {
         super([
@@ -216,9 +214,11 @@ export class GameServer<
         this.world = opts.world;
         this.loop = opts.loop;
         this.transport = opts.transport;
-        this.intents = opts.protocol.intents;
-        this.rpcs = opts.protocol.rpcs;
-        this.snapshots = opts.protocol.snapshots;
+        const protocol = opts.protocol;
+        this.intents = protocol.intents;
+        this.rpcs = protocol.rpcs;
+        this.snapshots = 'messages' in protocol ? protocol.messages : protocol.snapshots;
+        const protocolFingerprint = 'fingerprint' in protocol ? protocol.fingerprint : '';
         this.rng = new SimpleRNG(1);
         this.log = Logger.resolve(opts.debug, 'net-server');
         this.dirtySeen = new SlotSet(this.world.getMaxEntities());
@@ -241,7 +241,9 @@ export class GameServer<
         this.lastDt = opts.loop.ticker.intervalMs / 1000;
 
         this.discoverSyncedComponents();
-        this.schemaFingerprint = opts.schemaFingerprint ?? computeSchemaFingerprint(this.syncedComponents);
+        const componentFingerprint = computeSchemaFingerprint(this.syncedComponents);
+        this.schemaFingerprint = opts.schemaFingerprint
+            ?? (protocolFingerprint === '' ? componentFingerprint : `${componentFingerprint}:${protocolFingerprint}`);
         this.wireTransport();
         this.wireLoop();
     }
@@ -291,10 +293,7 @@ export class GameServer<
             this.log.info('peer connected', { peerId });
             {
                 const fp = new TextEncoder().encode(this.schemaFingerprint);
-                const frame = new Uint8Array(fp.length + 1);
-                frame[0] = MSG_SCHEMA;
-                frame.set(fp, 1);
-                peerTransport.send(frame);
+                peerTransport.send(packet(MSG_SCHEMA, fp));
             }
             if (this.reconnection !== null) {
                 peer.handshakeTimer = setTimeout(() => this.resolveHandshake(peer, ''), 250);
@@ -323,10 +322,8 @@ export class GameServer<
             peer.handshakeTimer = null;
         }
 
-        const session = token !== '' ? this.sessions.get(token) : undefined;
+        const session = token !== '' ? this.sessions.resume(token) : undefined;
         if (session !== undefined) {
-            clearTimeout(session.timer);
-            this.sessions.delete(token);
             peer.token = token;
             peer.resumed = true;
             peer.entity = session.entity;
@@ -340,7 +337,7 @@ export class GameServer<
             return;
         }
 
-        peer.token = `${this.sessionSalt}${this.nextSession++}`;
+        peer.token = this.sessions.createToken();
         peer.resumed = false;
         if (this.reconnection !== null) this.sendSession(peer);
         this.emit('connection', { peer });
@@ -348,11 +345,11 @@ export class GameServer<
 
     private sendSession(peer: InternalPeer): void {
         const bytes = new TextEncoder().encode(peer.token);
-        const frame = new Uint8Array(bytes.length + 2);
-        frame[0] = MSG_SESSION;
-        frame[1] = peer.resumed ? 1 : 0;
-        frame.set(bytes, 2);
-        peer.transport.send(frame);
+        const packet = new Uint8Array(bytes.length + 2);
+        packet[0] = MSG_SESSION;
+        packet[1] = peer.resumed ? 1 : 0;
+        packet.set(bytes, 2);
+        peer.transport.send(packet);
     }
 
     private handleDisconnect(peer: InternalPeer, reason: string): void {
@@ -364,15 +361,14 @@ export class GameServer<
 
         if (this.reconnection !== null && reason !== 'kicked' && peer.resolved && peer.entity !== -1) {
             const token = peer.token;
-            const timer = setTimeout(() => {
-                this.sessions.delete(token);
-                this.log.info('peer reconnect timed out', { peerId: peer.peerId });
-                this.emit('disconnection', { peer, reason: 'reconnect-timeout' });
-            }, this.reconnection.graceMs);
-            this.sessions.set(token, {
-                entity: peer.entity,
-                lastAckedClientTick: peer.lastAckedClientTick,
-                timer,
+            this.sessions.hold({
+                token,
+                data: { entity: peer.entity, lastAckedClientTick: peer.lastAckedClientTick },
+                graceMs: this.reconnection.graceMs,
+                onExpire: () => {
+                    this.log.info('peer reconnect timed out', { peerId: peer.peerId });
+                    this.emit('disconnection', { peer, reason: 'reconnect-timeout' });
+                },
             });
             this.log.info('peer suspended', { peerId: peer.peerId, reason });
             this.emit('suspended', { peer, reason });
@@ -603,7 +599,7 @@ export class GameServer<
             if (peerOut.length === 0 && this.peerDespawned.length === 0 && !peer.needsBaseline) return;
 
             const wasBaseline = peer.needsBaseline;
-            const frame = this.encoder.encode(
+            const packet = this.encoder.encode(
                 this.world,
                 this.tickCounter,
                 peerOut as number[],
@@ -611,11 +607,11 @@ export class GameServer<
                 peer.lastAckedClientTick,
                 this.encoderInclude,
             );
-            frame[0] = MSG_SNAPSHOT;
-            peer.transport.send(frame);
+            packet[0] = MSG_SNAPSHOT;
+            peer.transport.send(packet);
 
             peer.needsBaseline = false;
-            this.emit('snapshot', { peer, tick: this.tickCounter, byteSize: frame.length });
+            this.emit('snapshot', { peer, tick: this.tickCounter, byteSize: packet.length });
             if (wasBaseline) this.runBaseline(peer);
         });
 
@@ -725,10 +721,7 @@ export class GameServer<
         const internal = this.peers.get(peer.peerId);
         if (internal === undefined) return;
         const encoded = snapshots.registry.encode(name as string, { tick: 0, updates: payload as any });
-        const frame = new Uint8Array(encoded.length + 1);
-        frame[0] = MSG_CUSTOM;
-        frame.set(encoded, 1);
-        internal.transport.send(frame);
+        internal.transport.send(packet(MSG_CUSTOM, encoded));
     }
 
     /** Send a custom message to every peer. */
@@ -742,18 +735,16 @@ export class GameServer<
         const send: SendFn<S> = (name, payload) => this.sendMessageToPeer(peer, name, payload);
         this.emit('baseline', { peer, resumed: peer.resumed, send } as never);
 
-        const frame = new Uint8Array(1);
-        frame[0] = MSG_SYNC_COMPLETE;
-        peer.transport.send(frame);
+        peer.transport.send(packet(MSG_SYNC_COMPLETE));
     }
 
     /** Ship pending intent outcomes to one peer. */
     private sendOutcomes(peer: InternalPeer): void {
         const outcomes = peer.outcomes;
         if (outcomes.length === 0) return;
-        const frame = new Uint8Array(3 + outcomes.length * 7);
-        frame[0] = MSG_OUTCOME;
-        const dv = new DataView(frame.buffer);
+        const packet = new Uint8Array(3 + outcomes.length * 7);
+        packet[0] = MSG_OUTCOME;
+        const dv = new DataView(packet.buffer);
         dv.setUint16(1, outcomes.length, true);
         let off = 3;
         for (let i = 0; i < outcomes.length; i++) {
@@ -762,7 +753,7 @@ export class GameServer<
             dv.setUint8(off, o.accepted ? 1 : 0); off += 1;
             dv.setUint16(off, o.reason >>> 0, true); off += 2;
         }
-        peer.transport.send(frame);
+        peer.transport.send(packet);
         outcomes.length = 0;
     }
 
@@ -779,7 +770,7 @@ export class GameServer<
 
     private handleIncoming(peer: InternalPeer, data: Uint8Array): void {
         if (data.length === 0) return;
-        const type = data[0];
+        const type = packetType(data);
 
         if (peer.kicking !== null) {
             // After kick: only KICK_ACK is processed.
@@ -789,7 +780,7 @@ export class GameServer<
 
         if (!peer.resolved) {
             if (type === CMSG_RESUME) {
-                this.resolveHandshake(peer, new TextDecoder().decode(data.subarray(1)));
+                this.resolveHandshake(peer, new TextDecoder().decode(packetPayload(data)));
                 return;
             }
             this.resolveHandshake(peer, '');
@@ -807,11 +798,11 @@ export class GameServer<
             return;
         }
         if (type === CMSG_RPC) {
-            this.handleRpc(peer, data.subarray(1));
+            this.handleRpc(peer, packetPayload(data));
             return;
         }
         if (type === CMSG_MESSAGE) {
-            this.handleMessage(peer, data.subarray(1));
+            this.handleMessage(peer, packetPayload(data));
             return;
         }
         if (type === CMSG_SYNC_ACK) {
@@ -896,10 +887,7 @@ export class GameServer<
 
             if (decoded.method === '__murow_ping') {
                 const encoded = (this.rpcs.registry as any).encode(PONG_RPC, { ts: decoded.data.ts }) as Uint8Array;
-                const framed = new Uint8Array(encoded.length + 1);
-                framed[0] = MSG_RPC;
-                framed.set(encoded, 1);
-                peer.transport.send(framed);
+                peer.transport.send(packet(MSG_RPC, encoded));
                 return;
             }
 
@@ -935,7 +923,7 @@ export class GameServer<
 
     /**
      * Bind an entity to a peer. Fills `ctx.entity` for the peer's intents
-     * and pushes a MSG_ASSIGN_ENTITY frame so the client knows which
+     * and sends a MSG_ASSIGN_ENTITY packet so the client knows which
      * entity it owns.
      */
     assignEntity(peer: Peer, entityId: Entity): void {
@@ -948,10 +936,7 @@ export class GameServer<
     /** Frame: [MSG_ASSIGN_ENTITY][serverEntityId: u32] */
     private sendAssign(peer: InternalPeer): void {
         if (peer.entity === -1) return;
-        const frame = new Uint8Array(1 + 4);
-        frame[0] = MSG_ASSIGN_ENTITY;
-        new DataView(frame.buffer).setUint32(1, peer.entity >>> 0, true);
-        peer.transport.send(frame);
+        peer.transport.send(packetU32(MSG_ASSIGN_ENTITY, peer.entity));
     }
 
     sendRpc<K extends keyof R & string>(peer: Peer, name: K, payload: RpcPayload<R, K>): void {
@@ -967,10 +952,7 @@ export class GameServer<
             return;
         }
         const encoded = this.rpcs.registry.encode(def, payload as any);
-        const framed = new Uint8Array(encoded.length + 1);
-        framed[0] = MSG_RPC;
-        framed.set(encoded, 1);
-        internal.transport.send(framed);
+        internal.transport.send(packet(MSG_RPC, encoded));
     }
 
     broadcastRpc<K extends keyof R & string>(name: K, payload: RpcPayload<R, K>): void {
@@ -981,7 +963,7 @@ export class GameServer<
     }
 
     /**
-     * Soft-kick: send KICK frame, wait `kick.ackTimeout` for the client's
+     * Soft-kick: send a KICK packet, wait `kick.ackTimeout` for the client's
      * ack, then force the transport closed.
      */
     kick(peer: Peer, reason: string): void {
@@ -990,10 +972,7 @@ export class GameServer<
         if (internal.kicking !== null) return;
 
         const reasonBytes = new TextEncoder().encode(reason);
-        const framed = new Uint8Array(reasonBytes.length + 1);
-        framed[0] = MSG_KICK;
-        framed.set(reasonBytes, 1);
-        internal.transport.send(framed);
+        internal.transport.send(packet(MSG_KICK, reasonBytes));
 
         const timer = setTimeout(() => this.completeKick(internal), this.kickAckTimeout);
         internal.kicking = { reason, sentAt: Date.now(), timer };

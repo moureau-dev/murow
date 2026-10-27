@@ -2,8 +2,7 @@ import { f32 } from 'murow/core/binary-codec';
 import { defineComponent, World, type Entity } from 'murow/ecs';
 import { GameLoop } from 'murow/game';
 import { SimpleRNG } from 'murow/core/simple-rng';
-import { defineIntents } from '../intents/define-intents';
-import { defineRpcs } from '../rpcs/define-rpcs';
+import { defineProtocol } from 'murow/protocol';
 import { definePredictions } from '../predictions/define-predictions';
 import { GameServer } from '../server/game-server';
 import { GameClient } from '../client/game-client';
@@ -26,11 +25,12 @@ export const Position = defineComponent('Position', {
 });
 
 export function buildSchema() {
-    const intents = defineIntents({
-        move: { dx: f32, dz: f32 },
+    const protocol = defineProtocol({
+        version: 1,
+        intents: { move: { dx: f32, dz: f32 } },
+        rpcs: {},
     });
-    const rpcs = defineRpcs({});
-    const predictions = definePredictions(intents, {
+    const predictions = definePredictions(protocol.intents, {
         move: ({ dx, dz }, ctx) => {
             if (!ctx.world.has(ctx.entity, Position)) return;
             const pos = ctx.fields(Position);
@@ -38,7 +38,7 @@ export function buildSchema() {
             pos.z[ctx.entity] += dz * MOVE_SPEED * ctx.deltaTime;
         },
     });
-    return { intents, rpcs, predictions };
+    return { protocol, intents: protocol.intents, rpcs: protocol.rpcs, predictions };
 }
 
 export interface PeerSim {
@@ -64,7 +64,7 @@ export interface PeerSim {
     staleSnapshots: number;
     /** Highest snapshot tick observed. */
     lastSnapshotTick: number;
-    /** Predicted position captured the moment a snapshot frame arrives. */
+    /** Predicted position captured the moment a snapshot packet arrives. */
     _preReconcilePos: { x: number; z: number } | null;
 }
 
@@ -101,7 +101,7 @@ export function makeHarness(opts: HarnessOptions): Harness {
         world: serverWorld,
         loop: serverLoop,
         transport,
-        protocol: { intents: schema.intents, rpcs: schema.rpcs },
+        protocol: schema.protocol,
         snapshot: { rate: TICK_RATE },
     });
     server.use(schema.predictions);
@@ -120,7 +120,7 @@ export function makeHarness(opts: HarnessOptions): Harness {
             world,
             loop,
             transport: clientTransport,
-            protocol: { intents: schema.intents, rpcs: schema.rpcs },
+            protocol: schema.protocol,
             strategy: { kind: 'snapshot-interpolation', delay: opts.interpDelayMs ?? 100 },
             now: () => vnet.nowMs(),
         });
