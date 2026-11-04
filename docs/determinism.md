@@ -8,7 +8,7 @@ Referenced from [llms.txt](../llms.txt).
 
 ## TL;DR rules
 
-1. **No `Math.random()`.** Use `ctx.rng` (a `SimpleRNG`, seeded per tick and replayed identically).
+1. **No `Math.random()`.** Use `ctx.rng` (a `SimpleRNG` re-seeded per prediction from the intent's client tick, entity, and sequence, so rollback replays match).
 2. **No `Date.now()` / `performance.now()`.** Use `ctx.tick` or `ctx.deltaTime`.
 3. **No network, audio, DOM, or file I/O** in a prediction.
 4. **No module-level mutable state.** All simulation state lives in components.

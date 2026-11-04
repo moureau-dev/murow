@@ -451,7 +451,7 @@ interface PredictionContext {
   entity: Entity;          // server-assigned entity for the peer that sent the intent
   tick: number;
   deltaTime: number;       // seconds since previous tick
-  rng: SimpleRNG;          // deterministic, seeded per tick, replayed identically on both sides
+  rng: SimpleRNG;          // re-seeded per prediction from (client tick, entity, sequence)
 
   // RAW-speed typed-array access for ctx.entity. Same frozen bundle as
   // world.fields(C), and auto-marks ctx.entity dirty for networked components
@@ -526,7 +526,9 @@ export const predictions = definePredictions(intents, {
 
 Determinism rules (predictions replay during rollback, so the same input must produce the same output):
 
-1. No `Math.random()`. Use `ctx.rng`.
+1. No `Math.random()`. Use `ctx.rng`. It is re-seeded before every prediction
+   and rollback replay from the intent's client tick, entity, and sequence, so
+   the same call order produces the same values.
 2. No `Date.now()` / `performance.now()`. Use `ctx.tick` or `ctx.deltaTime`.
 3. No network, audio, file I/O, or DOM.
 4. No reads from module-level mutable state. Keep state in components.
