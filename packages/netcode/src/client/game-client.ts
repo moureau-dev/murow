@@ -21,6 +21,7 @@ import { ServerEntityMap } from './server-entity-map';
 import { SnapshotPool } from '../codec/snapshot-pool';
 import { makeFieldsAccessor, makeMarkDirty, type PredictionContext } from '../ctx';
 import type { DefinedSnapshots, SnapshotSchemaMap, MessagePayload } from '../messages';
+import { predictionSeed } from '../prediction-seed';
 
 const {
     Snapshot: MSG_SNAPSHOT,
@@ -97,6 +98,11 @@ export interface GameClientOptions<
     reconnection?: boolean | { token?: string };
     now?: () => number;
     /**
+     * Seed for deterministic prediction randomness. Must match the server's
+     * `rngSeed`. Default 1.
+     */
+    rngSeed?: number;
+    /**
      * Retransmit an intent when its oldest unacked packet has been in flight for
      * at least this many milliseconds. `0` (default) disables retransmission.
      * The server dedups by sequence, so a resend of an already-applied intent
@@ -139,6 +145,7 @@ export class GameClient<
     private syncedComponents: Component<any>[] = [];
     private syncedNumMaskWords = 1;
     private rng: SimpleRNG;
+    private rngSeed: number;
     private lastDt: number;
     private predictedEntities = new Set<Entity>();
     private _sessionToken = '';
@@ -224,7 +231,8 @@ export class GameClient<
         if (!reg.has(PING_RPC.method)) reg.register(PING_RPC);
         if (!reg.has(PONG_RPC.method)) reg.register(PONG_RPC);
         this.predictionBufferSize = opts.prediction?.bufferSize ?? 64;
-        this.rng = new SimpleRNG(1);
+        this.rngSeed = opts.rngSeed ?? 1;
+        this.rng = new SimpleRNG(this.rngSeed);
         this.log = Logger.resolve(opts.debug, 'net-client');
         this.lastDt = opts.loop.ticker.intervalMs / 1000;
         this.now = opts.now ?? (() => performance.now());
@@ -293,6 +301,7 @@ export class GameClient<
                     if (!resetEntities.has(pred.entity)) continue;
                     const predFn = this.predictionMap?.[pred.name as keyof typeof this.predictionMap];
                     if (predFn === undefined) continue;
+                    this.rng.seed(predictionSeed(this.rngSeed, pred.tick, pred.entity, pred.sequence));
                     const ctx: PredictionContext = {
                         world: this.world,
                         entity: pred.entity,
@@ -607,6 +616,7 @@ export class GameClient<
         const predFn = this.predictionMap?.[name as keyof typeof this.predictionMap];
         if (predFn !== undefined) {
             const deltaTime = this.lastDt;
+            this.rng.seed(predictionSeed(this.rngSeed, this.localTick, entity, sequence));
             const ctx: PredictionContext = {
                 world: this.world,
                 entity,

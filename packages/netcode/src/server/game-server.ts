@@ -20,6 +20,7 @@ import type { DefinedHandlers } from '../handlers/define-handlers';
 import type { ServerPlugin } from './plugins/plugin';
 import type { LagCompensation } from './plugins/lag-compensation';
 import { makeFieldsAccessor, makeMarkDirty, type Peer, type ServerHandlerContext } from '../ctx';
+import { predictionSeed } from '../prediction-seed';
 
 const PING_RPC = defineRPC({ method: '__murow_ping', schema: { ts: u16 } });
 const PONG_RPC = defineRPC({ method: '__murow_pong', schema: { ts: u16 } });
@@ -91,6 +92,8 @@ export interface GameServerOptions<
     schemaFingerprint?: string;
     /** Optional diagnostics: `true` → console logger, or pass a `Logger`. */
     debug?: boolean | Logger;
+    /** Seed for deterministic prediction randomness. Must match the client's `rngSeed`. Default 1. */
+    rngSeed?: number;
 }
 
 interface KickingState {
@@ -162,6 +165,7 @@ export class GameServer<
     private tickCounter = 0;
     private kickAckTimeout: number;
     private rng: SimpleRNG;
+    private rngSeed: number;
     private scratch: number[] = [];
     private lastDt: number;
     private readonly log: Logger;
@@ -219,7 +223,8 @@ export class GameServer<
         this.rpcs = protocol.rpcs;
         this.snapshots = 'messages' in protocol ? protocol.messages : protocol.snapshots;
         const protocolFingerprint = 'fingerprint' in protocol ? protocol.fingerprint : '';
-        this.rng = new SimpleRNG(1);
+        this.rngSeed = opts.rngSeed ?? 1;
+        this.rng = new SimpleRNG(this.rngSeed);
         this.log = Logger.resolve(opts.debug, 'net-server');
         this.dirtySeen = new SlotSet(this.world.getMaxEntities());
         this.visibleScratch = new SlotSet(this.world.getMaxEntities());
@@ -841,6 +846,8 @@ export class GameServer<
             });
             return;
         }
+
+        this.rng.seed(predictionSeed(this.rngSeed, intent.tick, peer.entity, sequence));
 
         const ctx: ServerHandlerContext = {
             world: this.world,
