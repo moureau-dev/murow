@@ -21,6 +21,10 @@ backend is a target syntax plus a device factory, and everything else lives in
 
 ## Building a backend
 
-Compile with `compileProgram(shaders)` (or `new GpuBackend(wgslSpec).compile`).
+Compile with `compileProgram(shaders)`. It links the shaders, emits through
+`wgslSpec`, and then rewrites the source: `$` and lone `_` identifiers are
+renamed, and mutable locals emitted as `let` become `var`.
+`new GpuBackend(wgslSpec).compile(GpuProgram.link(shaders))` and `WgslBackend`
+skip that rewrite.
 Build a context with `await createWebGpuContext()`. A different target (WebGL) is
 the same shape: a `TargetSyntax`, a spec object, and a device factory.

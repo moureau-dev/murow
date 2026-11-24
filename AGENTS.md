@@ -1,4 +1,4 @@
-# Murow — AI Development Guide
+# Murow AI Development Guide
 
 ## Critical rules
 
@@ -14,6 +14,11 @@ exports, patterns, and an anti-hallucination list of APIs that do not exist. It
 is also served at https://murow.moureau.dev/llms.txt. Read the relevant section
 before writing Murow code; it overrides training knowledge.
 
+`llms.txt` and the other docs have drifted from the code in places.
+`CLAUDE.md` lists pitfalls verified against the source; where it disagrees
+with a doc, it wins. Read it before writing Murow code, whichever agent you
+are.
+
 ## JSDoc style
 
 Keep doc comments clean, concise, plain English. No em dashes, no developer
@@ -24,11 +29,18 @@ Prefer JSDoc on the public API over inline comments.
 
 After a significant change, update the relevant docs:
 
-- `llms.txt` (root) — canonical AI reference: exports, patterns, API surface
-- `README.md` (root) — overview and examples
-- `packages/<pkg>/README.md` — per-package docs (murow, webgpu, netcode, website)
-- `packages/murow/src/**/README.md` — per-module docs
-- Website pages — `packages/website/src`, served at https://murow.moureau.dev
+- `llms.txt` (root): canonical AI reference for exports, patterns, and API surface
+- `docs/*.md` (root): topic guides (ecs, netcode, renderer, shaders, assets,
+  determinism, performance, zero-allocation, testing, ui). `llms.txt` links
+  them, and the website serves them under `/docs/`.
+- `README.md` (root): overview and examples
+- `packages/<pkg>/README.md`: per-package docs (murow, webgpu, netcode, website)
+- `packages/murow/src/**/README.md` and `packages/*/src/**/README.md`:
+  per-module docs
+- Website pages: `packages/website/src`, served at https://murow.moureau.dev
+
+Code examples in docs must use real exports and signatures. Check them against
+the source, not against other docs.
 
 There is no `CHANGELOG.md` in this repo. Do not invent one.
 
@@ -38,15 +50,18 @@ There is no `CHANGELOG.md` in this repo. Do not invent one.
   invoke them with `bun run <script>`.
 - TypeScript throughout. Dual ESM + CJS build via `esbuild` (`dist/esm`,
   `dist/cjs`) plus `tsc --emitDeclarationOnly` for types (`dist/types`).
-- `murow` has **zero runtime dependencies** — core, `murow/gpu`, and
-  `murow/webgpu` are all self-contained.
+- `murow` has **zero runtime dependencies**. Core, `murow/gpu`,
+  `murow/webgpu`, and `murow/netcode` are all self-contained.
 - Bun workspaces monorepo:
-  - `packages/murow` — the published package `murow` (core + bundled webgpu/netcode)
-  - `packages/webgpu` — `@murow/webgpu`, the reference renderer backend
-  - `packages/netcode` — `@murow/netcode`, the multiplayer layer
-  - `packages/website` — Newstack SSG docs site
-  - `examples/*` — runnable example games
-  - `benchmarks` — comparative benchmarks
+  - `packages/murow`: the published package `murow` (core, with webgpu and
+    netcode bundled into `dist/webgpu` and `dist/netcode`)
+  - `packages/webgpu`: `@murow/webgpu`, the WebGPU backend (not published
+    separately)
+  - `packages/netcode`: `@murow/netcode`, the multiplayer layer (not published
+    separately)
+  - `packages/website`: Newstack SSG docs site
+  - `examples/*`: example games
+  - `benchmarks`: ECS and renderer benchmarks
 
 ### Commands
 
@@ -56,22 +71,44 @@ Run from inside a package unless noted:
 - Typecheck: `bunx tsc --noEmit -p tsconfig.json`
 - Build JS: `bun run build:js` (esbuild)
 - Build types + JS: `bun run build`
-- Root: `bun run build` builds every package; `bun run test` builds then tests
+- Root: `bun run build` builds murow, webgpu, and netcode (JS and types) and
+  copies webgpu and netcode into `packages/murow/dist`. It does not build the
+  website, examples, or benchmarks. `bun run test` runs `build:js`, then the
+  three package test suites.
+
+There is no CI workflow that runs tests on push. The only workflow is
+`publish.yml`. Run the tests and the typecheck locally before reporting work as
+done.
 
 ### Published entry points
 
-`murow`, `murow/core`, `murow/ecs`, `murow/game`, `murow/net`,
-`murow/protocol`, `murow/renderer`, `murow/webgpu`, `murow/netcode`, plus deep
-globs such as `murow/core/*` and `murow/renderer/*`.
+From `packages/murow/package.json` `exports`:
+
+- Barrels: `murow`, `murow/core`, `murow/ecs`, `murow/game`, `murow/net`,
+  `murow/net/wire`, `murow/protocol`, `murow/renderer`,
+  `murow/renderer/managers`, `murow/renderer/managers/runtime`, `murow/dom`,
+  `murow/gpu`, `murow/webgpu`, `murow/netcode`.
+- Deep globs that resolve a folder: `murow/core/*` and `murow/gpu/*` map to
+  `<folder>/index.js`, so `murow/core/clock` works.
+- Deep globs that resolve a file: `murow/ecs/*`, `murow/game/*`, `murow/net/*`,
+  `murow/net/wire/*`, `murow/protocol/*`, `murow/renderer/*`,
+  `murow/renderer/managers/runtime/*`, and `murow/dom/*` map to `<path>.js`.
+  A folder import such as `murow/ecs/world` does not resolve; use
+  `murow/ecs/world/index` or the barrel.
+
+`murow/webgpu` exports only `d`, `std`, `runtime`, `WebGPU2DRenderer`,
+`WebGPU3DRenderer`, and `OcclusionTrackerImpl`. Cameras, handles, and manager
+types come from `murow/renderer/managers` (the `Handles` namespace) and
+`murow/renderer/managers/runtime`.
 
 ## File structure
 
 Each module lives in its own folder:
 
-- `<name>.ts` — implementation
-- `<name>.test.ts` — co-located tests
-- `index.ts` — barrel exports
-- optional `README.md` — module docs
+- `<name>.ts`: implementation
+- `<name>.test.ts`: co-located tests
+- `index.ts`: barrel exports
+- optional `README.md`: module docs
 
 `index.ts` re-exports the folder's public API and may re-export from deeper
 subfolders (for example `adapters/`).
@@ -79,14 +116,19 @@ subfolders (for example `adapters/`).
 ```
 packages/
 ├── murow/src/
-│   ├── core/        # audio, bucket, clock, input, navmesh, hitbox, ray, codecs, ...
-│   ├── ecs/         # World, components, systems
-│   ├── game/        # GameLoop, Driver, FixedTicker
-│   ├── net/         # ServerNetwork / ClientNetwork
-│   ├── protocol/    # intents, snapshots, RPCs
-│   └── renderer/    # renderer contracts + asset pipeline (pure CPU)
-├── webgpu/src/      # 2d/, 3d/, camera/, compute/, shaders/, geometry/, ...
-├── netcode/src/     # server/, client/, plugins/, ...
+│   ├── core/        # audio, bucket, clock, driver, fixed-ticker, input, navmesh,
+│   │                #   crowd, hitbox, ray, raycast, spatial, codecs, slot-map, ...
+│   ├── ecs/         # World, components, queries, systems, trackers
+│   ├── game/        # GameLoop
+│   ├── net/         # transport contracts, adapters, and the wire layer (net/wire)
+│   ├── protocol/    # defineProtocol, intents, snapshots, RPCs
+│   ├── dom/         # HTML overlays (HTMLDom)
+│   ├── gpu/         # GPU-common: schemas, shader DSL, IR, codegen, device model
+│   └── renderer/    # contracts, asset pipeline, glTF, and the shared renderer
+│                    #   runtime (managers/runtime, built on murow/gpu)
+├── webgpu/src/      # gpu/ (WGSL backend, device), runtime/ (renderers),
+│                    #   compute/ (kernels), shaders.ts
+├── netcode/src/     # server/, client/, codec/, messages/, packets/, ...
 └── website/src/     # Newstack pages
 ```
 
@@ -145,8 +187,11 @@ There is no changelog file.
    `gh run list --workflow publish.yml --limit 1`, then
    `gh run watch <run-id> --exit-status`.
 
-`.github/workflows/publish.yml` checks out the tag, runs `bun run build`,
-`bun run test --bail`, and `npm publish` from `packages/murow`. There is no
+`.github/workflows/publish.yml` runs on a published release. It checks out the
+release tag, runs `bun run build`, `bun run test --bail` (`concurrently`
+ignores `--bail`), and `npm publish` from `packages/murow`. The manual
+`workflow_dispatch` trigger takes a `ref` input, but the checkout step does not
+use it, so a manual run publishes the default branch. There is no
 separate npm step. npm propagation lags the workflow by a few minutes, so
 `npm view murow@<VERSION>` can 404 while the run already shows success. Wait and
 re-check rather than publishing by hand.
@@ -154,6 +199,9 @@ re-check rather than publishing by hand.
 ## Website
 
 `packages/website` is the docs site (Newstack SSG), deployed to
-https://murow.moureau.dev. Build with `bun run build` (its `prebuild` copies the
-root `llms.txt` into `public/`), then deploy with `bun deploy.ts`, which reads
-the Basebox keys from `packages/website/.env`.
+https://murow.moureau.dev. Build with `bun run build` from `packages/website`.
+Its `prebuild` copies the root `llms.txt` and `docs/` into `public/`, then runs
+`prepare-docs.ts`, which makes links absolute and writes a `.txt` copy of each
+doc. `public/docs/` is generated and gitignored; edit the root `docs/`. Deploy
+with `bun deploy.ts`, which uploads `dist/ssg` using the Basebox keys from
+`packages/website/.env`.

@@ -1,21 +1,17 @@
 # compiler
 
-Build-time shader compilation. Two front-ends feed the IR, and one driver emits
-it.
+The source front-end and the compile drivers.
 
-- `transform.ts` - `ShaderCompiler` (IR to source, keyed cache), `transform`
-  (a DSL builder to a compiled artifact), and `transformSource` (source text to
-  a compiled artifact).
-- `parse.ts` - the parser front-end: a hand-written tokenizer, Pratt expression
-  parser, and small statement parser that lower a DSL shader body to IR. It
-  supports native `a * b`, `if`/`else`, `for`/`while`/`do` loops, `break`, and
-  `continue`, and resolves calls on the `v`/`m`/`s` namespaces against the DSL
-  `std` object. Calls on the `d` namespace lower to IR casts (`d.u32(x)`). Loops
-  desugar to a single `IrLoop` whose first statement breaks when the condition
-  fails and whose tail runs the update.
+- `parse.ts` - `parseShaderBody`: a hand-written tokenizer, Pratt expression
+  parser, and small statement parser that lower a shader body's source text to
+  IR. It supports native operators (`a * b`), `if`/`else`, `for`/`while`/`do`,
+  `break`, and `continue`. Calls on `std` resolve against the DSL builtin
+  table; calls on `d` lower to constructors and casts. It also accepts the
+  folds a syntax minifier produces.
+- `transform.ts` - `transform` (run an eager builder and emit), `transformSource`
+  (parse source text and emit), and `ShaderCompiler` (a keyed cache over both).
 
-`transform` compiles an eager builder by running it (no parser). `transformSource`
-parses the body source instead, for callers that only have the function as text
-(a bundler plugin). The parser has no dependency, and this module is kept out of
-the `murow/gpu` runtime barrel so the shipped runtime carries no parser. See the
-parent README.
+`GpuProgram.link` calls `parseShaderBody` on every `GpuShader` body, so the
+parser is part of the `murow/gpu` runtime, not a build-time-only tool. Loops
+desugar to a single `IrLoop` whose first statement breaks when the condition
+fails and whose tail runs the update.

@@ -1,221 +1,252 @@
 # murow/gpu
 
-GPU-common layer shared by GPU renderer backends (`murow/webgpu`, and later
-`murow/webgl`). It owns the device-agnostic pieces: shader data schemas, the
-shader/compute DSL and its IR, the code generator and its per-backend extension
-points, resource descriptors, and the abstract device interface.
+The GPU-common layer. It holds the parts of a GPU renderer that do not depend on
+one GPU API: shader data schemas, the shader DSL and its IR, the code generator
+with its extension points, resource descriptors, typed resources, and the
+backend-neutral device model.
 
-> Status: **first version implemented**. Schemas, IR, DSL, a target-agnostic
-> codegen walker with a pluggable target syntax, descriptors, the abstract
-> device and a recording device, the compile driver (`transform`), the parser
-> front-end (`transformSource`), and the runtime front-end are in place with
-> co-located tests. No backend has adopted this layer yet. Exported as
-> `murow/gpu` and `murow/gpu/*`.
+`murow/webgpu` and the shared renderer in `murow/renderer/managers/runtime` are
+built on it. Every engine shader (meshes, sprites, shadows, skybox, IBL,
+particles, ribbons, camera effects, custom geometry) is a `GpuShader` compiled
+through this layer. Exported as `murow/gpu` and `murow/gpu/*`.
 
 ## Where this sits
 
-`murow` separates three concerns:
-
-- **`murow/renderer`**: backend-agnostic **contracts**. What a renderer must
-  provide (renderer interfaces, asset pipeline, handles, materials, camera).
-  Any backend implements these, including external ones such as a three.js or
-  PixiJS backend. Nothing GPU or WGSL specific lives here.
-- **`murow/gpu`** (this module): the **GPU-common** machinery shared across
-  GPU APIs. Schemas, the DSL/IR, codegen, descriptors, and the device interface.
-  A three.js or PixiJS backend does **not** use this; those bring their own GPU
-  layer. `murow/webgpu` and `murow/webgl` do.
-- **`murow/webgpu` / `murow/webgl`**: concrete backends. They implement the
-  `murow/renderer` contracts, built on `murow/gpu` (WGSL backend, WebGPU device)
-  plus their own API-specific code.
-
 ```
-murow/renderer   contracts              (three, pixi, webgpu, webgl implement this)
-murow/gpu        GPU-common             (used by webgpu, webgl)
-murow/webgpu     WebGPU backend         (renderer + gpu + WebGPU specifics)
-murow/webgl      WebGL backend          (later)
+murow/renderer      contracts, asset pipeline, and the shared renderer runtime
+murow/gpu           GPU-common: schemas, DSL, IR, codegen, resources, device model
+murow/webgpu        WebGPU backend: WGSL syntax and spec, device, renderers
 ```
 
-The shared shader is a `murow/gpu` concept. The `murow/renderer` contract only
-states that a material references a shader; each backend resolves that however
-it wants (the murow DSL for webgpu/webgl, a native material otherwise).
+- `murow/renderer` defines what a renderer provides (managers, handles,
+  materials, cameras). Its runtime under `renderer/managers/runtime` authors
+  shaders with `GpuShader` and talks to the GPU through the `Raw*` device types
+  in `device/render-api.ts`. It never imports a concrete GPU API; the platform
+  package injects a `RendererRuntime`.
+- `murow/gpu` (this module) is shared by every GPU backend. A renderer that
+  brings its own GPU layer, such as a three.js or PixiJS adapter, does not use
+  it.
+- `murow/webgpu` supplies the WGSL `TargetSyntax`, the `wgslSpec` backend spec,
+  `compileProgram`, the WebGPU device, and the renderer classes. A WebGL2
+  backend does not exist yet; it would supply the same three pieces for GLSL.
 
 ## Principles
 
-- **Data-oriented, consistent with `murow/core`.** Schemas are parallel typed
-  arrays and `Field` descriptors, not object graphs; the typed uniform "mirror"
-  is a view over a `Float32Array`/`DataView`.
-- **No `Map`.** Registries (intrinsics, node emitters, bindings, builtins) use
-  name-as-id: a dense array with a derived numeric index, like `defineComponent`,
-  the RPC/intent registries, and buckets. Lifetimes use `SlotMap`, `Collection`,
-  `FreeList`, `GenerationAllocator`.
-- **Backend-agnostic at the data level.** Schemas, descriptors, and the IR are
-  plain data. Any GPU API backend can consume them.
-- **Hackable by design.** Code generation is a shared pipeline with public
-  extension points (node registry, intrinsic registry, ordered lowering passes,
-  emit hooks, capability flags). A backend customises behavior without forking
-  the common layer.
-- **Type safety first.** The authoring surface is fully typed. Types erase at
-  runtime, so type safety costs zero shipped bytes.
+- **Data-oriented.** Schemas are `Field` descriptors and plain data. The typed
+  uniform mirror is a `Proxy` over a `DataView`.
+- **No `Map` in registries.** Node, intrinsic, and builtin registries are
+  name-as-id: a dense array with a derived numeric index (`NameIdRegistry`).
+- **Plain data at the boundary.** Schemas, descriptors, and the IR carry no
+  device state, so any backend can consume them and tests run without a GPU.
+- **Configured, not subclassed.** A backend is a `GpuBackendSpec`: a target
+  syntax plus deltas over the shared intrinsics, nodes, passes, and helpers.
+- **Typed authoring.** Shader inputs and bindings are typed from their schemas.
+
+## Authoring shaders
+
+A shader is a `GpuShader`: a stage, an input and output schema, named bind
+group layouts, and a body. The body receives `(input, bindings)` positionally.
+Resources are reached by property name, which survives minification.
+
+```ts
+import { GpuBindGroupLayout, GpuShader, GpuProgram, schema } from 'murow/gpu';
+import { d, std } from 'murow/webgpu';
+
+const Params = schema.gpuStruct({ name: 'Params', fields: { tint: schema.vec4f } });
+const layout = new GpuBindGroupLayout({
+    params: { uniform: Params },
+    map: { texture: 'float' },
+    mapSampler: { sampler: 'filtering' },
+});
+
+const vertex = GpuShader.vertex(
+    {
+        in: { position: d.location(0, d.vec3f), uv: d.location(1, d.vec2f) },
+        out: { pos: d.builtin.position, vUV: d.vec2f },
+    },
+    (input) => {
+        return { pos: d.vec4f(input.position, 1.0), vUV: input.uv };
+    },
+);
+
+const fragment = GpuShader.fragment(
+    { in: { vUV: d.vec2f }, out: d.vec4f, bindings: { mat: layout } },
+    (input, { mat }) => {
+        const tex = std.textureSample(mat.map, mat.mapSampler, input.vUV);
+        return d.vec4f(tex.rgb * mat.params.tint.rgb, 1.0);
+    },
+);
+
+const program = GpuProgram.link([vertex, fragment]);
+```
+
+- `GpuShader.vertex`, `.fragment`, and `.compute` take options first, body
+  second. Options: `in`, `out`, `bindings`, `expose` (flat names mapped to
+  `"layout.slot"` paths), `helpers` (functions the body may call, whose source
+  the backend injects only when used), and `workgroup` (compute only).
+- `GpuProgram.link(shaders)` numbers bind group layouts in first-use order and
+  lowers each body to IR. `program.layouts` is the pipeline layout order.
+- `GpuBindGroupLayout` is the single source of truth for both the emitted
+  binding declarations and the pipeline layout. Declaration order is the
+  binding number.
+
+### How a body becomes IR
+
+The body is not executed. `GpuProgram.link` reads it with
+`Function.prototype.toString` and parses it (`compiler/parse.ts`): a
+hand-written tokenizer, a Pratt expression parser, and a small statement
+parser. That is why bodies can use native operators (`a * b`), `if`/`else`,
+`for`/`while`/`do`, `break`, and `continue`. Calls on `std` resolve against the
+DSL's builtin table, and calls on `d` lower to constructors and casts. The
+parser also accepts the folds a syntax minifier produces.
+
+Consequences:
+
+- Parsing happens at runtime, when a program is linked. The parser ships in
+  `murow/gpu`.
+- A body may only reference its two parameters, `d`, `std`, and names listed in
+  `helpers`. Closed-over JavaScript values are not visible to the parser.
+- A vertex body returns its output record from a block body
+  (`(input) => { return { ... }; }`). An arrow that returns a parenthesised
+  object literal is rejected.
+- Use `d.f32(0)` rather than `0.0` where the type matters. Bundlers print `0.0`
+  as `0`, which the parser reads as an integer.
+
+### Compiling
+
+`murow/webgpu` compiles a program to WGSL with
+`compileProgram(shaders)`, which links, emits through `wgslSpec`, and then
+post-processes the source: `$` and lone `_` identifiers are renamed, and
+mutable locals the emitter declares with `let` are rewritten to `var` by a
+regular expression. `new GpuBackend(wgslSpec).compile(program)` and
+`WgslBackend` emit without that post-processing.
+
+`GpuContext` pairs a `GpuBackend` with a `GpuDevice` and creates typed
+resources (`GpuBuffer`, `GpuBindGroupLayout`, `GpuBindGroup`).
+`createWebGpuContext()` in `murow/webgpu` builds one over a WebGPU device. The
+shared renderer does not use `GpuContext`; it receives compiled source and a
+`RawDevice` through its injected runtime.
+
+## Code generation
+
+The IR is emitted by one target-agnostic walker (`BaseBackend`). Everything
+target-specific is routed through a `TargetSyntax`.
+
+Extension points:
+
+- **Target syntax.** `TargetSyntax` owns every target string: type names,
+  builtin decorations, parameter and binding declarations, entry signatures,
+  casts, sampling, literals, struct declarations, the loop keyword, and the
+  preamble prefix.
+- **Node registry.** `NodeRegistry.register(kind, emit)` adds or replaces the
+  emitter for an IR node kind.
+- **Intrinsic registry.** `IntrinsicRegistry.override(name, emit)` replaces a
+  shared intrinsic; `createDefaultIntrinsics()` returns the shared set. WGSL
+  uses this to map `saturate` to `clamp` and to pass atomics a pointer.
+- **Passes.** Ordered `LoweringPass[]`. Shared passes run first, then backend
+  passes.
+- **Helpers.** Named source snippets (noise, tone mapping, light shading)
+  emitted once, only when a call to them appears.
+- **Capability flags.** `{ compute, storageBuffers, f16, subgroups }`. Shared
+  code emits, lowers, or fails with a clear error when a feature is off.
+
+## The eager DSL
+
+`dsl/entry.ts` also exports a `shader` object (`shader.vertex`,
+`shader.fragment`) and a `compute` factory. These execute the body with
+`ShaderValue` arguments and record IR as it runs:
+
+```ts
+import { shader, d, std } from 'murow/gpu/dsl';
+
+const entry = shader.fragment(
+    { params: { uv: d.vec2f }, material: { tint: d.vec4f } },
+    (input, material, s) => s.mul(material.tint, s.f32(input.uv.x)),
+);
+```
+
+This path is used by the codegen tests and `murow/gpu/runtime`. The engine does
+not use it. Because the body runs as JavaScript, native operators on
+`ShaderValue` produce `NaN`; use `std` calls. Prefer `GpuShader`.
+
+`murow/gpu/compiler` exposes the same pieces for tooling: `transform` (run an
+eager builder and emit), `transformSource` (parse source text and emit), and
+`ShaderCompiler` (a keyed cache over both).
+
+## Portability
+
+Everything outside compute, storage buffers, atomics, `f16`, and subgroups is
+portable at the IR level. Only a WGSL target exists today. A GLSL target would
+need its own `TargetSyntax` (merging textures and samplers into `sampler2D`,
+a `precision` preamble, `gl_*` builtins) and would turn `compute` and
+`storageBuffers` off.
 
 ## Layout
 
 ```
 gpu/
-  schema/         data schemas for GPU memory
+  types.ts        GpuType re-exports
+  schema/         GPU data schemas
     field.ts        Field descriptor: size, align, write, read, toNil
     primitives.ts   f32, i32, u32, vec2f, vec3f, vec4f, mat4x4f, ...
-    struct.ts       gpuStruct({...}) with offsets, size, typed mirror
+    struct.ts       gpuStruct({ name, fields }): offsets, size, typed mirror, struct text
     array.ts        fixed and runtime-sized arrays, arrays of structs
     align.ts        std140 / std430 offset and alignment rules
     infer.ts        Infer<F>: field to host value type (type-level only)
   ir/             the intermediate representation
     types.ts        GPU value types (f32, vec3, mat4, sampler, texture, ...)
-    nodes.ts        typed nodes (literal, load, store, binop, call, sample,
-                    construct, swizzle, builtin, binding, if, loop, return)
-  dsl/            the typed authoring surface
-    value.ts        DSL value types and operator overloads
-    d.ts            constructors (f32, vec3f, swizzle, ...)
-    std.ts          builtins (sin, normalize, mix, textureSample, ...)
-    entry.ts        the `shader` namespace: vertex, fragment (compute added by backend)
-    control.ts      structured control flow (branch, loop, select)
-  codegen/        IR to source
-    syntax.ts       TargetSyntax: every target-specific string, pluggable
-    backend.ts      Backend interface + target-agnostic BaseBackend walker
-    registry.ts     node/intrinsic/builtin registries (name-as-id)
-    passes.ts       ordered lowering pipeline (shared, then backend)
-    emit.ts         pass driver
-    test-syntax.ts  test-only WGSL syntax and backend
-  descriptors/    resource and pipeline descriptions (plain data)
-    vertex-layout.ts  attributes, strides, step mode
-    bind-group.ts     bindings: uniform/storage/texture/sampler + visibility
-    render-state.ts   blend, depth, cull, write mask
-    pipeline.ts       pipeline descriptor assembled from the above
-  device/         the abstract GPU device
-    gpu-device.ts     GpuDevice: buffers, bind groups, pipelines, draw, dispatch
-  compiler/       build-time compilation (opt-in entry, not in the runtime barrel)
-    transform.ts      compile a DSL builder to backend source; keyed cache
-    parse.ts          parse a DSL shader body and lower it to IR
-  runtime/        optional in-browser front-end for dynamic shaders
-    index.ts          the same DSL front-end, lazily loaded
+    nodes.ts        node kinds and IrEntry
+    builders.ts     node constructors
+  dsl/            authoring vocabulary
+    value.ts        ShaderValue, a wrapper over an IR expression
+    data.ts         d: constructors, casts, d.builtin, d.location
+    std.ts          std: math, texture, and atomic builtins
+    shape.ts        swizzle and component typing
+    typed.ts        InputOf / BindingsOf, typing for GpuShader bodies
+    entry.ts        eager shader.vertex / shader.fragment / compute
+    control.ts      eager structured control flow (branch, loop, select)
+    externals.ts    engine environment values (scene, material, lights, ...)
+  shader/         the authoring surface used by the engine
+    gpu-shader.ts   GpuShader.vertex / fragment / compute
+    gpu-program.ts  GpuProgram.link: group numbering and parsing to IR
+  compiler/       source front-end and compile drivers
+    parse.ts        parseShaderBody: shader source to IR
+    transform.ts    transform, transformSource, ShaderCompiler
+  codegen/        IR to target source
+    syntax.ts       TargetSyntax
+    backend.ts      Backend interface, BaseBackend walker, capabilities
+    registry.ts     NodeRegistry, IntrinsicRegistry (name-as-id)
+    passes.ts       ordered lowering passes
+    emit.ts         emitEntry, emitProgram, binding collection
+    test-syntax.ts  test-only WGSL syntax (not shipped API)
+  backend/        GpuBackend (spec-driven compiler), GpuContext (backend + device)
+  resources/      GpuBuffer, GpuBindGroupLayout, GpuBindGroup
+  descriptors/    vertex layout, bind group, render state, pipeline (plain data)
+  device/         device contracts
+    render-api.ts     Raw* types the shared renderer is written against
+    gpu-device.ts     GpuDevice, the contract behind GpuContext
+    recording-device.ts  in-memory GpuDevice for tests
+  environment/    engine struct schemas and default binding slots
+  runtime/        RuntimeCompiler over the eager DSL
 ```
 
-## The DSL and code generation
+The `murow/gpu` barrel exports the backend, resources, `GpuShader`,
+`GpuProgram`, descriptors, the device types, and the runtime compiler at the
+top level. `schema`, `ir`, `dsl`, `environment`, and `codegen` are exported as
+namespaces because their names overlap (`f32` is both a schema field and an IR
+type). Import `murow/gpu/<module>` for unqualified names.
 
-A shader is authored once against the typed DSL and compiles to an IR. Each
-backend emits target source from that same IR through a `TargetSyntax`.
+## Known gaps
 
-The three body parameters are **positional** (`entry.ts` calls
-`fn(input, material, std)`), so the names are yours; the engine style is the
-full names:
-
-- `input` - the varyings/inputs built from the `params` schema (`input.uv`,
-  `input.vNormal`, `input.vWorldPos`).
-- `material` - the material uniforms built from the `material` schema
-  (`material.time`, `material.tint`).
-- `std` - the math library (`std.sin`, `std.normalize`, `std.pow`, ...); it also
-  spreads `d`, so the constructors are available (`std.vec3f`, `std.f32`).
-
-```ts
-// authored once (murow/gpu/dsl)
-shader.fragment((input, material, std) => {
-  const tex = std.textureSample(material.map, material.mapSampler, input.uv);
-  const n = std.normalize(input.vNormal);
-  const l = std.max(std.dot(n, std.vec3f(0, 1, 0)), std.f32(0));
-  return std.vec4f(tex.r, tex.g, tex.b, std.f32(1));
-});
-```
-
-### The `shader` namespace
-
-Shader entries are built through a lowercase `shader` namespace, matching the
-lowercase value namespaces inside shader bodies (`d`, `std`). It is a plain
-object composed from named exports, not a TypeScript `namespace` and not a class
-(it is a group of factories, so there is no instance and no `new`).
-
-The portable entries live in `murow/gpu`; each backend composes its own `shader`
-adding what its API supports. Composition, not inheritance or namespace merging.
-
-```ts
-// murow/gpu
-export function vertex(...) { /* … */ }
-export function fragment(...) { /* … */ }
-export const shader = { vertex, fragment };
-
-// murow/webgpu
-import { vertex, fragment } from 'murow/gpu';
-export function compute(...) { /* … */ }
-export const shader = { vertex, fragment, compute };
-```
-
-```ts
-import { shader } from 'murow/webgpu';
-const toonFrag = shader.fragment((input, material, std) => { /* … */ });
-const toonVert = shader.vertex((input, material, std) => { /* … */ });
-const reduce   = shader.compute((invocation, std) => { /* … */ });   // WebGPU only
-```
-
-`vertex` and `fragment` are portable (WGSL and GLSL). `compute` is a WebGPU
-capability and is absent on `murow/webgl`. Strictly, a compute program is a GPU
-kernel rather than a graphics-pipeline stage; it is grouped here because it is
-authored, compiled, and dispatched through the same layer. Named exports are
-also provided alongside the object for tree-shaking.
-
-Extension points (the "hackable" part):
-
-- **Node registry.** `registerNode(kind, emit)`. A backend adds nodes (for
-  example a raw WGSL node, or a subgroup op) and teaches its emitter about them.
-- **Intrinsic registry.** `intrinsic(name, impl)`. Common intrinsics have
-  per-backend implementations; a backend can add missing ones or polyfill.
-- **Pass pipeline.** Ordered `LoweringPass[]`. Shared passes run first, then
-  backend passes rewrite, merge, or lower features the target lacks.
-- **Target syntax.** `TargetSyntax` owns every target-specific string: type
-  names, builtin decorations, parameter and binding declarations, entry
-  signatures, casts, sampling, literals, struct declarations, loop keyword,
-  and preamble prefix. The shared walker never embeds one.
-- **Emit hooks.** `mapBuiltin`, `entryPointSignature`, `declareBinding`,
-  `preamble`, routed through the syntax. `BaseBackend` implements them once.
-- **Capability flags.** `{ compute, storageBuffers, f16, subgroups }`. The
-  shared layer either emits, lowers via a backend pass, or fails with a clear
-  error when a feature is unavailable.
-
-Examples of backend hacking:
-
-- **WGSL:** a `TargetSyntax` for `@vertex`/`@fragment`/`@compute` entry points,
-  `@group`/`@binding` declarations, `@builtin` mapping, raw-WGSL nodes, all
-  capabilities on.
-- **GLSL:** a `TargetSyntax` that merges separate textures and samplers into
-  `sampler2D`, injects `precision highp float` as the preamble prefix, remaps
-  builtins (`gl_Position`, `gl_FragCoord`, `gl_FrontFacing`), overrides
-  sampling intrinsics; `compute` and `storageBuffers` off, lowered or rejected.
-
-## Portability
-
-Everything outside compute, storage buffers, atomics, `f16`, and subgroups is
-portable: one shader source, WGSL and GLSL outputs. Compute has no WebGL
-equivalent and is a WebGPU-only capability. Portable shaders cannot take
-raw-language escape hatches; using a backend-only node or a raw node is an
-explicit, deliberate loss of portability.
-
-## Compilation model
-
-The DSL is an eager IR builder: a shader body runs and produces IR directly.
-
-- **Build time (default).** `transform(stage, build, { backend })` runs the
-  builder to get an IR entry, then lowers and emits backend source. Ship the
-  emitted source; the DSL and codegen can then be tree-shaken away. No parser is
-  involved, so the runtime carries none.
-- **Runtime (opt-in).** The same front-end runs in the browser
-  (`murow/gpu/runtime`) for shaders authored dynamically.
-- **Parser front-end (opt-in).** `transformSource(source, options)` (in
-  `murow/gpu/compiler`) parses a DSL shader body and lowers it to IR, so authors
-  can write native `a * b` and `if`/`else`. It is a hand-written parser with no
-  dependency, and it is kept out of the `murow/gpu` runtime barrel (import
-  `murow/gpu/compiler` from build tooling only) so the shipped runtime carries no
-  parser.
+- The emitter declares mutable locals with `let`; only `compileProgram` repairs
+  this, with a regular expression.
+- A ternary lowers to `select` with the condition in the wrong argument, and
+  `continue` inside a `for` or `do` loop skips the update or the guard.
+- std140 array stride does not round to 16 bytes.
+- No CI step validates emitted WGSL with a real compiler.
 
 ## Non-goals
 
 - No renderer contracts (those stay in `murow/renderer`).
-- No API-specific device code (that stays in `murow/webgpu`, `murow/webgl`).
-- No compute support on WebGL.
-- No scene graph, no object-oriented material model.
+- No API-specific device code (that stays in the backend package).
+- No scene graph and no object-oriented material model.

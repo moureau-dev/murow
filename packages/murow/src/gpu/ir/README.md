@@ -1,12 +1,15 @@
 # ir
 
-The intermediate representation shaders compile to. Backend-agnostic: backends
-emit WGSL or GLSL from the same IR.
+The intermediate representation shaders compile to. Backends emit target source
+from it.
 
-- `types.ts` - GPU value types (f32, vec3, mat4, sampler, texture, ...).
-- `nodes.ts` - typed nodes: literal, load, store, binop, call, construct,
-  swizzle, sample, builtin, binding, if, loop, return. An entry may carry
-  `outputs`, the fields of a vertex output struct (a builtin or a varying
-  location).
+- `types.ts` - GPU value types (`f32`, vectors, matrices, samplers, textures,
+  arrays, structs).
+- `nodes.ts` - node kinds and `IrEntry`. Expressions: `literal`, `local`,
+  `builtin`, `binding`, `access`, `swizzle`, `unary`, `binary`, `call`, `cast`,
+  `construct`, `sample`. Statements: `let`, `assign`, `if`, `loop`, `break`,
+  `continue`, `return`, `discard`, `expr`. A vertex entry may carry `outputs`,
+  the fields of its output struct (a builtin or a varying location).
+- `builders.ts` - constructors for every node.
 
-Structured control flow only. Pure data, fully unit-testable.
+Structured control flow only. Pure data, unit-testable without a GPU.

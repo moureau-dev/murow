@@ -1,9 +1,15 @@
 # device
 
-The abstract GPU device. Each backend implements it; the shared renderer base
-talks only to this interface, which keeps renderer logic testable against a mock.
+Backend-neutral device contracts.
 
+- `render-api.ts` - the `Raw*` types (`RawDevice`, `RawBuffer`, `RawTexture`,
+  `RawBindGroupLayout`, `RawCommandEncoder`, ...). The shared renderer in
+  `murow/renderer/managers/runtime` is written against these and receives a
+  concrete device through its injected runtime.
 - `gpu-device.ts` - `GpuDevice`: buffers, textures, bind groups, pipelines,
-  draw, dispatch.
+  draw, and dispatch behind integer handles. `GpuContext` and the typed
+  resources allocate through it.
+- `recording-device.ts` - `RecordingDevice`, an in-memory `GpuDevice` that
+  records every call, for tests.
 
-Compute and storage-buffer methods are WebGPU-only capabilities.
+Compute and storage-buffer methods are WebGPU capabilities.
